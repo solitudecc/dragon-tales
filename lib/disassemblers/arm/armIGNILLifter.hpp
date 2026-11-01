@@ -72,6 +72,23 @@ class ARMIGNILLifter {
   liftTrace(std::span<const Instruction> trace) const;
 
   private:
+  // Register-offset (LDR/STR *roW, *roX) and unscaled-immediate (LDUR/STUR)
+  // general-register loads and stores, by opcode.
+  struct MemForm {
+    ignil::Width memWidth; // bits transferred
+    bool isStore;
+    bool signExtend;       // LDRS*: sign-extend the loaded value
+    enum class Addr : std::uint8_t { RegW, RegX, Unscaled } addrForm;
+  };
+  std::unordered_map<unsigned, MemForm> memForms_;
+
+  // Extended-register ADD/SUB (*rx, *rx64), by opcode.
+  struct ExtAddSub {
+    bool isSub;
+    bool setFlags;
+  };
+  std::unordered_map<unsigned, ExtAddSub> extAddSub_;
+
   internal::Logger &logger_;
 
   Architecture architecture_;
@@ -159,6 +176,20 @@ class ARMIGNILLifter {
   emitShiftedReg(const llvm::MCInst &mc, unsigned regOpIdx, unsigned shiftOpIdx,
                  ignil::Width width, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
+
+  // Decode an extended-register operand (Rm, arith-extend immediate as used
+  // by ADD/SUB *rx: UXTB/UXTH/UXTW/UXTX/SXTB/SXTH/SXTW/SXTX plus a left
+  // shift of 0-4) into a `width`-bit value.
+  [[nodiscard]] ignil::Value
+  emitExtendedReg(const llvm::MCInst &mc, unsigned regOpIdx, unsigned extOpIdx,
+                  ignil::Width width, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp) const;
+
+  // LDR/STR with a register offset (`[xn, wm, uxtw #s]`, `[xn, xm, lsl #s]`)
+  // or an unscaled immediate (LDUR/STUR), described by memForms_.
+  void liftMemForm(const llvm::MCInst &mc, const MemForm &form,
+                   std::uint64_t addr, ignil::Block &out,
+                   std::uint32_t &tmp) const;
 
   // Decode an AArch64 logical-immediate encoded field (13-bit N:immr:imms
   // packed bitmask, as used by ANDWri/ORRWri/EORWri and S-variants) into its
@@ -267,6 +298,7 @@ class ARMIGNILLifter {
   unsigned opBcc_{};
   unsigned opCBZW_{}, opCBZX_{}, opCBNZW_{}, opCBNZX_{};
   unsigned opTBZW_{}, opTBZX_{}, opTBNZW_{}, opTBNZX_{};
+
 
   // LLVM register integer -> ignil::Reg mapping
   // Built once in constructor by scanning MCRegisterInfo +

@@ -380,3 +380,57 @@ TEST_CASE("ARM IGNIL lifting - ROR-shifted logical operand", "[ignil][arm64]") {
   }
 }
 #endif
+
+// -----------------------------------------------------------------------
+// Register-offset / unscaled loads and stores and extended-register
+// ADD/SUB. These were unlifted (UNDEF + Block::unlifted), which is what kept
+// gcc's AArch64 jump-table dispatch - `ldrh w3, [x3, w20, uxtw #1]; ...;
+// add x3, x0, w3, sxth #2; br x3` - from slicing to anything. Expected values
+// are Unicorn's; the same forms (140 templates) pass the Unicorn difftest.
+// -----------------------------------------------------------------------
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("ARM IGNIL lifting - register-offset memory and extended add/sub",
+          "[ignil][arm64]") {
+  struct Case {
+    std::uint32_t word;
+    std::uint64_t x1, x2, x9, x10;
+    std::uint64_t x0; // Unicorn
+  };
+  const Case cases[] = {
+          {0x8b22a820, 0x123456789abcdef0, 0xfedcba98765487f3, 0x0, 0x0, 0x123456789abafebc}, // add x0, x1, w2, sxth #2
+          {0x6b220020, 0x1111111180000005, 0xffffffffffffff07, 0x0, 0x0, 0x7ffffffe}, // subs w0, w1, w2, uxtb
+          {0x8b22c020, 0x1000, 0xfffffff0, 0x0, 0x0, 0xff0}, // add x0, x1, w2, sxtw
+          {0x786a5920, 0x0, 0x0, 0x200040, 0xdeadbeef00000005, 0xe2bd}, // ldrh w0, [x9, w10, uxtw #1]
+          {0x38aa6920, 0x0, 0x0, 0x200040, 0xfffffffffffffffd, 0xffffffffffffffdc}, // ldrsb x0, [x9, x10]
+          {0xf86ad920, 0x0, 0x0, 0x200080, 0xabcdef01fffffffe, 0x3e19f4cfaa85603b}, // ldr x0, [x9, w10, sxtw #3]
+          {0xb89f4120, 0x0, 0x0, 0x200040, 0x0, 0xfffffffffed9b48f}, // ldursw x0, [x9, #-12]
+  };
+  std::vector<std::uint8_t> page(0x100);
+  for (std::size_t i = 0; i < page.size(); ++i)
+    page[i] = static_cast<std::uint8_t>(i * 37 + 11);
+
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+  for (const auto &c: cases) {
+    const std::vector<std::uint8_t> bytes = {
+            static_cast<std::uint8_t>(c.word), static_cast<std::uint8_t>(c.word >> 8),
+            static_cast<std::uint8_t>(c.word >> 16),
+            static_cast<std::uint8_t>(c.word >> 24)};
+    auto insns = dis.disassemble(bytes, 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    const auto block = dis.liftTrace(insns);
+    REQUIRE(block.unlifted().empty());
+
+    dragon::ignil::SymbolicExecutor ex;
+    ex.mapMemory(0x200000, page);
+    ex.setRegister(arm::X0, 0x1111111111111111);
+    ex.setRegister(arm::X1, c.x1);
+    ex.setRegister(arm::X2, c.x2);
+    ex.setRegister(arm::X9, c.x9);
+    ex.setRegister(arm::X10, c.x10);
+    REQUIRE(ex.run(block).ok());
+    CHECK(ex.evaluate(ex.readRegister(arm::X0)) == c.x0);
+  }
+}
+#endif

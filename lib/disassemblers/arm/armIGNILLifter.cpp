@@ -211,10 +211,73 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
     }
   }
 
+  // Register-offset and unscaled general-register loads/stores, and
+  // extended-register ADD/SUB. Named by size letter: B/H (byte/half, the
+  // "BB"/"HH" spellings are the GPR ones), W, X; S = sign-extending load.
+  using A = MemForm::Addr;
+  struct MemName {
+    std::string_view name;
+    MemForm form;
+  };
+  static const MemName kMemForms[] = {
+          {"LDRBBroW", {8, false, false, A::RegW}},
+          {"LDRBBroX", {8, false, false, A::RegX}},
+          {"LDRHHroW", {16, false, false, A::RegW}},
+          {"LDRHHroX", {16, false, false, A::RegX}},
+          {"LDRWroW", {32, false, false, A::RegW}},
+          {"LDRWroX", {32, false, false, A::RegX}},
+          {"LDRXroW", {64, false, false, A::RegW}},
+          {"LDRXroX", {64, false, false, A::RegX}},
+          {"LDRSBWroW", {8, false, true, A::RegW}},
+          {"LDRSBWroX", {8, false, true, A::RegX}},
+          {"LDRSBXroW", {8, false, true, A::RegW}},
+          {"LDRSBXroX", {8, false, true, A::RegX}},
+          {"LDRSHWroW", {16, false, true, A::RegW}},
+          {"LDRSHWroX", {16, false, true, A::RegX}},
+          {"LDRSHXroW", {16, false, true, A::RegW}},
+          {"LDRSHXroX", {16, false, true, A::RegX}},
+          {"LDRSWroW", {32, false, true, A::RegW}},
+          {"LDRSWroX", {32, false, true, A::RegX}},
+          {"STRBBroW", {8, true, false, A::RegW}},
+          {"STRBBroX", {8, true, false, A::RegX}},
+          {"STRHHroW", {16, true, false, A::RegW}},
+          {"STRHHroX", {16, true, false, A::RegX}},
+          {"STRWroW", {32, true, false, A::RegW}},
+          {"STRWroX", {32, true, false, A::RegX}},
+          {"STRXroW", {64, true, false, A::RegW}},
+          {"STRXroX", {64, true, false, A::RegX}},
+          {"LDURBBi", {8, false, false, A::Unscaled}},
+          {"LDURHHi", {16, false, false, A::Unscaled}},
+          {"LDURWi", {32, false, false, A::Unscaled}},
+          {"LDURXi", {64, false, false, A::Unscaled}},
+          {"LDURSBWi", {8, false, true, A::Unscaled}},
+          {"LDURSBXi", {8, false, true, A::Unscaled}},
+          {"LDURSHWi", {16, false, true, A::Unscaled}},
+          {"LDURSHXi", {16, false, true, A::Unscaled}},
+          {"LDURSWi", {32, false, true, A::Unscaled}},
+          {"STURBBi", {8, true, false, A::Unscaled}},
+          {"STURHHi", {16, true, false, A::Unscaled}},
+          {"STURWi", {32, true, false, A::Unscaled}},
+          {"STURXi", {64, true, false, A::Unscaled}},
+  };
+  static const std::unordered_map<std::string_view, ExtAddSub> kExtAddSub = {
+          {"ADDWrx", {false, false}},   {"ADDXrx", {false, false}},
+          {"ADDXrx64", {false, false}}, {"ADDSWrx", {false, true}},
+          {"ADDSXrx", {false, true}},   {"ADDSXrx64", {false, true}},
+          {"SUBWrx", {true, false}},    {"SUBXrx", {true, false}},
+          {"SUBXrx64", {true, false}},  {"SUBSWrx", {true, true}},
+          {"SUBSXrx", {true, true}},    {"SUBSXrx64", {true, true}},
+  };
+
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
-    if (auto it = kOpcodeFields.find(instrInfo.getName(i));
-        it != kOpcodeFields.end())
+    const std::string_view name = instrInfo.getName(i);
+    if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
+    for (const MemName &m: kMemForms)
+      if (m.name == name)
+        memForms_.emplace(i, m.form);
+    if (auto it = kExtAddSub.find(name); it != kExtAddSub.end())
+      extAddSub_.emplace(i, it->second);
   }
 }
 
@@ -313,6 +376,10 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
   // Generation of arithmetic and logic instructions, this is handled
   // by the liftAddSub and liftLogic functions, which handle all the different
   // variants of the instructions (register, immediate, and S-suffixed).
+  else if (extAddSub_.contains(opc))
+    liftAddSub(*mc, addr, out, tempId);
+  else if (auto mf = memForms_.find(opc); mf != memForms_.end())
+    liftMemForm(*mc, mf->second, addr, out, tempId);
   else if (opc == opADDWrr_ || opc == opADDXrr_ || opc == opADDWri_ ||
            opc == opADDXri_ || opc == opADDWrs_ || opc == opADDXrs_ ||
            opc == opADDSWrr_ || opc == opADDSXrr_ || opc == opADDSWri_ ||
@@ -832,17 +899,134 @@ dragon::ignil::Value dragon::arm::ARMIGNILLifter::emitShiftedReg(
   return result;
 }
 
+dragon::ignil::Value dragon::arm::ARMIGNILLifter::emitExtendedReg(
+        const llvm::MCInst &mc, unsigned regOpIdx, unsigned extOpIdx,
+        ignil::Width width, std::uint64_t addr, ignil::Block &out,
+        std::uint32_t &tmp) const {
+  auto reg = toReg(mc.getOperand(regOpIdx).getReg());
+  // Arith-extend immediate: (type << 3) | shift, type 0-3 = UXTB/H/W/X,
+  // 4-7 = SXTB/H/W/X.
+  const auto imm = static_cast<unsigned>(mc.getOperand(extOpIdx).getImm());
+  const unsigned shift = imm & 0x7;
+  const unsigned type = (imm >> 3) & 0x7;
+  const bool isSigned = type >= 4;
+  const ignil::Width fromWidth = 8u << (type & 3); // 8, 16, 32, 64
+
+  ignil::Value v = (!reg || isZeroReg(*reg))
+                           ? ignil::Value{ignil::Const{0, width}}
+                           : ignil::Value{*reg};
+  ignil::Width vWidth = ignil::widthOf(v);
+  // Keep the low fromWidth bits, then extend them to the operation width.
+  if (fromWidth < vWidth) {
+    auto t = newTemp(tmp, fromWidth);
+    out.append({ignil::Opcode::TRUNC, t, {v}, addr});
+    v = t;
+    vWidth = fromWidth;
+  }
+  if (vWidth < width) {
+    auto t = newTemp(tmp, width);
+    out.append({isSigned ? ignil::Opcode::SEXT : ignil::Opcode::ZEXT, t, {v},
+                addr});
+    v = t;
+  } else if (vWidth > width) {
+    auto t = newTemp(tmp, width);
+    out.append({ignil::Opcode::TRUNC, t, {v}, addr});
+    v = t;
+  }
+  if (shift) {
+    auto t = newTemp(tmp, width);
+    out.append({ignil::Opcode::SHL, t, {v, ignil::Const{shift, 8}}, addr});
+    v = t;
+  }
+  return v;
+}
+
+void dragon::arm::ARMIGNILLifter::liftMemForm(const llvm::MCInst &mc,
+                                              const MemForm &form,
+                                              std::uint64_t addr,
+                                              ignil::Block &out,
+                                              std::uint32_t &tmp) const {
+  // ro: op[0]=Rt, op[1]=Rn, op[2]=Rm, op[3]=signed-extend flag (SXTW/SXTX
+  // vs UXTW/LSL), op[4]=shift flag (scale Rm by the access size).
+  // Unscaled (LDUR/STUR): op[0]=Rt, op[1]=Rn, op[2]=simm9 in bytes.
+  constexpr ignil::Width ptrWidth = 64;
+  auto rt = toReg(mc.getOperand(0).getReg());
+  auto rn = toReg(mc.getOperand(1).getReg());
+  if (!rt || !rn) {
+    logger_.log("Error liftMemForm in addr {:#x} bad operands", addr);
+    if (rt && !form.isStore)
+      emitUndef(*rt, addr, out);
+    out.noteUnlifted(addr);
+    return;
+  }
+
+  ignil::Temp ea = newTemp(tmp, ptrWidth);
+  if (form.addrForm == MemForm::Addr::Unscaled) {
+    const auto off = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
+    out.append({ignil::Opcode::ADD, ea, {*rn, ignil::Const{off, ptrWidth}},
+                addr});
+  } else {
+    auto rm = toReg(mc.getOperand(2).getReg());
+    const bool signedExt = mc.getOperand(3).getImm() != 0;
+    const bool doShift = mc.getOperand(4).getImm() != 0;
+    ignil::Value idx = (!rm || isZeroReg(*rm))
+                               ? ignil::Value{ignil::Const{0, ptrWidth}}
+                               : ignil::Value{*rm};
+    if (ignil::widthOf(idx) < ptrWidth) { // [xn, wm, uxtw|sxtw]
+      auto t = newTemp(tmp, ptrWidth);
+      out.append({signedExt ? ignil::Opcode::SEXT : ignil::Opcode::ZEXT, t,
+                  {idx}, addr});
+      idx = t;
+    }
+    if (doShift) {
+      unsigned sh = 0;
+      for (ignil::Width b = form.memWidth / 8; b > 1; b >>= 1)
+        ++sh;
+      if (sh) {
+        auto t = newTemp(tmp, ptrWidth);
+        out.append({ignil::Opcode::SHL, t, {idx, ignil::Const{sh, 8}}, addr});
+        idx = t;
+      }
+    }
+    out.append({ignil::Opcode::ADD, ea, {*rn, idx}, addr});
+  }
+
+  if (form.isStore) {
+    ignil::Value src = isZeroReg(*rt)
+                               ? ignil::Value{ignil::Const{0, form.memWidth}}
+                               : ignil::Value{*rt};
+    if (ignil::widthOf(src) > form.memWidth) {
+      auto t = newTemp(tmp, form.memWidth);
+      out.append({ignil::Opcode::TRUNC, t, {src}, addr});
+      src = t;
+    }
+    out.append({ignil::Opcode::STORE, std::nullopt, {ea, src}, addr});
+    return;
+  }
+
+  ignil::Value loaded = newTemp(tmp, form.memWidth);
+  out.append({ignil::Opcode::LOAD, loaded, {ea}, addr});
+  if (form.memWidth < rt->width) {
+    auto t = newTemp(tmp, rt->width);
+    out.append({form.signExtend ? ignil::Opcode::SEXT : ignil::Opcode::ZEXT,
+                t, {loaded}, addr});
+    loaded = t;
+  }
+  if (!isZeroReg(*rt))
+    out.append({ignil::Opcode::COPY, *rt, {loaded}, addr});
+}
+
 void dragon::arm::ARMIGNILLifter::liftAddSub(const llvm::MCInst &mc,
                                              std::uint64_t addr,
                                              ignil::Block &out,
                                              std::uint32_t &tmp) const {
   const unsigned opc = mc.getOpcode();
-  const bool isSub =
+  bool isSub =
           (opc == opSUBWrr_ || opc == opSUBXrr_ || opc == opSUBWri_ ||
            opc == opSUBXri_ || opc == opSUBWrs_ || opc == opSUBXrs_ ||
            opc == opSUBSWrr_ || opc == opSUBSXrr_ || opc == opSUBSWri_ ||
            opc == opSUBSXri_ || opc == opSUBSWrs_ || opc == opSUBSXrs_);
-  const bool setFlags =
+  bool setFlags =
           (opc == opADDSWrr_ || opc == opADDSXrr_ || opc == opADDSWri_ ||
            opc == opADDSXri_ || opc == opADDSWrs_ || opc == opADDSXrs_ ||
            opc == opSUBSWrr_ || opc == opSUBSXrr_ || opc == opSUBSWri_ ||
@@ -855,6 +1039,12 @@ void dragon::arm::ARMIGNILLifter::liftAddSub(const llvm::MCInst &mc,
           (opc == opADDWrs_ || opc == opADDXrs_ || opc == opADDSWrs_ ||
            opc == opADDSXrs_ || opc == opSUBWrs_ || opc == opSUBXrs_ ||
            opc == opSUBSWrs_ || opc == opSUBSXrs_);
+  const auto ext = extAddSub_.find(opc);
+  const bool isExtForm = ext != extAddSub_.end();
+  if (isExtForm) {
+    isSub = ext->second.isSub;
+    setFlags = ext->second.setFlags;
+  }
 
   // op[0]=dst, op[1]=Rn(lhs) - AArch64 ADD/SUB is 3-address, unlike x86's
   // tied dst/src1, so there is no "save dst before overwrite" step here.
@@ -869,12 +1059,16 @@ void dragon::arm::ARMIGNILLifter::liftAddSub(const llvm::MCInst &mc,
     emitUndef(*dst, addr, out);
     return;
   }
+  // In the extended-register form register 31 as Rn is SP, never XZR (LLVM
+  // already decodes it as SP, which is not the zero register's offset).
   ignil::Value lhs = isZeroReg(*lhsReg)
                              ? ignil::Value{ignil::Const{0, dst->width}}
                              : ignil::Value{*lhsReg};
 
   ignil::Value rhs;
-  if (isImmForm) {
+  if (isExtForm) {
+    rhs = emitExtendedReg(mc, 2, 3, dst->width, addr, out, tmp);
+  } else if (isImmForm) {
     // op[2]=12-bit imm, op[3]=shift (0 or 12, meaning imm<<12).
     auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
     auto shift = static_cast<std::uint64_t>(mc.getOperand(3).getImm());
