@@ -41,7 +41,15 @@ namespace dragon::internal {
       ? "aarch64-unknown-unknown"
       : "arm-unknown-unknown";
 
-  return buildTarget(triple, cpu.empty() ? "generic" : cpu, features);
+  // AArch64 with no explicit features: everything on, as llvm-objdump does
+  // ("+all"). The generic CPU alone leaves out the extensions real binaries
+  // use - LSE atomics (casal, ldadd: any modern atomic), crypto (aese,
+  // pmull, sm4e), SVE (glibc's string routines), MTE - and those bytes did
+  // not decode at all: 11,671 instructions of libcrypto, 369 of libc, 12 of
+  // libstdc++ were missing. Undecodable bytes break linear sweep and CFGs.
+  const std::string effective =
+      (is64bit && features.empty()) ? std::string{"+all"} : features;
+  return buildTarget(triple, cpu.empty() ? "generic" : cpu, effective);
 }
 
 } // namespace dragon::internal

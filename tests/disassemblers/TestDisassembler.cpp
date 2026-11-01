@@ -678,3 +678,33 @@ TEST_CASE("Recursive traversal - AT&T syntax produces same instruction count",
   REQUIRE(intel.disassemble(bytes, 0x1000).size() ==
           att.disassemble(bytes, 0x1000).size());
 }
+
+// AArch64 decodes the architecture extensions real binaries use with the
+// default configuration (no cpu/features): LSE atomics (any modern atomic
+// operation), crypto, SVE, MTE. With LLVM's generic CPU alone none of these
+// decoded - 11,671 instructions of a distribution libcrypto, 369 of libc
+// and 12 of libstdc++ were missing, breaking linear sweep around them.
+TEST_CASE("Disassembler arm64 - extensions decode by default",
+          "[disassembler][arm64]") {
+  struct Case {
+    std::uint32_t word;
+    const char *mnemonic;
+  };
+  const Case cases[] = {{0xc8e0fc41, "casal"},  {0xb8e00041, "ldaddal"},
+                        {0xf8e08041, "swpal"},  {0x4e284820, "aese"},
+                        {0x0ee2e020, "pmull"},  {0x2518e3e0, "ptrue"},
+                        {0x9adf1020, "irg"}};
+  dragon::Disassembler dis(dragon::Architecture::ARM64,
+                           dragon::Configuration{});
+  for (const auto &c: cases) {
+    INFO(c.mnemonic);
+    const std::vector<std::uint8_t> bytes = {
+            static_cast<std::uint8_t>(c.word), static_cast<std::uint8_t>(c.word >> 8),
+            static_cast<std::uint8_t>(c.word >> 16),
+            static_cast<std::uint8_t>(c.word >> 24)};
+    auto insns = dis.disassemble(bytes, 0x1000);
+    REQUIRE(insns.size() == 1);
+    CHECK(insns[0].size() == 4);
+    CHECK(insns[0].mnemonic() == c.mnemonic);
+  }
+}
