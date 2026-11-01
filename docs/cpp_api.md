@@ -1221,8 +1221,8 @@ for (const auto& m : matches)
 Matching runs in order: the leading-byte pattern (wildcards always match), then
 a CRC16 of `crcLength` bytes immediately after it, then `totalLength` (when
 nonzero) gating that enough bytes are available. `SignatureMatcher::computeCRC16`
-exposes the CRC used (reflected CRC-16/ARC, polynomial `0xA001`, init `0xFFFF`,
-no final XOR).
+exposes the CRC used: FLAIR's CRC16 (reflected polynomial `0x8408`, init
+`0xFFFF`, complemented, bytes swapped; `0` for empty input).
 
 For direct access to the parser, `PatternParser`
 (`<dragon/sigs/PatternParser.hpp>`) parses the `.pat` text itself:

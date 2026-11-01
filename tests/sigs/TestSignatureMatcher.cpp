@@ -5,12 +5,100 @@
 #include <dragon/sigs/SignatureMatcher.hpp>
 
 #include <format>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
 using namespace dragon::sigs;
 
-TEST_CASE("SignatureMatcher - computeCRC16 of empty data is the init value",
+TEST_CASE("SignatureMatcher - computeCRC16 of empty data is 0",
          "[sigs][signature-matcher]") {
-  REQUIRE(SignatureMatcher::computeCRC16({}) == 0xFFFF);
+  // FLAIR's crc16 returns 0 for zero length (crc_length 00 lines).
+  REQUIRE(SignatureMatcher::computeCRC16({}) == 0);
+}
+
+// -----------------------------------------------------------------------
+// External reference. Regression: computeCRC16 was CRC-16/ARC (poly 0xA001,
+// no complement, no byte swap), which never equals the CRC field of a real
+// .pat line, so no signature with crcLength > 0 could match. Every other test
+// here derives its CRC from computeCRC16 itself and could not notice.
+//
+// Vectors: three AArch64 functions (gcc -O1) and the .pat lines rizin 0.9.1
+// generated for them with `rz-sign -o out.pat binary`. rizin/radare2 carry
+// FLAIR's own flair/crc16.cpp and load IDA .sig files, so these CRCs are
+// FLAIR's.
+// -----------------------------------------------------------------------
+
+namespace {
+std::vector<std::uint8_t> fromHex(std::string_view hex) {
+  std::vector<std::uint8_t> out;
+  for (std::size_t i = 0; i + 1 < hex.size(); i += 2)
+    out.push_back(static_cast<std::uint8_t>(
+            std::stoul(std::string(hex.substr(i, 2)), nullptr, 16)));
+  return out;
+}
+
+struct RizinVector {
+  const char *name;
+  const char *bytes;   // the whole function
+  const char *patLine; // rz-sign's line for it
+  std::uint16_t crc;   // CRC field of that line
+};
+
+const RizinVector kRizinVectors[] = {
+        {"mix",
+         "a201805224378f52e4c6b372037c03536014004a237c041b6000004a2100000b"
+         "4204007141ffff540000014ac0035fd6",
+         "A201805224378F52E4C6B372037C03536014004A237C041B6000004A2100000B"
+         " 10 3B36 0030 :0000 mix",
+         0x3B36},
+        {"sum",
+         "3f0000716d010054e20300aa04c8218b00008052414440b82304010b6108814b"
+         "0000010b5f0004eb61ffff54c0035fd600008052feffff17",
+         "3F0000716D....54E20300AA04C8218B00008052414440B82304010B6108814B"
+         " 18 84E3 0038 :0000 sum",
+         0x84E3},
+        {"fold",
+         "008440caa19991d2a1aabdf2e1fad5f221eafff2007c019b008440ca618a9dd2"
+         "a150a3f2c13fd7f2c199f8f2007c019b008440cac0035fd6",
+         "008440CAA19991D2A1AABDF2E1FAD5F221EAFFF2007C019B008440CA618A9DD2"
+         " 18 FD16 0038 :0000 fold",
+         0xFD16},
+};
+} // namespace
+
+TEST_CASE("SignatureMatcher - computeCRC16 equals FLAIR's (rizin reference)",
+         "[sigs][signature-matcher]") {
+  for (const auto &v: kRizinVectors) {
+    const auto code = fromHex(v.bytes);
+    const auto parsed = PatternParser::parseLine(v.patLine);
+    REQUIRE(parsed.has_value());
+    REQUIRE(code.size() >= 32u + parsed->crcLength);
+    INFO(v.name);
+    CHECK(SignatureMatcher::computeCRC16(
+                  std::span(code).subspan(32, parsed->crcLength)) == v.crc);
+  }
+}
+
+TEST_CASE("SignatureMatcher - rizin-generated .pat lines match their functions",
+         "[sigs][signature-matcher][integration]") {
+  SignatureDB db;
+  for (const auto &v: kRizinVectors) {
+    auto parsed = PatternParser::parseLine(v.patLine);
+    REQUIRE(parsed.has_value());
+    db.addSignatures({std::move(*parsed)});
+  }
+  std::uint64_t address = 0x400000;
+  for (const auto &v: kRizinVectors) {
+    const auto code = fromHex(v.bytes);
+    auto match = SignatureMatcher::matchAt(db, code, address);
+    INFO(v.name);
+    REQUIRE(match.has_value());
+    CHECK(match->name == v.name);
+    CHECK(match->address == address);
+    address += 0x100;
+  }
 }
 
 TEST_CASE("SignatureMatcher - computeCRC16 is deterministic and "

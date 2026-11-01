@@ -1222,11 +1222,9 @@ class LLVMLifter:
 # -- FLIRT signatures (dragon::sigs) --------------------------------------------
 
 def sigs_crc16(data):
-    """Compute dragon-tales' signature CRC16 (reflected, poly 0xA001, init
-    0xFFFF, no final XOR — CRC-16/ARC) over *data*.
-
-    Caveat: this variant was never verified against a real IDA/FLAIR-generated
-    .pat file — see SignatureDB's class doc.
+    """Compute FLAIR's CRC16 over *data* - the value in a .pat line's CRC
+    field (reflected poly 0x8408, init 0xFFFF, complemented, bytes swapped;
+    0 for empty input).
     """
     buf = ffi.from_buffer(data)
     return lib.dragon_sigs_crc16(buf, len(data))

@@ -2,14 +2,26 @@
 
 std::uint16_t dragon::sigs::SignatureMatcher::computeCRC16(
         std::span<const std::uint8_t> data) {
+  // FLAIR's CRC16 (flair/crc16.cpp; the copy carried in radare2's and
+  // rizin's FLIRT readers): reflected CRC-16/CCITT polynomial 0x8408, init
+  // 0xFFFF, complemented, then the two bytes swapped. Empty input is 0.
+  //
+  // This used to be CRC-16/ARC (poly 0xA001, no complement, no swap), which
+  // never agrees with the CRC field of a real .pat line - every signature
+  // with crcLength > 0 failed to match, while the tests passed because they
+  // computed their expected CRCs with the same function.
+  if (data.empty())
+    return 0;
   std::uint16_t crc = 0xFFFF;
   for (std::uint8_t byte: data) {
-    crc = static_cast<std::uint16_t>(crc ^ byte);
-    for (int bit = 0; bit < 8; ++bit)
-      crc = (crc & 1) ? static_cast<std::uint16_t>((crc >> 1) ^ 0xA001)
-                       : static_cast<std::uint16_t>(crc >> 1);
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = ((crc ^ byte) & 1) ? static_cast<std::uint16_t>((crc >> 1) ^ 0x8408)
+                               : static_cast<std::uint16_t>(crc >> 1);
+      byte >>= 1;
+    }
   }
-  return crc;
+  crc = static_cast<std::uint16_t>(~crc);
+  return static_cast<std::uint16_t>((crc << 8) | (crc >> 8));
 }
 
 bool dragon::sigs::SignatureMatcher::matches(

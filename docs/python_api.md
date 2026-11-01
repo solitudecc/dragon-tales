@@ -727,9 +727,8 @@ against disassembled bytes. Text `.pat` format only (the proprietary binary
 `.sig` format is not supported).
 
 `dragon.sigs_crc16(data)` exposes the raw CRC16 primitive used to verify
-matches (reflected, poly `0xA001`, init `0xFFFF`, no final XOR — CRC-16/ARC)
-standalone — useful for checking it against a real `.pat` file, since it was
-only ever verified self-consistently against this codebase's own parser.
+matches: FLAIR's CRC16 (reflected poly `0x8408`, init `0xFFFF`, complemented,
+bytes swapped; `0` for empty input), i.e. the value in a `.pat` line's CRC field.
 
 ```python
 db = dragon.SignatureDB()
