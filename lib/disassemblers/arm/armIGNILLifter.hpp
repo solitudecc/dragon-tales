@@ -78,7 +78,7 @@ class ARMIGNILLifter {
     ignil::Width memWidth; // bits transferred
     bool isStore;
     bool signExtend;       // LDRS*: sign-extend the loaded value
-    enum class Addr : std::uint8_t { RegW, RegX, Unscaled } addrForm;
+    enum class Addr : std::uint8_t { RegW, RegX, Unscaled, Base } addrForm;
   };
   std::unordered_map<unsigned, MemForm> memForms_;
 
@@ -170,7 +170,7 @@ class ARMIGNILLifter {
                std::uint32_t &tmp) const;
 
   // mayStore, minus LLVM's "unmodeled side effects => mayStore" (nop, dmb).
-  [[nodiscard]] static bool writesMemory(const llvm::MCInstrDesc &desc);
+  [[nodiscard]] bool writesMemory(const llvm::MCInstrDesc &desc) const;
 
   // Helpers
   // Translate an LLVM register integer to an ignil::Reg.

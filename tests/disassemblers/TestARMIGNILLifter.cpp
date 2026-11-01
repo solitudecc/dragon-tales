@@ -536,3 +536,114 @@ TEST_CASE("ARM IGNIL lifting - adds/subs with Rd == Rn", "[ignil][arm64]") {
   }
 }
 #endif
+
+// -----------------------------------------------------------------------
+// Regression: LLVM marks store-release (STLR, STLLR) and several other real
+// stores with "unmodeled side effects", the flag used to recognise nops and
+// barriers, so they were treated as no-ops - `stlr w1, [x0]` lifted to
+// nothing and the store vanished from the IR without being reported. Now
+// the acquire/release forms are lifted as plain loads/stores, the other
+// side-effect stores (and SYS: `dc zva`) are reported unlifted, and only
+// barriers/hints/prefetches stay no-ops.
+// -----------------------------------------------------------------------
+namespace {
+std::vector<std::uint8_t> a64Word(std::uint32_t w) {
+  return {static_cast<std::uint8_t>(w), static_cast<std::uint8_t>(w >> 8),
+          static_cast<std::uint8_t>(w >> 16), static_cast<std::uint8_t>(w >> 24)};
+}
+} // namespace
+
+TEST_CASE("ARM IGNIL lifting - side-effect stores are not no-ops",
+          "[ignil][arm64]") {
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+  // Reported as unlifted: stores without a lifter.
+  for (const std::uint32_t w: {0xd50b7420u,   // dc zva, x0
+                               0xd9a00001u,   // stgm x1, [x0]
+                               0xf83f9002u}) { // st64b x2, [x0]
+    auto insns = dis.disassemble(a64Word(w), 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    CHECK_FALSE(dis.liftTrace(insns).unlifted().empty());
+  }
+  // Still no-ops: barrier and prefetch write nothing.
+  for (const std::uint32_t w: {0xd5033bbfu,   // dmb ish
+                               0xf9800000u}) { // prfm pldl1keep, [x0]
+    auto insns = dis.disassemble(a64Word(w), 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    CHECK(dis.liftTrace(insns).unlifted().empty());
+  }
+}
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("ARM IGNIL lifting - acquire/release loads and stores",
+          "[ignil][arm64]") {
+  std::vector<std::uint8_t> page(0x100);
+  for (std::size_t i = 0; i < page.size(); ++i)
+    page[i] = static_cast<std::uint8_t>(i * 37 + 11);
+  auto le = [&](std::size_t off, unsigned bytes) {
+    std::uint64_t v = 0;
+    for (unsigned i = 0; i < bytes; ++i)
+      v |= std::uint64_t{page[off + i]} << (8 * i);
+    return v;
+  };
+  constexpr std::uint64_t kX1 = 0x1122334455667788;
+
+  struct Store {
+    std::uint32_t word;
+    std::uint64_t at;
+    unsigned bytes;
+  };
+  const Store stores[] = {
+          {0x889ffc01, 0x200040, 4}, // stlr w1, [x0]
+          {0xc89ffc01, 0x200040, 8}, // stlr x1, [x0]
+          {0x089ffc01, 0x200040, 1}, // stlrb w1, [x0]
+          {0x489ffc01, 0x200040, 2}, // stlrh w1, [x0]
+          {0xc89f7c01, 0x200040, 8}, // stllr x1, [x0]
+          {0x991fc001, 0x20003c, 4}, // stlur w1, [x0, #-4]
+  };
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+  for (const auto &c: stores) {
+    auto insns = dis.disassemble(a64Word(c.word), 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    const auto block = dis.liftTrace(insns);
+    REQUIRE(block.unlifted().empty());
+    dragon::ignil::SymbolicExecutor ex;
+    ex.mapMemory(0x200000, page);
+    ex.setRegister(arm::X0, 0x200040);
+    ex.setRegister(arm::X1, kX1);
+    REQUIRE(ex.run(block).ok());
+    const std::uint64_t mask = c.bytes == 8 ? ~0ull : (1ull << (8 * c.bytes)) - 1;
+    CHECK(ex.evaluate(ex.readMemory(c.at, 8 * c.bytes)) == (kX1 & mask));
+    // the byte after the store is untouched
+    CHECK(ex.evaluate(ex.readMemory(c.at + c.bytes, 8)) ==
+          le(c.at + c.bytes - 0x200000, 1));
+  }
+
+  struct Load {
+    std::uint32_t word;
+    std::size_t off;
+    unsigned bytes;
+  };
+  const Load loads[] = {
+          {0xc8dffd20, 0x40, 8}, // ldar x0, [x9]
+          {0x08dffd20, 0x40, 1}, // ldarb w0, [x9]
+          {0xb8bfc120, 0x40, 4}, // ldapr w0, [x9]
+          {0xd9408120, 0x48, 8}, // ldapur x0, [x9, #8]
+  };
+  for (const auto &c: loads) {
+    auto insns = dis.disassemble(a64Word(c.word), 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    const auto block = dis.liftTrace(insns);
+    REQUIRE(block.unlifted().empty());
+    dragon::ignil::SymbolicExecutor ex;
+    ex.mapMemory(0x200000, page);
+    ex.setRegister(arm::X0, 0xffffffffffffffff);
+    ex.setRegister(arm::X9, 0x200040);
+    REQUIRE(ex.run(block).ok());
+    CHECK(ex.evaluate(ex.readRegister(arm::X0)) == le(c.off, c.bytes));
+  }
+}
+#endif

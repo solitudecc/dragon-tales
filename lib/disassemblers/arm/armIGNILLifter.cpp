@@ -259,6 +259,37 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
           {"STURHHi", {16, true, false, A::Unscaled}},
           {"STURWi", {32, true, false, A::Unscaled}},
           {"STURXi", {64, true, false, A::Unscaled}},
+          // Acquire/release forms: the ordering is irrelevant here, the
+          // data movement is a plain load/store. op[0]=Rt, op[1]=Rn (Base)
+          // or op[0]=Rt, op[1]=Rn, op[2]=simm9 (Unscaled).
+          {"STLRB", {8, true, false, A::Base}},
+          {"STLRH", {16, true, false, A::Base}},
+          {"STLRW", {32, true, false, A::Base}},
+          {"STLRX", {64, true, false, A::Base}},
+          {"STLLRB", {8, true, false, A::Base}},
+          {"STLLRH", {16, true, false, A::Base}},
+          {"STLLRW", {32, true, false, A::Base}},
+          {"STLLRX", {64, true, false, A::Base}},
+          {"LDARB", {8, false, false, A::Base}},
+          {"LDARH", {16, false, false, A::Base}},
+          {"LDARW", {32, false, false, A::Base}},
+          {"LDARX", {64, false, false, A::Base}},
+          {"LDLARB", {8, false, false, A::Base}},
+          {"LDLARH", {16, false, false, A::Base}},
+          {"LDLARW", {32, false, false, A::Base}},
+          {"LDLARX", {64, false, false, A::Base}},
+          {"LDAPRB", {8, false, false, A::Base}},
+          {"LDAPRH", {16, false, false, A::Base}},
+          {"LDAPRW", {32, false, false, A::Base}},
+          {"LDAPRX", {64, false, false, A::Base}},
+          {"STLURBi", {8, true, false, A::Unscaled}},
+          {"STLURHi", {16, true, false, A::Unscaled}},
+          {"STLURWi", {32, true, false, A::Unscaled}},
+          {"STLURXi", {64, true, false, A::Unscaled}},
+          {"LDAPURBi", {8, false, false, A::Unscaled}},
+          {"LDAPURHi", {16, false, false, A::Unscaled}},
+          {"LDAPURi", {32, false, false, A::Unscaled}},
+          {"LDAPURXi", {64, false, false, A::Unscaled}},
   };
   static const std::unordered_map<std::string_view, ExtAddSub> kExtAddSub = {
           {"ADDWrx", {false, false}},   {"ADDXrx", {false, false}},
@@ -530,11 +561,28 @@ void dragon::arm::ARMIGNILLifter::liftUnknown(const llvm::MCInst &mc,
     out.noteUnlifted(addr);
 }
 
-bool dragon::arm::ARMIGNILLifter::writesMemory(const llvm::MCInstrDesc &desc) {
+bool dragon::arm::ARMIGNILLifter::writesMemory(
+        const llvm::MCInstrDesc &desc) const {
+  const std::string_view name = instrInfo_->getName(desc.getOpcode());
+  // SYS/SYSL carry no mayStore, but `dc zva` zeroes a cache line (memset
+  // uses it) and SYSL writes Rt although LLVM lists no def for it.
+  if (name.starts_with("SYS"))
+    return true;
+  if (!desc.mayStore())
+    return false;
   // LLVM also sets mayStore on everything with unmodeled side effects - HINT
-  // (nop/yield), DMB/DSB/ISB, SVC - which would make every nop look like an
-  // unlifted store. A real store (STR*roX, STLR, ...) has no such flag.
-  return desc.mayStore() && !desc.hasUnmodeledSideEffects();
+  // (nop/yield), barriers, prefetches, CLREX, TME - which write no memory.
+  // Real stores carry the side-effect flag too (STLR, STLLR, ST64B, the
+  // STF*/STBF* atomics, MTE STGM, SVE/SME multi-vector stores), so the flag
+  // alone cannot tell them apart; the non-writing ones are named instead.
+  if (!desc.hasUnmodeledSideEffects())
+    return true;
+  static constexpr std::string_view kNoWrite[] = {
+          "HINT", "DMB", "DSB", "ISB", "CLREX", "TCANCEL", "TCOMMIT", "PRF"};
+  for (const auto prefix: kNoWrite)
+    if (name.starts_with(prefix))
+      return false;
+  return true;
 }
 
 void dragon::arm::ARMIGNILLifter::liftA32(const Instruction &insn,
@@ -987,6 +1035,7 @@ void dragon::arm::ARMIGNILLifter::liftMemForm(const llvm::MCInst &mc,
   // ro: op[0]=Rt, op[1]=Rn, op[2]=Rm, op[3]=signed-extend flag (SXTW/SXTX
   // vs UXTW/LSL), op[4]=shift flag (scale Rm by the access size).
   // Unscaled (LDUR/STUR): op[0]=Rt, op[1]=Rn, op[2]=simm9 in bytes.
+  // Base (LDAR/STLR): op[0]=Rt, op[1]=Rn.
   constexpr ignil::Width ptrWidth = 64;
   auto rt = toReg(mc.getOperand(0).getReg());
   auto rn = toReg(mc.getOperand(1).getReg());
@@ -999,7 +1048,9 @@ void dragon::arm::ARMIGNILLifter::liftMemForm(const llvm::MCInst &mc,
   }
 
   ignil::Temp ea = newTemp(tmp, ptrWidth);
-  if (form.addrForm == MemForm::Addr::Unscaled) {
+  if (form.addrForm == MemForm::Addr::Base) {
+    out.append({ignil::Opcode::COPY, ea, {*rn}, addr});
+  } else if (form.addrForm == MemForm::Addr::Unscaled) {
     const auto off = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
     out.append({ignil::Opcode::ADD, ea, {*rn, ignil::Const{off, ptrWidth}},
                 addr});
