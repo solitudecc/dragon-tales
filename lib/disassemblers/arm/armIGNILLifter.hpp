@@ -89,6 +89,28 @@ class ARMIGNILLifter {
   };
   std::unordered_map<unsigned, ExtAddSub> extAddSub_;
 
+  // Other integer data-processing instructions, by opcode (liftIntOp).
+  enum class IntKind : std::uint8_t {
+    Bic, Bics, Orn, Eon,              // Rd = Rn op ~shift(Rm)
+    Ubfm, Sbfm,                       // bitfield move (lsl/lsr/asr #, sxtw, ubfx, ...)
+    Bfm,                              // bitfield insert (bfi, bfxil)
+    Lslv, Lsrv, Asrv, Rorv,           // shift by register
+    Csel, Csinc, Csinv, Csneg,        // conditional select
+    Ccmp, Ccmn,                       // conditional compare (reg or imm)
+    Madd, Msub,                       // Ra +/- Rn * Rm
+    Smaddl, Umaddl, Smsubl, Umsubl,   // Xa +/- ext(Wn) * ext(Wm)
+    Smulh, Umulh,                     // high half of a 128-bit product
+    Udiv, Sdiv,
+    Extr,                             // (Rn:Rm) >> lsb
+    Rev, Rev16, Rev32,                // byte reversal
+  };
+  struct IntOp {
+    IntKind kind;
+    ignil::Width width;
+    bool immForm = false; // CCMP/CCMN with an immediate second operand
+  };
+  std::unordered_map<unsigned, IntOp> intOps_;
+
   internal::Logger &logger_;
 
   Architecture architecture_;
@@ -184,6 +206,10 @@ class ARMIGNILLifter {
   emitExtendedReg(const llvm::MCInst &mc, unsigned regOpIdx, unsigned extOpIdx,
                   ignil::Width width, std::uint64_t addr, ignil::Block &out,
                   std::uint32_t &tmp) const;
+
+  // The integer data-processing instructions described by intOps_.
+  void liftIntOp(const llvm::MCInst &mc, const IntOp &op, std::uint64_t addr,
+                 ignil::Block &out, std::uint32_t &tmp) const;
 
   // LDR/STR with a register offset (`[xn, wm, uxtw #s]`, `[xn, xm, lsl #s]`)
   // or an unscaled immediate (LDUR/STUR), described by memForms_.

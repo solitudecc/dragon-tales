@@ -269,6 +269,40 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
           {"SUBSXrx", {true, true}},    {"SUBSXrx64", {true, true}},
   };
 
+  using I = IntKind;
+  static const std::unordered_map<std::string_view, IntOp> kIntOps = {
+          {"BICWrs", {I::Bic, 32}},       {"BICXrs", {I::Bic, 64}},
+          {"BICSWrs", {I::Bics, 32}},     {"BICSXrs", {I::Bics, 64}},
+          {"ORNWrs", {I::Orn, 32}},       {"ORNXrs", {I::Orn, 64}},
+          {"EONWrs", {I::Eon, 32}},       {"EONXrs", {I::Eon, 64}},
+          {"UBFMWri", {I::Ubfm, 32}},     {"UBFMXri", {I::Ubfm, 64}},
+          {"SBFMWri", {I::Sbfm, 32}},     {"SBFMXri", {I::Sbfm, 64}},
+          {"BFMWri", {I::Bfm, 32}},       {"BFMXri", {I::Bfm, 64}},
+          {"LSLVWr", {I::Lslv, 32}},      {"LSLVXr", {I::Lslv, 64}},
+          {"LSRVWr", {I::Lsrv, 32}},      {"LSRVXr", {I::Lsrv, 64}},
+          {"ASRVWr", {I::Asrv, 32}},      {"ASRVXr", {I::Asrv, 64}},
+          {"RORVWr", {I::Rorv, 32}},      {"RORVXr", {I::Rorv, 64}},
+          {"CSELWr", {I::Csel, 32}},      {"CSELXr", {I::Csel, 64}},
+          {"CSINCWr", {I::Csinc, 32}},    {"CSINCXr", {I::Csinc, 64}},
+          {"CSINVWr", {I::Csinv, 32}},    {"CSINVXr", {I::Csinv, 64}},
+          {"CSNEGWr", {I::Csneg, 32}},    {"CSNEGXr", {I::Csneg, 64}},
+          {"CCMPWr", {I::Ccmp, 32}},      {"CCMPXr", {I::Ccmp, 64}},
+          {"CCMPWi", {I::Ccmp, 32, true}}, {"CCMPXi", {I::Ccmp, 64, true}},
+          {"CCMNWr", {I::Ccmn, 32}},      {"CCMNXr", {I::Ccmn, 64}},
+          {"CCMNWi", {I::Ccmn, 32, true}}, {"CCMNXi", {I::Ccmn, 64, true}},
+          {"MADDWrrr", {I::Madd, 32}},    {"MADDXrrr", {I::Madd, 64}},
+          {"MSUBWrrr", {I::Msub, 32}},    {"MSUBXrrr", {I::Msub, 64}},
+          {"SMADDLrrr", {I::Smaddl, 64}}, {"UMADDLrrr", {I::Umaddl, 64}},
+          {"SMSUBLrrr", {I::Smsubl, 64}}, {"UMSUBLrrr", {I::Umsubl, 64}},
+          {"SMULHrr", {I::Smulh, 64}},    {"UMULHrr", {I::Umulh, 64}},
+          {"UDIVWr", {I::Udiv, 32}},      {"UDIVXr", {I::Udiv, 64}},
+          {"SDIVWr", {I::Sdiv, 32}},      {"SDIVXr", {I::Sdiv, 64}},
+          {"EXTRWrri", {I::Extr, 32}},    {"EXTRXrri", {I::Extr, 64}},
+          {"REVWr", {I::Rev, 32}},        {"REVXr", {I::Rev, 64}},
+          {"REV16Wr", {I::Rev16, 32}},    {"REV16Xr", {I::Rev16, 64}},
+          {"REV32Xr", {I::Rev32, 64}},
+  };
+
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
     const std::string_view name = instrInfo.getName(i);
     if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
@@ -278,6 +312,8 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
         memForms_.emplace(i, m.form);
     if (auto it = kExtAddSub.find(name); it != kExtAddSub.end())
       extAddSub_.emplace(i, it->second);
+    if (auto it = kIntOps.find(name); it != kIntOps.end())
+      intOps_.emplace(i, it->second);
   }
 }
 
@@ -376,6 +412,8 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
   // Generation of arithmetic and logic instructions, this is handled
   // by the liftAddSub and liftLogic functions, which handle all the different
   // variants of the instructions (register, immediate, and S-suffixed).
+  else if (auto io = intOps_.find(opc); io != intOps_.end())
+    liftIntOp(*mc, io->second, addr, out, tempId);
   else if (extAddSub_.contains(opc))
     liftAddSub(*mc, addr, out, tempId);
   else if (auto mf = memForms_.find(opc); mf != memForms_.end())
@@ -1014,6 +1052,288 @@ void dragon::arm::ARMIGNILLifter::liftMemForm(const llvm::MCInst &mc,
   }
   if (!isZeroReg(*rt))
     out.append({ignil::Opcode::COPY, *rt, {loaded}, addr});
+}
+
+void dragon::arm::ARMIGNILLifter::liftIntOp(const llvm::MCInst &mc,
+                                            const IntOp &op,
+                                            std::uint64_t addr,
+                                            ignil::Block &out,
+                                            std::uint32_t &tmp) const {
+  using I = IntKind;
+  using Opc = ignil::Opcode;
+  const ignil::Width w = op.width;
+
+  // Register operand `idx` as a value of `width` bits (XZR/WZR read 0).
+  auto val = [&](unsigned idx, ignil::Width width) -> ignil::Value {
+    auto r = toReg(mc.getOperand(idx).getReg());
+    if (!r || isZeroReg(*r))
+      return ignil::Const{0, width};
+    return *r;
+  };
+  auto emit = [&](Opc o, std::vector<ignil::Value> srcs, ignil::Width width) {
+    auto t = newTemp(tmp, width);
+    out.append({o, t, std::move(srcs), addr});
+    return t;
+  };
+  auto c = [](std::uint64_t v, ignil::Width width) {
+    return ignil::Value{ignil::Const{v, width}};
+  };
+  auto writeDst = [&](ignil::Value v) {
+    auto d = toReg(mc.getOperand(0).getReg());
+    if (d && !isZeroReg(*d))
+      out.append({Opc::COPY, *d, {std::move(v)}, addr});
+  };
+  // cond ? a : b, with a mask (IGNIL has no select).
+  auto select = [&](ignil::Temp cond, ignil::Value a, ignil::Value b,
+                    ignil::Width width) {
+    auto m = emit(Opc::NEG, {emit(Opc::ZEXT, {cond}, width)}, width);
+    auto x = emit(Opc::AND, {std::move(a), m}, width);
+    auto y = emit(Opc::AND, {std::move(b), emit(Opc::NOT, {m}, width)}, width);
+    return emit(Opc::OR, {x, y}, width);
+  };
+
+  switch (op.kind) {
+    case I::Bic:
+    case I::Bics:
+    case I::Orn:
+    case I::Eon: {
+      auto rhs = emit(Opc::NOT, {emitShiftedReg(mc, 2, 3, w, addr, out, tmp)},
+                      w);
+      const Opc o = op.kind == I::Orn   ? Opc::OR
+                    : op.kind == I::Eon ? Opc::XOR
+                                        : Opc::AND;
+      auto r = emit(o, {val(1, w), rhs}, w);
+      writeDst(r);
+      if (op.kind == I::Bics)
+        emitArithFlags(addr, out, tmp,
+                       {
+                               {ARMFlag::C, cfAlwaysZero(addr)},
+                               {ARMFlag::Z, zfEqZero(r, addr)},
+                               {ARMFlag::N, nfSignBit(r, addr)},
+                               {ARMFlag::V, vfAlwaysZero(addr)},
+                       });
+      return;
+    }
+
+    case I::Ubfm:
+    case I::Sbfm: {
+      // Bitfield move. With s = w-1-imms: when imms >= immr the field
+      // Rn[imms:immr] is extracted to bit 0 - (Rn << s) >> (s + immr); else
+      // Rn[imms:0] is inserted at bit w-immr - ((Rn << s) >> s) << (w-immr).
+      // The right shift is arithmetic for SBFM. lsl/lsr/asr #n, sxtb/h/w,
+      // uxtb/h, ubfx/sbfx and ubfiz/sbfiz are all this.
+      const auto immr = static_cast<unsigned>(mc.getOperand(2).getImm());
+      const auto imms = static_cast<unsigned>(mc.getOperand(3).getImm());
+      const Opc right = op.kind == I::Sbfm ? Opc::SAR : Opc::SHR;
+      const unsigned sh = w - 1 - imms;
+      ignil::Value v = val(1, w);
+      if (sh)
+        v = emit(Opc::SHL, {v, c(sh, 8)}, w);
+      if (imms >= immr) {
+        if (sh + immr)
+          v = emit(right, {v, c(sh + immr, 8)}, w);
+      } else {
+        if (sh)
+          v = emit(right, {v, c(sh, 8)}, w);
+        v = emit(Opc::SHL, {v, c(w - immr, 8)}, w);
+      }
+      writeDst(v);
+      return;
+    }
+
+    case I::Bfm: {
+      // op[0]=Rd, op[1]=Rd (tied), op[2]=Rn, op[3]=immr, op[4]=imms. The
+      // field - Rn[imms:immr] to bit 0 (bfxil) or Rn[imms:0] to bit w-immr
+      // (bfi) - replaces those bits of Rd; the rest of Rd stays.
+      const auto immr = static_cast<unsigned>(mc.getOperand(3).getImm());
+      const auto imms = static_cast<unsigned>(mc.getOperand(4).getImm());
+      unsigned len, pos, from;
+      if (imms >= immr) {
+        len = imms - immr + 1;
+        pos = 0;
+        from = immr;
+      } else {
+        len = imms + 1;
+        pos = w - immr;
+        from = 0;
+      }
+      const std::uint64_t low = len >= 64 ? ~0ull : (1ull << len) - 1;
+      const std::uint64_t mask = (low << pos) & (w >= 64 ? ~0ull : (1ull << w) - 1);
+      ignil::Value field = val(2, w);
+      if (from)
+        field = emit(Opc::SHR, {field, c(from, 8)}, w);
+      field = emit(Opc::AND, {field, c(low, w)}, w);
+      if (pos)
+        field = emit(Opc::SHL, {field, c(pos, 8)}, w);
+      auto kept = emit(Opc::AND, {val(1, w), c(~mask, w)}, w);
+      writeDst(emit(Opc::OR, {kept, field}, w));
+      return;
+    }
+
+    case I::Lslv:
+    case I::Lsrv:
+    case I::Asrv:
+    case I::Rorv: {
+      // The amount is Rm modulo the width.
+      auto n = emit(Opc::AND, {val(2, w), c(w - 1, w)}, w);
+      ignil::Value x = val(1, w);
+      if (op.kind == I::Rorv) {
+        auto hi = emit(Opc::SHR, {x, n}, w);
+        auto back = emit(Opc::AND, {emit(Opc::SUB, {c(w, w), n}, w),
+                                    c(w - 1, w)},
+                         w);
+        auto lo = emit(Opc::SHL, {x, back}, w);
+        writeDst(emit(Opc::OR, {hi, lo}, w));
+        return;
+      }
+      const Opc o = op.kind == I::Lslv   ? Opc::SHL
+                    : op.kind == I::Lsrv ? Opc::SHR
+                                         : Opc::SAR;
+      writeDst(emit(o, {x, n}, w));
+      return;
+    }
+
+    case I::Csel:
+    case I::Csinc:
+    case I::Csinv:
+    case I::Csneg: {
+      const auto cc = static_cast<unsigned>(mc.getOperand(3).getImm());
+      auto cond = emitCondition(cc, addr, out, tmp);
+      ignil::Value b = val(2, w);
+      if (op.kind == I::Csinc)
+        b = emit(Opc::ADD, {b, c(1, w)}, w);
+      else if (op.kind == I::Csinv)
+        b = emit(Opc::NOT, {b}, w);
+      else if (op.kind == I::Csneg)
+        b = emit(Opc::NEG, {b}, w);
+      writeDst(select(cond, val(1, w), b, w));
+      return;
+    }
+
+    case I::Ccmp:
+    case I::Ccmn: {
+      // cond ? flags(Rn -/+ op2) : #nzcv
+      const auto cc = static_cast<unsigned>(mc.getOperand(3).getImm());
+      const auto nzcv = static_cast<unsigned>(mc.getOperand(2).getImm());
+      auto cond = emitCondition(cc, addr, out, tmp);
+      ignil::Value lhs = val(0, w);
+      ignil::Value rhs =
+              op.immForm ? c(static_cast<std::uint64_t>(mc.getOperand(1).getImm()),
+                             w)
+                         : val(1, w);
+      auto lhsT = emit(Opc::COPY, {lhs}, w);
+      auto rhsT = emit(Opc::COPY, {rhs}, w);
+      const bool isAdd = op.kind == I::Ccmn;
+      auto res = emit(isAdd ? Opc::ADD : Opc::SUB, {lhsT, rhsT}, w);
+      auto n = emit(Opc::SLT, {res, c(0, w)}, 1);
+      auto z = emit(Opc::EQ, {res, c(0, w)}, 1);
+      auto carry = isAdd ? emit(Opc::ULT, {res, lhsT}, 1)
+                         : emit(Opc::UGE, {lhsT, rhsT}, 1);
+      // V: operands of the same sign (add) / different signs (sub), result
+      // of the other sign.
+      auto ab = emit(Opc::XOR, {lhsT, rhsT}, w);
+      auto ar = emit(Opc::XOR, {lhsT, res}, w);
+      auto vbits = emit(Opc::AND, {isAdd ? ignil::Value{emit(Opc::NOT, {ab}, w)}
+                                         : ignil::Value{ab},
+                                   ar},
+                        w);
+      auto v = emit(Opc::SLT, {vbits, c(0, w)}, 1);
+      const std::pair<const ignil::Reg *, std::pair<ignil::Temp, unsigned>>
+              flags[] = {{&regNF_, {n, 3}}, {&regZF_, {z, 2}},
+                         {&regCF_, {carry, 1}}, {&regVF_, {v, 0}}};
+      for (const auto &[reg, fv]: flags) {
+        if (!reg->width)
+          continue;
+        auto computed = emit(Opc::ZEXT, {fv.first}, reg->width);
+        auto chosen = select(cond, computed, c((nzcv >> fv.second) & 1,
+                                               reg->width),
+                             reg->width);
+        out.append({Opc::COPY, *reg, {chosen}, addr});
+      }
+      return;
+    }
+
+    case I::Madd:
+    case I::Msub: {
+      auto prod = emit(Opc::MUL, {val(1, w), val(2, w)}, w);
+      writeDst(emit(op.kind == I::Madd ? Opc::ADD : Opc::SUB, {val(3, w), prod},
+                    w));
+      return;
+    }
+    case I::Smaddl:
+    case I::Umaddl:
+    case I::Smsubl:
+    case I::Umsubl: {
+      const bool sgn = op.kind == I::Smaddl || op.kind == I::Smsubl;
+      const Opc ext = sgn ? Opc::SEXT : Opc::ZEXT;
+      auto a = emit(ext, {val(1, 32)}, 64);
+      auto b = emit(ext, {val(2, 32)}, 64);
+      auto prod = emit(Opc::MUL, {a, b}, 64);
+      const bool add = op.kind == I::Smaddl || op.kind == I::Umaddl;
+      writeDst(emit(add ? Opc::ADD : Opc::SUB, {val(3, 64), prod}, 64));
+      return;
+    }
+    case I::Smulh:
+    case I::Umulh: {
+      const Opc ext = op.kind == I::Smulh ? Opc::SEXT : Opc::ZEXT;
+      auto a = emit(ext, {val(1, 64)}, 128);
+      auto b = emit(ext, {val(2, 64)}, 128);
+      auto prod = emit(Opc::MUL, {a, b}, 128);
+      auto hi = emit(Opc::SHR, {prod, c(64, 8)}, 128);
+      writeDst(emit(Opc::TRUNC, {hi}, 64));
+      return;
+    }
+
+    case I::Udiv:
+    case I::Sdiv: {
+      // Division by zero gives 0; INT_MIN / -1 wraps to INT_MIN (as SDIV).
+      auto n = emit(Opc::COPY, {val(1, w)}, w);
+      auto d = emit(Opc::COPY, {val(2, w)}, w);
+      auto zero = emit(Opc::EQ, {d, c(0, w)}, 1);
+      // Divide by 1 instead of 0 so no op sees a zero divisor.
+      auto safe = select(zero, c(1, w), d, w);
+      auto q = emit(op.kind == I::Udiv ? Opc::UDIV : Opc::SDIV, {n, safe}, w);
+      writeDst(select(zero, c(0, w), q, w));
+      return;
+    }
+
+    case I::Extr: {
+      const auto lsb = static_cast<unsigned>(mc.getOperand(3).getImm());
+      if (lsb == 0) {
+        writeDst(emit(Opc::COPY, {val(2, w)}, w));
+        return;
+      }
+      auto lo = emit(Opc::SHR, {val(2, w), c(lsb, 8)}, w);
+      auto hi = emit(Opc::SHL, {val(1, w), c(w - lsb, 8)}, w);
+      writeDst(emit(Opc::OR, {lo, hi}, w));
+      return;
+    }
+
+    case I::Rev:
+    case I::Rev16:
+    case I::Rev32: {
+      // Reverse the bytes within each container of `group` bytes.
+      const unsigned group = op.kind == I::Rev16 ? 2
+                             : op.kind == I::Rev32 ? 4
+                                                   : w / 8;
+      ignil::Value x = val(1, w);
+      std::optional<ignil::Temp> acc;
+      for (unsigned i = 0; i < w / 8; ++i) {
+        const unsigned base = i / group * group;
+        const unsigned j = base + (group - 1 - (i - base)); // destination byte
+        ignil::Value byte = x;
+        if (i)
+          byte = emit(Opc::SHR, {byte, c(8 * i, 8)}, w);
+        byte = emit(Opc::AND, {byte, c(0xff, w)}, w);
+        if (j)
+          byte = emit(Opc::SHL, {byte, c(8 * j, 8)}, w);
+        acc = acc ? emit(Opc::OR, {*acc, byte}, w)
+                  : emit(Opc::COPY, {byte}, w);
+      }
+      writeDst(*acc);
+      return;
+    }
+  }
 }
 
 void dragon::arm::ARMIGNILLifter::liftAddSub(const llvm::MCInst &mc,

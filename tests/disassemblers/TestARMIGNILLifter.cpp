@@ -289,17 +289,18 @@ TEST_CASE("ARM IGNIL lifting - A32 b / beq terminators match the CFG",
 
 // -----------------------------------------------------------------------
 // AArch64 instruction with no lifter. Regression: it was dropped with no
-// trace, so `mov x0,#3; mul x0,x0,x1; ret` read back as X0 = 3.
+// trace, so `mov x0,#3; mul x0,x0,x1; ret` read back as X0 = 3. (MUL is
+// lifted since; CLZ, still without a lifter, stands in for it.)
 // -----------------------------------------------------------------------
 
 TEST_CASE("ARM IGNIL lifting - unlifted AArch64 instruction clobbers its defs",
           "[ignil][arm64]") {
   auto dis = makeDisassembler(dragon::Architecture::ARM64);
 
-  SECTION("mul: X0 becomes UNDEF and the address is reported") {
+  SECTION("clz: X0 becomes UNDEF and the address is reported") {
     const std::vector<std::uint8_t> bytes = {
             0x60, 0x00, 0x80, 0xd2, // mov x0, #3      @ 0x1000
-            0x00, 0x7c, 0x01, 0x9b, // mul x0, x0, x1  @ 0x1004
+            0x20, 0x10, 0xc0, 0xda, // clz x0, x1      @ 0x1004
             0xc0, 0x03, 0x5f, 0xd6, // ret             @ 0x1008
     };
     auto g = makeGraph(dragon::Architecture::ARM64);
@@ -431,6 +432,69 @@ TEST_CASE("ARM IGNIL lifting - register-offset memory and extended add/sub",
     ex.setRegister(arm::X10, c.x10);
     REQUIRE(ex.run(block).ok());
     CHECK(ex.evaluate(ex.readRegister(arm::X0)) == c.x0);
+  }
+}
+#endif
+
+// -----------------------------------------------------------------------
+// Integer data processing that was unlifted: bitfield moves and inserts
+// (lsl/lsr/asr #, sxtw, ubfx, sbfiz, bfi, ...), shifts by register,
+// conditional select/compare, multiply-add/long/high, division, EXTR, REV.
+// Expected values are Unicorn's; 220 such templates pass the difftest.
+// Inputs: x0 = 0x5555..., x1, x2, x3 below, NZCV = 0110 (Z, C).
+// -----------------------------------------------------------------------
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("ARM IGNIL lifting - integer data processing", "[ignil][arm64]") {
+  struct Case {
+    std::uint32_t word;
+    std::uint64_t x0;
+    unsigned nzcv;
+  };
+  const Case cases[] = {
+          {0xb37b2020, 0x5555555555557df5, 0x6}, // bfi x0, x1, #5, #9
+          {0x53042c20, 0xde, 0x6},               // ubfx w0, w1, #4, #8
+          {0x937e1820, 0xffffffffffffffbc, 0x6}, // sbfiz x0, x1, #2, #7
+          {0x1ac22820, 0xffffff89, 0x6},         // asr w0, w1, w2
+          {0x9a821420, 0xfedcba99, 0x6},         // csinc x0, x1, x2, ne
+          {0xfa510825, 0x5555555555555555, 0xa}, // ccmp x1, #17, #5, eq
+          {0x3a421023, 0x5555555555555555, 0x3}, // ccmn w1, w2, #3, ne
+          {0x9b427c20, 0xffffffff81b39cb4, 0x6}, // smulh x0, x1, x2
+          {0x9ba20c20, 0x9a204c72e039302c, 0x6}, // umaddl x0, w1, w2, x3
+          {0x9ac20c20, 0xffffffff80924925, 0x6}, // sdiv x0, x1, x2
+          {0x1adf0820, 0x0, 0x6},                // udiv w0, w1, wzr
+          {0xdac00420, 0x23816745ab89efcd, 0x6}, // rev16 x0, x1
+          {0x93c23420, 0x6f7800000007f6e5, 0x6}, // extr x0, x1, x2, #13
+  };
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+  for (const auto &c: cases) {
+    const std::vector<std::uint8_t> bytes = {
+            static_cast<std::uint8_t>(c.word), static_cast<std::uint8_t>(c.word >> 8),
+            static_cast<std::uint8_t>(c.word >> 16),
+            static_cast<std::uint8_t>(c.word >> 24)};
+    auto insns = dis.disassemble(bytes, 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    const auto block = dis.liftTrace(insns);
+    REQUIRE(block.unlifted().empty());
+
+    dragon::ignil::SymbolicExecutor ex;
+    ex.setRegister(arm::X0, 0x5555555555555555);
+    ex.setRegister(arm::X1, 0x8123456789abcdef);
+    ex.setRegister(arm::X2, 0x00000000fedcba98);
+    ex.setRegister(arm::X3, 0x1111222233334444);
+    ex.setRegister(arm::NF, 0);
+    ex.setRegister(arm::ZF, 1);
+    ex.setRegister(arm::CF, 1);
+    ex.setRegister(arm::VF, 0);
+    REQUIRE(ex.run(block).ok());
+    CHECK(ex.evaluate(ex.readRegister(arm::X0)) == c.x0);
+    const unsigned nzcv =
+            (*ex.evaluate(ex.readRegister(arm::NF)) << 3) |
+            (*ex.evaluate(ex.readRegister(arm::ZF)) << 2) |
+            (*ex.evaluate(ex.readRegister(arm::CF)) << 1) |
+            *ex.evaluate(ex.readRegister(arm::VF));
+    CHECK(nzcv == c.nzcv);
   }
 }
 #endif
