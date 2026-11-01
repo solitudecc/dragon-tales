@@ -307,3 +307,104 @@ TEST_CASE("ARMAnalysis ARM64 - block ends where a bl target begins",
   CHECK(ib->ops().back().opcode == dragon::ignil::Opcode::JMP);
   CHECK(g.get(0x1008)->isFunctionStart());
 }
+
+// ---------------------------------------------------------------------------
+// Function-start heuristics on gcc -O2 output (found on an aarch64 Lua build:
+// 1027 "functions" made of alignment nops, 147 in the middle of functions).
+// ---------------------------------------------------------------------------
+
+namespace {
+std::vector<std::uint8_t> words(std::initializer_list<std::uint32_t> ws) {
+  std::vector<std::uint8_t> out;
+  for (std::uint32_t w: ws)
+    for (int i = 0; i < 4; ++i)
+      out.push_back(static_cast<std::uint8_t>(w >> (8 * i)));
+  return out;
+}
+constexpr std::uint32_t kLdpFrame = 0xa8c17bfd; // ldp x29, x30, [sp], #16
+constexpr std::uint32_t kStpFrame = 0xa9bf7bfd; // stp x29, x30, [sp, #-16]!
+constexpr std::uint32_t kMovFp = 0x910003fd;    // mov x29, sp
+constexpr std::uint32_t kRet = 0xd65f03c0;
+constexpr std::uint32_t kNop = 0xd503201f;
+} // namespace
+
+TEST_CASE("ARMAnalysis - long nop padding is not a function",
+          "[arm][analysis]") {
+  // ldp ; ret ; 6 x nop (24 bytes) ; 0x1020 mov x0, #1 ; ret
+  // The padding skip stopped at 16 bytes, so 0x1018 - a nop - became the
+  // function start instead of 0x1020.
+  const auto bytes = words({kLdpFrame, kRet, kNop, kNop, kNop, kNop, kNop,
+                            kNop, 0xd2800020, kRet});
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+  auto fns = g.functions();
+  CHECK(hasFunction(fns, 0x1020));
+  CHECK_FALSE(hasFunction(fns, 0x1018));
+}
+
+TEST_CASE("ARMAnalysis - a shrink-wrapped prologue is not a function start",
+          "[arm][analysis]") {
+  // 0x1000 cbz x0, 0x1010 ; ret ; nop ; nop
+  // 0x1010 stp x29, x30, [sp, #-16]! ; mov x29, sp ; ldp ; ret
+  // gcc moves the frame setup onto the slow path; 0x1010 is a block of the
+  // same function, not a new one.
+  const auto bytes = words({0xb4000080, kRet, kNop, kNop, kStpFrame, kMovFp,
+                            kLdpFrame, kRet});
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+  auto fns = g.functions();
+  REQUIRE(hasFunction(fns, 0x1000));
+  CHECK_FALSE(hasFunction(fns, 0x1010));
+  CHECK(hasBlock(g.blocks(), 0x1010));
+  const dragon::Function fn{&g, 0x1000};
+  CHECK(fn.block(0x1010) != nullptr);
+}
+
+TEST_CASE("ARMAnalysis - a prologue reached by fall-through is not a "
+          "function start",
+          "[arm][analysis]") {
+  // 0x1000 cmp x0, #3 ; b.ne 0x1018 ; stp x29, x30, [sp, #-16]! ;
+  // mov x29, sp ; ldp ; ret ; 0x1018 ret
+  const auto bytes = words({0xf1000c1f, 0x54000081, kStpFrame, kMovFp,
+                            kLdpFrame, kRet, kRet});
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+  CHECK_FALSE(hasFunction(g.functions(), 0x1008));
+}
+
+TEST_CASE("ARMAnalysis - stp x29, x30, [sp, #M] alone is not a prologue",
+          "[arm][analysis]") {
+  // sub sp, sp, #32 ; nop ; 0x1008 stp x29, x30, [sp, #16] ;
+  // add x29, sp, #16 ; ret - the offset store only completes a prologue a
+  // `sub sp` began; it is not one by itself.
+  const auto bytes = words({0xd10083ff, 0xd2800001, 0xa9017bfd, 0x910043fd,
+                            kRet});
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+  CHECK_FALSE(hasFunction(g.functions(), 0x1008));
+}
+
+TEST_CASE("ARMAnalysis - a run of zero words is not a string of functions",
+          "[arm][analysis]") {
+  // ret ; 32 x udf #0 ; 0x1084 mov x0, #1 ; ret
+  std::vector<std::uint32_t> ws = {kRet};
+  for (int i = 0; i < 32; ++i)
+    ws.push_back(0);
+  ws.push_back(0xd2800020);
+  ws.push_back(kRet);
+  std::vector<std::uint8_t> bytes;
+  for (std::uint32_t w: ws)
+    for (int i = 0; i < 4; ++i)
+      bytes.push_back(static_cast<std::uint8_t>(w >> (8 * i)));
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+  for (const auto &f: g.functions()) {
+    INFO("function at 0x" << std::hex << f.startAddress());
+    CHECK((f.startAddress() == 0x1000 || f.startAddress() == 0x1084));
+  }
+}

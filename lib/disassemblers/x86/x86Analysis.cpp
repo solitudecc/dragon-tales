@@ -169,15 +169,32 @@ void dragon::x86::X86Analysis::discoverEpilogues(
     const bool isHltEpilogue =
             matched == 1 && x86Info_->isHalt(instructions[i]);
 
-    // Skip nop/trap padding after the epilogue, up to 16 bytes.
+    // Skip nop/trap padding after the epilogue. Alignment padding runs past
+    // 16 bytes (gcc pads aarch64 functions with up to 7 nops); with a
+    // 16-byte cap the rest of the run became a "function" made of nops.
+    constexpr std::uint64_t kMaxPadding = 64;
     size_t j = i + matched;
     std::uint64_t paddingBytes = 0;
-    while (j < n && paddingBytes < 16) {
+    while (j < n && paddingBytes < kMaxPadding) {
       const auto &pad = instructions[j];
       if (!x86Info_->isNop(pad) && !x86Info_->isTrap(pad))
         break;
       paddingBytes += pad.size();
       ++j;
+    }
+
+    // Still padding after the cap - a run of zero words (`udf #0`) or nops
+    // longer than any alignment, i.e. data. Not a function; and resume past
+    // the whole run so each pad is not taken for another epilogue.
+    const bool stillPadding =
+            j < n && (x86Info_->isNop(instructions[j]) ||
+                      x86Info_->isTrap(instructions[j]));
+    if (stillPadding) {
+      while (j < n && (x86Info_->isNop(instructions[j]) ||
+                       x86Info_->isTrap(instructions[j])))
+        ++j;
+      i = j;
+      continue;
     }
 
     if (j < n) {
@@ -221,6 +238,17 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
     }
   }
 
+  // Targets of conditional branches inside the code. A prologue there is
+  // usually a shrink-wrapped one - gcc moves `stp x29, x30, [sp, #-N]!` /
+  // `push rbp` past an early-exit test, onto the slow path of the same
+  // function (`b.ge 1f; ...; ret; 1: stp x29, x30, ...`) - so it is a block
+  // start, not a new function, unless something calls it or the caller
+  // named it as an entry point (both already in functionStarts).
+  std::unordered_set<std::uint64_t> conditionalTargets;
+  for (const auto &I: instructions)
+    if (I.isJump() && I.isConditional())
+      conditionalTargets.insert(I.branches().begin(), I.branches().end());
+
   for (size_t i = 0, e = instructions.size(); i < e; ++i) {
     const size_t windowSize = std::min(e - i, size_t{3});
     const Instruction *window[3] = {};
@@ -229,6 +257,23 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
     if (size_t matched =
                 x86Info_->isCommonFunctionPrologue({window, windowSize})) {
       std::uint64_t addr = instructions[i].address();
+      // Likewise right after a conditional branch, whose fall-through it is:
+      // `b.ne 1f; stp x29, x30, [sp, #-48]!` is the same function. (A
+      // function proper follows a return, a jump, a trap, padding or a call.)
+      bool fallsInto = false;
+      if (i > 0) {
+        const Instruction &prev = instructions[i - 1];
+        fallsInto = prev.address() + prev.size() == addr && prev.isJump() &&
+                    prev.isConditional();
+      }
+      if ((conditionalTargets.contains(addr) || fallsInto) &&
+          !functionStarts.contains(addr)) {
+        logger_.log("Prologue at 0x{:x} is inside a function (shrink-wrapped), "
+                    "not a function start",
+                    addr);
+        i += matched - 1;
+        continue;
+      }
       functionStarts.insert(addr);
       basicBlockStarts.insert(addr);
       instructions[i].setFunctionStart(true);

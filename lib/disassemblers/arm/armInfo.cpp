@@ -168,6 +168,13 @@ std::size_t dragon::ARMInfo::arm64IsCommonPrologue(
       !mcHasReg(*stpMC, regX29_) || !mcHasReg(*stpMC, regX30_) ||
       !mcHasReg(*stpMC, regSP64_))
     return pos; // no STP match — return landing-pad count (0 or 1)
+  // The offset form stores into a frame some earlier `sub sp` made, so it
+  // is a prologue only right after that sub. On its own it is the second
+  // half of a prologue the scheduler interleaved with other instructions
+  // (`sub sp, sp, #32; adrp; ldr; stp x29, x30, [sp, #16]`) - matching it
+  // put a function start in the middle of the function.
+  if (opStp == opSTPXi_ && stpPos == pos)
+    return pos;
 
   pos = stpPos + 1;
 
