@@ -120,6 +120,11 @@ if(Python3_Interpreter_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_lifetimes.py)
         set_tests_properties("Python API - borrowed views keep their Graph alive"
                 PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Python API - names that are not UTF-8 decode"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_robustness.py)
+        set_tests_properties("Python API - names that are not UTF-8 decode"
+                PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
     else()
         message(STATUS "Python cffi not found - Python API tests disabled")
     endif()

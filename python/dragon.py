@@ -1303,7 +1303,7 @@ class SignatureDB:
         if not matched:
             return None
         try:
-            name = ffi.string(out_name[0]).decode()
+            name = ffi.string(out_name[0]).decode('utf-8', 'replace')
         finally:
             lib.dragon_cstr_free(out_name[0])
         return (out_address[0], name, out_length[0])
@@ -1323,7 +1323,7 @@ class SignatureDB:
         cb = ffi.callback(
             'void(uint64_t, const char *, uint32_t, void *)',
             lambda addr, name, length, _: result.append(
-                (addr, ffi.string(name).decode(), length))
+                (addr, ffi.string(name).decode('utf-8', 'replace'), length))
         )
         lib.dragon_sigdb_match_entries(
             self._ptr, buf, len(image), image_base,
@@ -2309,7 +2309,7 @@ class LoadedImage:
         err = ffi.new('char[256]')
         ptr = lib.dragon_load_file(path.encode(), err, 256)
         if ptr == ffi.NULL:
-            raise ValueError(ffi.string(err).decode() or 'failed to load image')
+            raise ValueError(ffi.string(err).decode('utf-8', 'replace') or 'failed to load image')
         return cls(ptr)
 
     @classmethod
@@ -2318,7 +2318,7 @@ class LoadedImage:
         err = ffi.new('char[256]')
         ptr = lib.dragon_load_bytes(data, len(data), err, 256)
         if ptr == ffi.NULL:
-            raise ValueError(ffi.string(err).decode() or 'failed to load image')
+            raise ValueError(ffi.string(err).decode('utf-8', 'replace') or 'failed to load image')
         return cls(ptr)
 
     def __del__(self):
@@ -2366,7 +2366,7 @@ class LoadedImage:
             data_ptr = raw_bytes(self._ptr, i, length)
             data = (ffi.buffer(data_ptr, length[0])[:] if data_ptr != ffi.NULL
                     else b'')
-            out.append(Section(ffi.string(name).decode(), addr[0], vsize[0],
+            out.append(Section(ffi.string(name).decode('utf-8', 'replace'), addr[0], vsize[0],
                                bool(r[0]), bool(w[0]), bool(x[0]), data))
         return out
 
@@ -2391,7 +2391,7 @@ class LoadedImage:
             kind = ffi.new('dragon_symbol_kind_t*')
             imp = ffi.new('int*'); exp = ffi.new('int*')
             name = lib.dragon_loader_symbol(self._ptr, i, addr, size, kind, imp, exp)
-            out.append(Symbol(ffi.string(name).decode(), addr[0], size[0],
+            out.append(Symbol(ffi.string(name).decode('utf-8', 'replace'), addr[0], size[0],
                               int(kind[0]), bool(imp[0]), bool(exp[0])))
         return out
 
