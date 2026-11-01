@@ -2256,7 +2256,11 @@ void dragon::x86::X86IGNILLifter::liftPush(const llvm::MCInst &mc,
   ignil::Reg sp = (architecture_ == Architecture::X86_64) ? regRSP_ : regESP_;
   const ignil::Width srcBytes = src->width / 8;
 
-  // First SP -= size
+  // The value is read before SP moves: `push rsp` stores the old RSP.
+  auto value = newTemp(tmp, src->width);
+  out.append({ignil::Opcode::COPY, value, {*src}, addr});
+
+  // SP -= size
   auto newSP = newTemp(tmp, ptrWidth);
   out.append({ignil::Opcode::SUB,
               newSP,
@@ -2264,8 +2268,8 @@ void dragon::x86::X86IGNILLifter::liftPush(const llvm::MCInst &mc,
               addr});
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
 
-  // memory[RSP] = src
-  out.append({ignil::Opcode::STORE, std::nullopt, {sp, *src}, addr});
+  // memory[RSP] = value
+  out.append({ignil::Opcode::STORE, std::nullopt, {sp, value}, addr});
 }
 void dragon::x86::X86IGNILLifter::liftPushMem(const llvm::MCInst &mc,
                                               std::uint64_t addr,
@@ -2303,10 +2307,9 @@ void dragon::x86::X86IGNILLifter::liftPop(const llvm::MCInst &mc,
   ignil::Reg sp = (architecture_ == Architecture::X86_64) ? regRSP_ : regESP_;
   const ignil::Width dstBytes = dst->width / 8;
 
-  // dst = memory[RSP]
+  // loaded = memory[RSP]
   auto loaded = newTemp(tmp, dst->width);
   out.append({ignil::Opcode::LOAD, loaded, {sp}, addr});
-  out.append({ignil::Opcode::COPY, *dst, {loaded}, addr});
 
   // RSP += size
   auto newSP = newTemp(tmp, ptrWidth);
@@ -2315,6 +2318,10 @@ void dragon::x86::X86IGNILLifter::liftPop(const llvm::MCInst &mc,
               {sp, ignil::Const{dstBytes, ptrWidth}},
               addr});
   out.append({ignil::Opcode::COPY, sp, {newSP}, addr});
+
+  // dst is written last: `pop rsp` leaves RSP = the loaded value, not
+  // value + size.
+  out.append({ignil::Opcode::COPY, *dst, {loaded}, addr});
 }
 
 void dragon::x86::X86IGNILLifter::liftPopMem(const llvm::MCInst &mc,

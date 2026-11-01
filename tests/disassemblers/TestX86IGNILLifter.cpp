@@ -2757,4 +2757,37 @@ TEST_CASE("X86 IGNIL lifting - bsr/bsf of zero is undefined",
     }
   }
 }
+
+// Regression: `push rsp` stored the already-decremented RSP, and `pop rsp`
+// added 8 to the value it had just loaded into RSP. x86 pushes the old RSP
+// and `pop rsp` leaves RSP = the loaded value. Values are Unicorn's.
+TEST_CASE("X86 IGNIL lifting - push rsp / pop rsp", "[ignil][x86][x86_64]") {
+  std::vector<std::uint8_t> page(0x100, 0);
+  page[0x80] = 0x88; // qword at 0x200080 = 0x1122334455667788
+  for (int i = 1; i < 8; ++i)
+    page[0x80 + i] = static_cast<std::uint8_t>(0x77 - 0x11 * (i - 1));
+  {
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne({0x54}, // push rsp
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.mapMemory(0x200000, page);
+             e.setRegister(x86r::RSP, 0x200088);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RSP)) == 0x200080);
+    CHECK(ex.evaluate(ex.readMemory(0x200080, 64)) == 0x200088);
+  }
+  {
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne({0x5c}, // pop rsp
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.mapMemory(0x200000, page);
+             e.setRegister(x86r::RSP, 0x200080);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RSP)) == 0x1122334455667788);
+  }
+}
 #endif // DRAGON_WITH_Z3
