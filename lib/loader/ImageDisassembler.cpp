@@ -10,7 +10,15 @@
 namespace dragon::loader {
 
 Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
-  Graph graph(image.architecture(), config);
+  // Windows x64 code passes arguments in RCX, RDX, R8, R9, not System V's
+  // RDI, RSI, ... - without this, argument recovery read PE functions with
+  // the wrong registers.
+  Configuration cfg = config;
+  if (image.format() == Format::PE &&
+      image.architecture() == Architecture::X86_64 &&
+      cfg.callingConvention == CallingConvention::Default)
+    cfg.callingConvention = CallingConvention::Win64;
+  Graph graph(image.architecture(), cfg);
   if (image.architecture() == Architecture::Unknown)
     return graph;
 
@@ -32,7 +40,7 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
                      return s.executable && !s.bytes.empty();
                    });
 
-  Disassembler dis(image.architecture(), config);
+  Disassembler dis(image.architecture(), cfg);
   auto readMemory = [&image](std::uint64_t addr, std::span<std::uint8_t> out) {
     auto data = image.readVirtual(addr, out.size());
     if (!data)

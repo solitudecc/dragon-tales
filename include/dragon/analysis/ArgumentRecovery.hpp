@@ -41,7 +41,9 @@ class Graph;
 ///     consulted to size the return value).
 ///   - Arguments are reported as the contiguous convention prefix up to the
 ///     highest live-in argument register, matching how compilers allocate them.
-///   - Conventions modelled: x86-64 System V and AArch64 AAPCS64.
+///   - Conventions modelled: x86-64 System V, Microsoft x64 (selected by the
+///     graph's Configuration::callingConvention, which disassembleImage sets
+///     for an x86-64 PE) and AArch64 AAPCS64.
 namespace dragon::analysis {
 
 /// Register-space byte offsets that are live on entry to `fn`: read along some

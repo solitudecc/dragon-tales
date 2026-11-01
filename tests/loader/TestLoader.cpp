@@ -246,6 +246,16 @@ TEST_CASE("Loader - ELF without .symtab: imports and exports from .dynsym",
   CHECK(img->exports().size() == 1);
 }
 
+TEST_CASE("loader - disassembleImage reads an x86-64 PE with the Win64 "
+          "calling convention",
+          "[loader][pe]") {
+  auto img = LoadedImage::loadBytes(toVec(kImpExpPeX64, sizeof(kImpExpPeX64)));
+  REQUIRE(img.has_value());
+  Graph g = disassembleImage(*img);
+  CHECK(g.configuration().callingConvention ==
+        dragon::CallingConvention::Win64);
+}
+
 TEST_CASE("Loader - PE imports and exports come from the directories",
           "[loader]") {
   auto img = LoadedImage::loadBytes(toVec(kImpExpPeX64, sizeof(kImpExpPeX64)));

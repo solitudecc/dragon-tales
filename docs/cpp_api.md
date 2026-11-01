@@ -820,6 +820,13 @@ define void @sub_<addr>(ptr %mem, ptr %regs)
 - `%mem` — flat memory image; loads and stores go through GEP offsets into this pointer.
 - `%regs` — register file; registers are loaded from it on entry and written back on `ret`.
 
+The recovered prototype (`"dragon.signature"` attribute,
+`recoveredSignatureString()`) reads arguments in the graph's calling
+convention, `Configuration::callingConvention`: System V (RDI, RSI, RDX, RCX,
+R8, R9) by default on x86-64, Microsoft x64 (RCX, RDX, R8, R9) with
+`CallingConvention::Win64` - which `loader::disassembleImage` selects for an
+x86-64 PE - and AAPCS64 (X0-X7) on AArch64.
+
 ### Lifting a single block without a Graph
 
 `liftBlock` is the `Graph`-free counterpart to `Disassembler::liftTrace` —

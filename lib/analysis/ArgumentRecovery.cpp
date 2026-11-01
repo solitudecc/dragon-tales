@@ -15,9 +15,13 @@ namespace dragon::analysis {
 namespace {
 
 /// Integer-argument registers, in calling-convention order, for `arch`.
-std::vector<ignil::Reg> argumentRegisters(Architecture arch) {
+std::vector<ignil::Reg> argumentRegisters(Architecture arch,
+                                          CallingConvention cc) {
   switch (arch) {
     case Architecture::X86_64:
+      // Microsoft x64 (Windows): rcx, rdx, r8, r9.
+      if (cc == CallingConvention::Win64)
+        return {x86::RCX, x86::RDX, x86::R8, x86::R9};
       // System V AMD64: rdi, rsi, rdx, rcx, r8, r9.
       return {x86::RDI, x86::RSI, x86::RDX, x86::RCX, x86::R8, x86::R9};
     case Architecture::ARM64:
@@ -136,7 +140,8 @@ FunctionSignature recoverSignature(const Function &fn, const Graph &graph,
 
   // Arguments: the contiguous convention prefix up to the highest argument
   // register that is live-in, each sized by how wide it is actually read.
-  const std::vector<ignil::Reg> argRegs = argumentRegisters(arch);
+  const std::vector<ignil::Reg> argRegs =
+          argumentRegisters(arch, graph.configuration().callingConvention);
   int highest = -1;
   for (int i = 0; i < static_cast<int>(argRegs.size()); ++i)
     if (liveIn.count(argRegs[i].offset))

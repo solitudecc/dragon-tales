@@ -161,3 +161,34 @@ TEST_CASE("ArgumentRecovery - LLVMLifter records a dragon.signature attribute",
   CHECK(ir.find("\"dragon.signature\"=\"i32 sub_1000(i32 RDI, i32 RSI)\"") !=
         std::string::npos);
 }
+
+// -----------------------------------------------------------------------
+// Microsoft x64: arguments in RCX, RDX, R8, R9.
+//
+// The x86-64 convention was hard-wired to System V, so a Windows function
+// taking (a, b) in RCX/RDX was reported with four arguments RDI..RCX.
+// -----------------------------------------------------------------------
+
+TEST_CASE("ArgumentRecovery - Win64 convention reads RCX/RDX",
+          "[analysis][signature]") {
+  // push rbp; mov rbp, rsp; mov eax, ecx; add eax, edx; pop rbp; ret
+  const auto bytes = withProlog({0x89, 0xC8, 0x01, 0xD0, 0x5D, 0xC3});
+  auto sigFor = [&](CallingConvention cc) {
+    Configuration cfg;
+    cfg.callingConvention = cc;
+    Disassembler dis(Architecture::X86_64, cfg);
+    Graph g(Architecture::X86_64, cfg);
+    dis.disassemble(bytes, 0x1000, g);
+    const Function fn{&g, 0x1000};
+    REQUIRE(fn.isValid());
+    return analysis::recoverSignature(fn, g, Architecture::X86_64);
+  };
+
+  auto win = sigFor(CallingConvention::Win64);
+  REQUIRE(win.arguments.size() == 2);
+  CHECK(win.arguments[0].reg.offset == x86::RCX.offset);
+  CHECK(win.arguments[1].reg.offset == x86::RDX.offset);
+
+  // Read as System V the same body is RDX (#2) and RCX (#3): four arguments.
+  CHECK(sigFor(CallingConvention::Default).arguments.size() == 4);
+}

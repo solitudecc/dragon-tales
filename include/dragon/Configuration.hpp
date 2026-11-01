@@ -46,6 +46,15 @@ enum class DisassemblyStrategy : std::uint8_t {
 ///
 /// Leaving both empty is safe and targets the most conservative baseline
 /// for each architecture.
+/// Calling convention used to interpret registers at function boundaries
+/// (argument recovery). Default is the platform's usual one for the
+/// architecture: System V on x86-64, AAPCS64 on AArch64.
+enum class CallingConvention : std::uint8_t {
+  Default = 0,
+  SysV,  ///< x86-64 System V: RDI, RSI, RDX, RCX, R8, R9
+  Win64, ///< Microsoft x64: RCX, RDX, R8, R9 (Windows PE)
+};
+
 struct Configuration {
   Syntax syntax = Syntax::INTEL;
   DisassemblyStrategy disassemblyStrategy = DisassemblyStrategy::LINEAR_SWEEP;
@@ -62,6 +71,10 @@ struct Configuration {
   /// When true, the library emits diagnostic messages to stderr.
   /// Set to false by default so library users are not surprised by output.
   bool logging = false;
+
+  /// Calling convention of the code. loader::disassembleImage sets Win64 for
+  /// an x86-64 PE image.
+  CallingConvention callingConvention = CallingConvention::Default;
 
 #ifdef DRAGON_WITH_Z3
   /// When true, the disassembler uses Z3 to enumerate possible targets of
