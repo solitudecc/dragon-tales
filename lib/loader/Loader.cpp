@@ -198,7 +198,8 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
       s.address = sec.getAddress();
       s.virtualSize = sec.getSize();
       const std::uint64_t flags = ELFSectionRef(sec).getFlags();
-      s.readable = flags & ELF::SHF_ALLOC;
+      s.mapped = flags & ELF::SHF_ALLOC;
+      s.readable = s.mapped;
       s.writable = flags & ELF::SHF_WRITE;
       s.executable = flags & ELF::SHF_EXECINSTR;
     }

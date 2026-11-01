@@ -51,13 +51,17 @@ struct Section {
   bool readable{};
   bool writable{};
   bool executable{};
+  /// Part of the loaded image. False for ELF sections without SHF_ALLOC
+  /// (.symtab, .strtab, .comment, debug info): their sh_addr is 0 and they
+  /// are not in the address space, so no address lookup may land in them.
+  bool mapped{true};
 
   /// A section that occupies address space but has no file bytes (.bss / PE
   /// uninitialised data). `bytes` is empty for these.
   [[nodiscard]] bool isBss() const { return bytes.empty() && virtualSize != 0; }
 
   [[nodiscard]] bool contains(std::uint64_t addr) const {
-    return addr >= address && addr < address + virtualSize;
+    return mapped && addr >= address && addr < address + virtualSize;
   }
 };
 

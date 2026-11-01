@@ -158,6 +158,30 @@ TEST_CASE("loader - a section-less ELF is mapped from its PT_LOAD segments",
   }
 }
 
+// Regression: ELF sections without SHF_ALLOC (.symtab, .strtab, .comment)
+// have sh_addr 0 and were treated as mapped there. In a PIE or shared object
+// (base 0) every address in a gap between allocated sections - the ELF
+// header, padding - then read .symtab/.comment bytes instead of what the
+// PT_LOAD maps (seen on clang-built aarch64 PIEs: readVirtual(0x10) returned
+// the .comment string). They are listed but take no part in address lookups.
+TEST_CASE("loader - non-SHF_ALLOC ELF sections are not in the address space",
+          "[loader][elf]") {
+  auto img = LoadedImage::loadBytes(toVec(kTinyElfX64, sizeof(kTinyElfX64)));
+  REQUIRE(img.has_value());
+  const Section *symtab = findSection(*img, ".symtab");
+  REQUIRE(symtab != nullptr);
+  CHECK(symtab->address == 0);
+  CHECK_FALSE(symtab->bytes.empty());
+  CHECK_FALSE(symtab->mapped);
+  CHECK_FALSE(symtab->contains(0));
+  CHECK(img->sectionContaining(0) == nullptr);
+  CHECK_FALSE(img->readVirtual(0, 4).has_value()); // nothing is mapped at 0
+  const Section *text = findSection(*img, ".text");
+  REQUIRE(text != nullptr);
+  CHECK(text->mapped);
+  CHECK(img->sectionContaining(kTinyElfX64Entry) == text);
+}
+
 // -----------------------------------------------------------------------
 // PE
 // -----------------------------------------------------------------------
