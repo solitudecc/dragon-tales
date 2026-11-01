@@ -72,9 +72,17 @@ enum class SymbolKind : std::uint8_t {
 
 /// A symbol-table entry, flattened to the handful of facts an analysis needs.
 ///
-/// `imported` is an undefined symbol the image expects the loader to supply (a
-/// libc/DLL import); its `address` is not meaningful. `exported` is a defined
-/// global visible to other modules. A symbol can be neither (a local).
+/// `imported` is a symbol the image expects the loader to supply (a libc/DLL
+/// import). For ELF it comes from .symtab and .dynsym (undefined entries) and
+/// its `address` is 0. For PE it is one Import Address Table entry and its
+/// `address` is that IAT slot's virtual address - the location an indirect
+/// `call [X]` reads; an import by ordinal is named "#<ordinal>".
+///
+/// `exported` is a defined symbol visible to other modules: for ELF a global
+/// or weak .dynsym/.symtab definition, for PE an export-directory entry
+/// (forwarders are skipped). A symbol can be neither (a local). A linked PE's
+/// COFF symbol table, if present, is debug information and contributes
+/// neither imports nor exports.
 struct Symbol {
   std::string name;
   std::uint64_t address{};

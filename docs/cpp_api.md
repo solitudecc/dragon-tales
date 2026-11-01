@@ -310,7 +310,16 @@ const dragon::loader::Symbol* fn = image->functionAt(0x401000);
 
 Each `Symbol` carries `name`, `address`, `size`, a `SymbolKind`
 (`Function`, `Object`, `Section`, `File`, `Unknown`), and the `imported` /
-`exported` flags. An `imported` symbol's `address` is not meaningful.
+`exported` flags.
+
+Where they come from: for ELF, `.symtab` and `.dynsym` (a stripped binary has
+only the latter); undefined entries are imports with `address` 0, defined
+global/weak ones are exports. For PE, the import and export directories: each
+import is one Import Address Table entry whose `address` is that IAT slot (the
+location an indirect `call [X]` reads), imports by ordinal are named
+`#<ordinal>`, and forwarded exports are skipped. A linked PE's COFF symbol
+table, when present, is kept as plain symbols but contributes no imports or
+exports.
 
 ### Straight to a Graph
 

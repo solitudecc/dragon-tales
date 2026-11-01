@@ -199,3 +199,93 @@ TEST_CASE("loader - loadFile on a missing path fails cleanly", "[loader]") {
   CHECK_FALSE(img.has_value());
   CHECK_FALSE(err.empty());
 }
+
+// -----------------------------------------------------------------------
+// Imports and exports of stripped images.
+//
+// Regression: symbols came only from obj->symbols() - .symtab for ELF, the
+// COFF symbol table for PE. A stripped ELF (every distribution binary;
+// /bin/ls gave 0 symbols) has only .dynsym, and a PE's imports and exports
+// live in its import/export directories, which were never read: a stripped
+// or MSVC-built PE had no imports or exports at all, and a mingw PE with
+// COFF symbols reported linker leftovers (`__end__`) as DLL imports.
+// -----------------------------------------------------------------------
+
+namespace {
+const Symbol *findSymbol(const LoadedImage &img, const std::string &name) {
+  for (const Symbol &s : img.symbols())
+    if (s.name == name)
+      return &s;
+  return nullptr;
+}
+} // namespace
+
+TEST_CASE("Loader - ELF without .symtab: imports and exports from .dynsym",
+          "[loader]") {
+  auto img = LoadedImage::loadBytes(toVec(kDynElfX64, sizeof(kDynElfX64)));
+  REQUIRE(img.has_value());
+
+  const Symbol *exp = findSymbol(*img, "dyn_export");
+  REQUIRE(exp != nullptr);
+  CHECK(exp->exported);
+  CHECK_FALSE(exp->imported);
+  CHECK(exp->address == kDynElfX64Export);
+  CHECK(exp->kind == SymbolKind::Function);
+
+  const Symbol *puts = findSymbol(*img, "puts");
+  REQUIRE(puts != nullptr);
+  CHECK(puts->imported);
+  CHECK_FALSE(puts->exported);
+
+  // Weak undefined is still an import (glibc's __gmon_start__ & co).
+  const Symbol *gmon = findSymbol(*img, "__gmon_start__");
+  REQUIRE(gmon != nullptr);
+  CHECK(gmon->imported);
+
+  CHECK(img->imports().size() == 2);
+  CHECK(img->exports().size() == 1);
+}
+
+TEST_CASE("Loader - PE imports and exports come from the directories",
+          "[loader]") {
+  auto img = LoadedImage::loadBytes(toVec(kImpExpPeX64, sizeof(kImpExpPeX64)));
+  REQUIRE(img.has_value());
+  REQUIRE(img->imageBase() == kImpExpPeX64Base);
+
+  // Imports: one per IAT slot, address = the slot (what `call [X]` reads).
+  const Symbol *byName = findSymbol(*img, "GetTickCount");
+  REQUIRE(byName != nullptr);
+  CHECK(byName->imported);
+  CHECK(byName->address == kImpExpPeX64Base + 0x2060);
+  const Symbol *byOrdinal = findSymbol(*img, "#5");
+  REQUIRE(byOrdinal != nullptr);
+  CHECK(byOrdinal->imported);
+  CHECK(byOrdinal->address == kImpExpPeX64Base + 0x2068);
+  CHECK(img->imports().size() == 2);
+
+  // Exports, including an ordinal-only one.
+  const Symbol *named = findSymbol(*img, "exported_fn");
+  REQUIRE(named != nullptr);
+  CHECK(named->exported);
+  CHECK_FALSE(named->imported);
+  CHECK(named->address == kImpExpPeX64Base + 0x1000);
+  CHECK(named->kind == SymbolKind::Function);
+  const Symbol *ordinalOnly = findSymbol(*img, "#2");
+  REQUIRE(ordinalOnly != nullptr);
+  CHECK(ordinalOnly->exported);
+  CHECK(ordinalOnly->address == kImpExpPeX64Base + 0x1004);
+  CHECK(img->exports().size() == 2);
+}
+
+TEST_CASE("Loader - an undefined symbol is never also exported", "[loader]") {
+  for (const auto &bytes : {toVec(kTinyElfX64, sizeof(kTinyElfX64)),
+                            toVec(kDynElfX64, sizeof(kDynElfX64)),
+                            toVec(kImpExpPeX64, sizeof(kImpExpPeX64))}) {
+    auto img = LoadedImage::loadBytes(bytes);
+    REQUIRE(img.has_value());
+    for (const Symbol &s : img->symbols()) {
+      INFO(s.name);
+      CHECK_FALSE((s.imported && s.exported));
+    }
+  }
+}

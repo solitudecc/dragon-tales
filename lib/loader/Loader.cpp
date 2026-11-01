@@ -1,6 +1,9 @@
 #include <dragon/loader/Loader.hpp>
 
 #include <algorithm>
+#include <map>
+#include <string>
+#include <utility>
 
 #include <llvm/BinaryFormat/COFF.h>
 #include <llvm/BinaryFormat/ELF.h>
@@ -252,7 +255,19 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
   }
 
   // -- symbols ------------------------------------------------------------
-  for (const SymbolRef &sym : obj->symbols()) {
+  //
+  // A linked PE's COFF symbol table, when there is one at all, is debug
+  // information the linker left behind: an undefined entry there is not
+  // something the loader supplies, and a global is not an export. The
+  // loader's view is the import and export directories, read below.
+  const bool peImage =
+          coff && (coff->getPE32Header() || coff->getPE32PlusHeader());
+
+  // Name of each symbol already added -> its index, so the ELF dynamic table
+  // can merge into entries .symtab already produced instead of doubling them.
+  std::map<std::pair<std::string, bool>, std::size_t> seen;
+
+  auto addSymbol = [&](const SymbolRef &sym, bool dynamic) {
     Symbol out;
     if (auto name = sym.getName())
       out.name = name->str();
@@ -260,7 +275,7 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
       consumeError(name.takeError());
 
     if (out.name.empty())
-      continue; // skip the anonymous section/aux entries COFF emits
+      return; // skip the anonymous section/aux entries COFF emits
 
     if (auto type = sym.getType())
       out.kind = kindOf(*type);
@@ -268,11 +283,22 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
       consumeError(type.takeError());
 
     const std::uint32_t flags = sym.getFlags().get();
-    out.imported = flags & SymbolRef::SF_Undefined;
-    out.exported = (flags & SymbolRef::SF_Exported) ||
-                   ((flags & SymbolRef::SF_Global) && !out.imported);
+    out.imported = (flags & SymbolRef::SF_Undefined) && !peImage;
+    if (peImage)
+      out.exported = false;
+    else if (dynamic)
+      // Everything defined in .dynsym with global/weak binding is visible to
+      // other modules - that is what the table is for.
+      out.exported = !(flags & SymbolRef::SF_Undefined) &&
+                     (flags & (SymbolRef::SF_Global | SymbolRef::SF_Weak));
+    else
+      // LLVM sets SF_Exported on any default-visibility global/weak symbol,
+      // defined or not, so a weak undefined (_ITM_deregisterTMCloneTable)
+      // used to come out both imported and exported.
+      out.exported = !(flags & SymbolRef::SF_Undefined) &&
+                     (flags & (SymbolRef::SF_Exported | SymbolRef::SF_Global));
 
-    if (!out.imported) {
+    if (!(flags & SymbolRef::SF_Undefined)) {
       if (auto addr = sym.getAddress())
         out.address = *addr;
       else
@@ -282,7 +308,108 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
     if (elf)
       out.size = ELFSymbolRef(sym).getSize();
 
+    const auto key = std::make_pair(out.name, out.imported);
+    if (auto it = seen.find(key); it != seen.end()) {
+      Symbol &prev = image.symbols_[it->second];
+      prev.exported = prev.exported || out.exported;
+      if (prev.kind == SymbolKind::Unknown)
+        prev.kind = out.kind;
+      return;
+    }
+    seen.emplace(key, image.symbols_.size());
     image.symbols_.push_back(std::move(out));
+  };
+
+  for (const SymbolRef &sym : obj->symbols())
+    addSymbol(sym, false);
+
+  // A stripped ELF - every distribution binary and library - has no .symtab
+  // at all; its imports and exports live only in .dynsym. Reading .symtab
+  // alone gave such files no symbols whatsoever.
+  if (elf)
+    for (const ELFSymbolRef &sym : elf->getDynamicSymbolIterators())
+      addSymbol(sym, true);
+
+  if (peImage) {
+    const std::uint64_t slot = image.is64_ ? 8 : 4;
+
+    // Imports: one Symbol per Import Address Table slot. `address` is the
+    // slot's virtual address - what `call [rip+X]` / `call [X]` reads - so an
+    // indirect call through it can be named.
+    for (const ImportDirectoryEntryRef &dir : coff->import_directories()) {
+      std::uint32_t iatRva = 0;
+      if (Error e = dir.getImportAddressTableRVA(iatRva)) {
+        consumeError(std::move(e));
+        continue;
+      }
+      std::uint64_t index = 0;
+      for (const ImportedSymbolRef &imp : dir.imported_symbols()) {
+        Symbol out;
+        out.kind = SymbolKind::Function;
+        out.imported = true;
+        out.address = image.imageBase_ + iatRva + index++ * slot;
+        bool byOrdinal = false;
+        if (Error e = imp.isOrdinal(byOrdinal)) {
+          consumeError(std::move(e));
+          continue;
+        }
+        if (byOrdinal) {
+          std::uint16_t ordinal = 0;
+          if (Error e = imp.getOrdinal(ordinal)) {
+            consumeError(std::move(e));
+            continue;
+          }
+          out.name = "#" + std::to_string(ordinal);
+        } else {
+          StringRef name;
+          if (Error e = imp.getSymbolName(name)) {
+            consumeError(std::move(e));
+            continue;
+          }
+          out.name = name.str();
+        }
+        image.symbols_.push_back(std::move(out));
+      }
+    }
+
+    // Exports: the export directory, not COFF globals. Forwarders point into
+    // another module and have no address here.
+    for (const ExportDirectoryEntryRef &exp : coff->export_directories()) {
+      bool forwarder = false;
+      if (Error e = exp.isForwarder(forwarder)) {
+        consumeError(std::move(e));
+        continue;
+      }
+      if (forwarder)
+        continue;
+      StringRef name;
+      std::uint32_t rva = 0;
+      if (Error e = exp.getSymbolName(name)) {
+        consumeError(std::move(e));
+        continue;
+      }
+      if (Error e = exp.getExportRVA(rva)) {
+        consumeError(std::move(e));
+        continue;
+      }
+      Symbol out;
+      if (name.empty()) {
+        std::uint32_t ordinal = 0;
+        if (Error e = exp.getOrdinal(ordinal)) {
+          consumeError(std::move(e));
+          continue;
+        }
+        out.name = "#" + std::to_string(ordinal);
+      } else {
+        out.name = name.str();
+      }
+      out.address = image.imageBase_ + rva;
+      out.exported = true;
+      const Section *sect = image.sectionContaining(out.address);
+      out.kind = sect && sect->executable ? SymbolKind::Function
+                                          : SymbolKind::Object;
+      image.symbols_.push_back(std::move(out));
+    }
   }
 
   return image;
