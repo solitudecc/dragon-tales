@@ -260,6 +260,12 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
     if (ws == rs && w->width == r.width)
       return buildFromOp(op, block, i, graph, preds, depth);
 
+    // An implicit zero-extension defines these bytes independently of the
+    // written value, even for UNDEF or a different unknown on each path.
+    // Keep the zero explicit so a join can merge it without merging sources.
+    if (ws + byteCount(w->width) <= rs && re <= we)
+      return mkConst(0, r.width);
+
     // The written value, as a `wbits`-wide quantity covering [ws, we): bytes
     // past the write's own width are the zeroes of a 32-bit zero-extension.
     const ignil::Width wbits = (we - ws) * 8;
@@ -368,6 +374,19 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
     return std::move(*merged);
   if (agree && outerLoop)
     return std::move(*outerLoop);
+
+  // Full values can disagree while their upper halves are all zero. Query
+  // those bytes independently using the same alias, loop and budget rules;
+  // never infer zeroes merely from the width of a downstream comparison.
+  if (r.width == 64 && !preds.probingUpper && preds.budget > 0) {
+    const ignil::Reg upper{r.offset + 4, 32, r.name + "[63:32]"};
+    preds.probingUpper = true;
+    const auto high = sliceReg(upper, block, beforeIdx, graph, preds, depth);
+    preds.probingUpper = false;
+    if (const auto *c = std::get_if<slice::Const>(&high.data);
+        c && c->value == 0)
+      return resize(resize(slice::Expr{slice::SymReg{r}}, 64, 32), 32, 64);
+  }
   return slice::Expr{slice::SymReg{r}};
 }
 

@@ -28,6 +28,9 @@ class Graph;
 /// out of it) is found. Only constant results are merged: a SymReg or a load
 /// stands for a value at the point the walk stopped, which differs between
 /// paths.
+/// If the full value disagrees but every path proves that a 64-bit register's
+/// upper 32 bits are zero, that fact is retained as ZEXT(TRUNC(SymReg, 32)).
+/// The low bits remain an unknown value at the join, not a path's expression.
 ///
 /// Registers alias by byte, as in the IGNIL register space: the definition of
 /// RAX is the latest write to RAX, EAX, AX, AL or AH. A 32-bit write zeroes
@@ -58,6 +61,9 @@ class BackwardSlicer {
     // register identity as well as the join: COPY from another register must
     // never be mistaken for an unchanged path around this register's loop.
     std::unordered_map<int, JoinKey> loopMarkers;
+    // A secondary query for known upper bits must not recursively launch
+    // more secondary queries while evaluating a wide source of a write.
+    bool probingUpper = false;
     // Predecessor blocks still allowed to be entered by this slice() call:
     // following every path through joins is exponential in the worst case.
     int budget = 4096;

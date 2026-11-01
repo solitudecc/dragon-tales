@@ -19,7 +19,8 @@ The repository owner communicates in Chinese; reply to them in Chinese.
   confidently wrong value is worse than an honest UNDEF. The same applies to
   analyses: the switch detector rejects a bound it cannot prove (a masked index
   is *not* a bound — see `lib/analysis/SwitchDetector.cpp`), the slicer only
-  merges join paths that agree on a constant.
+  merges join paths that agree on a constant. Proven zero upper bits may be
+  retained while the low bits stay unknown.
 - **Every fix gets a regression test, and the test must fail on the old code.**
   Check that before committing (apply only the test change to `origin/main`,
   build, run, see it fail; then apply the fix). If the test needs a new API and
@@ -120,6 +121,10 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `fstarts.py BIN` | Classifies function starts: symbol / inside a symbol body (false) / other. |
 | `unlifted.py BIN [N]` | Census of unlifted instruction *forms* (mnemonic + operand shape). |
 
+The `[join-width]` C++ tests cover partial join knowledge on x86-64/AArch64,
+guarded dispatch and 240 Unicorn loop executions. A narrow guard alone never
+proves that a wider index's upper bits are zero.
+
 ## 5. Current state
 
 Work done in this fork (see `git log` for full messages): ARM32 branch
@@ -142,15 +147,18 @@ Numbers on the Lua builds (linear sweep unless noted):
 | objdump agreement | 100% | 100% | 100% |
 | functions without blocks | 0 | 2 | 0 |
 | unlifted instructions | 3.35% (x87 only) | 0.73% | 1.97% (FP only) |
-| jump tables verified / wrong | 43 of 50 / 0 (4 are guardless Lua dispatch, 3 unverifiable) | 32 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
+| jump tables verified / wrong | 43 of 50 / 0 (4 are guardless Lua dispatch, 3 unverifiable) | 33 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
 | LLVM lift | all functions | all | all |
 
 The x86-64 relative-table script now follows the base register used by
 `movsxd`, including a hoisted LEA outside its old 12-instruction window. This
-finds 37 tables: 32 verified, 4 without a script-visible bound and 1 unresolved
-(`str_pack`, jump at `0x140021b50`). The original three linear-sweep failures
-are resolved. Explicit entry hints seed speculative reachability (plus direct
-callees); heuristic function starts after padded RETs can actually be cases
+finds 37 tables: 33 verified, 4 without a script-visible bound and 0 unresolved.
+`str_pack` (jump at `0x140021b50`) needed the slicer to preserve the zero upper
+half of RBX across joins after an EBX write: its guard compares EBX while its
+table uses RBX. The slicer queries the upper bytes independently and retains
+`ZEXT(TRUNC(SymReg, 32))` when they are proven zero; low values from different
+paths are never equated. Explicit entry hints seed speculative reachability
+(plus direct callees); heuristic function starts after padded RETs can actually be cases
 and must not inject independent unknown register states into that proof.
 The Lua x86-64 linear analysis currently takes about 13 s versus 6 s before
 speculation on this VM; repeated slicing/revalidation is a profiling target.
@@ -168,8 +176,7 @@ speculation on this VM; repeated slicing/revalidation is a profiling target.
    `clz`, `rbit`. Validate each with the difftests and add templates.
 3. Expose `AnalysisHints` and `callingConvention` through the C shim and
    Python (today only C++ and `disassembleImage` use them).
-4. Investigate the newly counted x86-64 `str_pack` table and extend the
-   speculative resolver to ARM when useful. Failed hypotheses remain
+4. Extend the speculative resolver to ARM when useful. Failed hypotheses remain
    unresolved; never publish partial target sets or skip the final recheck.
 5. Design questions, not bugs (ask the owner before changing): CALL/RET
    abstraction; the loader marks defined `.symtab` globals of an executable

@@ -764,3 +764,59 @@ TEST_CASE("SwitchDetector - explicit entries exclude speculative function roots"
   CHECK(g.get(0x1033)->branches() ==
         std::set<std::uint64_t>{0x1210, 0x1110, 0x1120});
 }
+
+TEST_CASE("SwitchDetector - 32-bit index writes remain bounded across joins",
+          "[switch][e2e][join-width]") {
+  // Like str_pack: EBX is written before a branching loop, then a 32-bit
+  // guard protects a table indexed by RBX. The join must keep RBX[63:32]=0
+  // while leaving its low bits unknown. A case that sets bit 32 invalidates
+  // that proof even though its low 32 bits still pass the guard.
+  for (auto strategy: {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                       dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    for (bool clobber: {false, true}) {
+      INFO("strategy " << static_cast<int>(strategy) << " clobber " << clobber);
+      std::vector<std::uint8_t> bytes(kTable - kBase + 3 * 4, 0xcc);
+      auto emit = [&](std::uint64_t at,
+                       std::initializer_list<std::uint8_t> code) {
+        std::copy(code.begin(), code.end(), bytes.begin() + (at - kBase));
+      };
+      emit(0x1000, {0x4c, 0x8d, 0x2d, 0, 0, 0, 0, // lea r13,table
+                    0x8b, 0x1e,                     // mov ebx,[rsi]
+                    0x85, 0xff, 0x74, 0x13,          // test edi,edi; je 1020
+                    0xe9, 0, 0, 0, 0});              // jmp 1040
+      putLE(bytes, 3, kTable - 0x1007, 4);
+      putLE(bytes, 0x100e - kBase, 0x1040 - 0x1012, 4);
+      emit(0x1020, {0xe9, 0, 0, 0, 0});
+      putLE(bytes, 0x1021 - kBase, 0x1040 - 0x1025, 4);
+      emit(0x1040, {0x83, 0xfb, 0x02,             // cmp ebx,2
+                    0x0f, 0x87, 0, 0, 0, 0,       // ja default
+                    0x49, 0x63, 0x44, 0x9d, 0x00, // movsxd rax,[r13+rbx*4]
+                    0x4c, 0x01, 0xe8, 0xff, 0xe0});
+      putLE(bytes, 0x1045 - kBase, kDefault - 0x1049, 4);
+      for (unsigned i = 0; i < 3; ++i) {
+        const auto at = kCase0 + 0x10 * i;
+        putLE(bytes, kTable - kBase + i * 4, at - kTable, 4);
+        if (clobber && i == 1) {
+          emit(at, {0x48, 0xbb, 0, 0, 0, 0, 1, 0, 0, 0, // mov rbx,1<<32
+                      0xe9, 0, 0, 0, 0});
+          putLE(bytes, at + 11 - kBase, 0x1040 - (at + 15), 4);
+        } else {
+          emit(at, {0xe9, 0, 0, 0, 0});
+          putLE(bytes, at + 1 - kBase, 0x1007 - (at + 5), 4);
+        }
+      }
+      bytes[kDefault - kBase] = 0xc3;
+      dragon::Configuration cfg;
+      cfg.disassemblyStrategy = strategy;
+      dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+      dragon::Graph g{dragon::Architecture::X86_64, cfg};
+      dis.disassemble(bytes, kBase, g);
+      REQUIRE(g.get(0x1051));
+      if (clobber)
+        CHECK(g.get(0x1051)->branches().empty());
+      else
+        CHECK(g.get(0x1051)->branches() ==
+              std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
+    }
+  }
+}

@@ -1008,7 +1008,8 @@ class BackwardSlicer:
     ----------
     max_blocks : int
         Maximum number of inter-block steps (default 5).
-        The slicer stops at join nodes regardless of this limit.
+        Joins preserve agreeing constants and proven upper zero bits;
+        differing values remain symbolic.
     """
 
     def __init__(self, max_blocks=5):

@@ -8,6 +8,10 @@
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
 
+#ifdef DRAGON_WITH_Z3
+#include <dragon/analysis/SliceExprZ3.hpp>
+#endif
+
 #include <memory>
 #include <optional>
 
@@ -447,6 +451,60 @@ TEST_CASE("BackwardSlicer - loop invariants survive nested joins",
       CHECK(*value == 0x9000);
     } else {
       CHECK_FALSE(value.has_value());
+    }
+  }
+}
+
+TEST_CASE("BackwardSlicer - joins retain proven upper zeroes of 32-bit writes",
+          "[slicer][ignil][join-width]") {
+  for (auto arch: {dragon::Architecture::X86_64, dragon::Architecture::ARM64}) {
+    const bool arm = arch == dragon::Architecture::ARM64;
+    const auto wide = arm ? dragon::arm::X0 : x86::RAX;
+    const auto narrow = arm ? dragon::arm::W0 : x86::EAX;
+    const auto src1 = arm ? dragon::arm::W1 : x86::ECX;
+    const auto src2 = arm ? dragon::arm::W2 : x86::EDX;
+    for (unsigned variant = 0; variant < 5; ++variant) {
+      INFO("arch " << static_cast<int>(arch) << " variant " << variant);
+      ig::Block p{0x7000}, a{0x7010}, b{0x7020}, j{0x7030};
+      p.append(cjmpOp(0x7010, 0x7020, 0x7000));
+      a.append(copyOp(narrow, src1, 0x7010));
+      a.append(jmpOp(0x7030, 0x7014));
+      if (variant == 0)
+        b.append(copyOp(narrow, src2, 0x7020));
+      else if (variant == 1)
+        b.append({ig::Opcode::UNDEF, ig::Value{narrow}, {}, 0x7020});
+      else if (variant == 2)
+        b.append({ig::Opcode::UNDEF, ig::Value{wide}, {}, 0x7020});
+      else if (variant == 3)
+        b.append(copyOp(ig::Reg{wide.offset, 16, "low16"},
+                        ig::Reg{src2.offset, 16, "src16"}, 0x7020));
+      else
+        b.append(copyOp(wide, ig::Const{0x100000000, 64}, 0x7020));
+      b.append(jmpOp(0x7030, 0x7024));
+      j.append(retOp(0x7030));
+      dragon::Graph g{arch, dragon::Configuration{}};
+      for (auto *blk: {&p, &a, &b, &j})
+        addValidBlock(g, std::move(*blk));
+      const auto result = dragon::BackwardSlicer{16}.slice(wide, 0x7030, g);
+      INFO(dragon::slice::toString(result));
+      CHECK_FALSE(evalConst(result).has_value()); // lower bits still unknown
+      if (variant < 2) {
+        const auto *zext = std::get_if<dragon::slice::UnaryOp>(&result.data);
+        CHECK((zext && zext->op == ig::Opcode::ZEXT));
+      }
+#ifdef DRAGON_WITH_Z3
+      z3::context ctx;
+      const auto value = dragon::slice::SliceExprZ3{ctx}.lower(result);
+      z3::solver solver{ctx};
+      solver.add(value.extract(63, 32) != ctx.bv_val(0, 32));
+      CHECK(solver.check() == (variant < 2 ? z3::unsat : z3::sat));
+      solver.reset();
+      solver.add(value.extract(31, 0) == ctx.bv_val(0, 32));
+      CHECK(solver.check() == z3::sat);
+      solver.reset();
+      solver.add(value.extract(31, 0) == ctx.bv_val(1, 32));
+      CHECK(solver.check() == z3::sat);
+#endif
     }
   }
 }

@@ -611,8 +611,10 @@ Available groups:
 ## Backward slicer
 
 `BackwardSlicer` propagates a value backward through an IGNIL CFG and returns
-a `SliceExpr` expression tree. It stops at join nodes (blocks with more than
-one predecessor) and at a configurable block depth.
+a `SliceExpr` expression tree within a configurable block depth and traversal
+budget. At joins, agreeing constants are merged. If full values disagree but
+all incoming paths prove a 64-bit register's upper 32 bits zero, the result
+retains that fact as `ZEXT(TRUNC(SymReg, 32))`; its low bits remain unknown.
 
 `graph` must be populated via `Disassembler::disassemble(bytes, baseAddress, graph)`
 so its IGNIL blocks exist. `blockAddr` must be the *start address of an IGNIL

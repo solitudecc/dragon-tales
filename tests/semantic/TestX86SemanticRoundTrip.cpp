@@ -2,9 +2,95 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#ifdef DRAGON_WITH_Z3
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/analysis/SliceExprZ3.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+#endif
+
 #include <vector>
 
 using namespace dragon::test;
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("Slicer - joined upper bits agree with Unicorn loop executions",
+          "[semantic][slicer][join-width]") {
+  // H -> A/B -> J -> H/exit. Only some variants clear the upper half on
+  // both arms. Hardware supplies every expected value, including cases where
+  // a narrow guard would accept low bits while the full index is too large.
+  for (unsigned variant = 0; variant < 6; ++variant) {
+    for (unsigned iterations: {1u, 2u, 3u, 5u}) {
+      INFO("variant " << variant << " iterations " << iterations);
+      std::vector<std::uint8_t> code(0x109, 0xcc);
+      auto emit = [&](std::size_t off,
+                       std::initializer_list<std::uint8_t> bytes) {
+        std::copy(bytes.begin(), bytes.end(), code.begin() + off);
+      };
+      auto branch = [&](std::size_t off, std::size_t to, bool cond = false) {
+        code[off] = cond ? 0x0f : 0xe9;
+        if (cond)
+          code[off + 1] = 0x85;
+        const auto disp = static_cast<std::uint32_t>(to - off - (cond ? 6 : 5));
+        for (unsigned i = 0; i < 4; ++i)
+          code[off + (cond ? 2 : 1) + i] = disp >> (i * 8);
+      };
+      emit(0, {0xb9, static_cast<std::uint8_t>(iterations), 0, 0, 0}); // mov ecx,N
+      branch(5, 0x40);
+      emit(0x40, {0x31, 0xcf, 0xf7, 0xc7, 1, 0, 0, 0}); // xor edi,ecx; test edi,1
+      branch(0x48, 0x80, true);
+      branch(0x4e, 0xc0);
+      emit(0x80, {0x89, 0xc2}); // mov edx,eax
+      branch(0x82, 0x100);
+      std::size_t end = 0xc0;
+      switch (variant) {
+        case 0: emit(end, {0x89, 0xda}); end += 2; break; // mov edx,ebx
+        case 1: emit(end, {0x66, 0x89, 0xda}); end += 3; break; // mov dx,bx
+        case 2: emit(end, {0x48, 0x89, 0xda}); end += 3; break; // mov rdx,rbx
+        case 3: // mov rdx,1<<32
+          emit(end, {0x48, 0xba, 0, 0, 0, 0, 1, 0, 0, 0}); end += 10; break;
+        case 4: // mov edx,ebx; mov dh,al
+          emit(end, {0x89, 0xda, 0x88, 0xc6}); end += 4; break;
+        case 5: // mov edx,ebx; shl rdx,32
+          emit(end, {0x89, 0xda, 0x48, 0xc1, 0xe2, 0x20}); end += 6; break;
+      }
+      branch(end, 0x100);
+      emit(0x100, {0xff, 0xc9}); // dec ecx
+      branch(0x102, 0x40, true);
+      emit(0x108, {0xc3});
+
+      dragon::Configuration cfg;
+      cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+      dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+      dragon::Graph graph{dragon::Architecture::X86_64, cfg};
+      dis.disassemble(code, kCodeBase, graph);
+      const auto sliced = dragon::BackwardSlicer{32}.slice(
+              dragon::x86::RDX, kCodeBase + 0x108, graph);
+      z3::context ctx;
+      const auto value = dragon::slice::SliceExprZ3{ctx}.lower(sliced);
+      if (variant == 0 || variant == 4) {
+        z3::solver proof{ctx};
+        proof.add(value.extract(63, 32) != ctx.bv_val(0, 32));
+        CHECK(proof.check() == z3::unsat);
+      }
+      for (std::uint64_t input: {0ULL, 1ULL, ~0ULL, 0x100000000ULL,
+                                  0x123456789abcdef0ULL}) {
+        for (unsigned arm: {0u, 1u}) {
+          auto regs = defaultInitialRegs();
+          setReg64(regs, x86off::RAX, input);
+          setReg64(regs, x86off::RBX, ~input);
+          setReg64(regs, x86off::RDX, 0xdeadbeef01234567);
+          setReg64(regs, x86off::RDI, arm);
+          const auto expected = getReg64(runUnicorn(code, regs, {}).regs,
+                                          x86off::RDX);
+          z3::solver check{ctx};
+          check.add(value == ctx.bv_val(expected, 64));
+          CHECK(check.check() == z3::sat);
+        }
+      }
+    }
+  }
+}
+#endif
 
 // Compares real (Unicorn) vs lifted (JIT) final state, ignoring the flags
 // X86IGNILLifter doesn't model (see maskUnmodeledFlags in the fixture).
