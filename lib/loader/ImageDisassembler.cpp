@@ -33,7 +33,26 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
                    });
 
   Disassembler dis(image.architecture(), config);
-  for (const Section *s : image.executableSections()) {
+  auto readMemory = [&image](std::uint64_t addr, std::span<std::uint8_t> out) {
+    auto data = image.readVirtual(addr, out.size());
+    if (!data)
+      return false;
+    std::copy(data->begin(), data->end(), out.begin());
+    return true;
+  };
+
+  // Analyse [start, end of s) with `entries` as its entry points.
+  auto analyse = [&](const Section &s, std::uint64_t start,
+                     std::vector<std::uint64_t> entries) {
+    Disassembler::AnalysisHints hints;
+    hints.entryPoints = std::move(entries);
+    hints.readMemory = readMemory;
+    const std::span<const std::uint8_t> bytes(s.bytes);
+    dis.disassemble(bytes.subspan(start - s.address), start, graph, hints);
+  };
+
+  const auto sections = image.executableSections();
+  for (const Section *s : sections) {
     std::uint64_t start = s->address;
     if (fromSegments) {
       std::uint64_t first = UINT64_MAX;
@@ -43,15 +62,41 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
       if (first != UINT64_MAX)
         start = first;
     }
-    const std::span<const std::uint8_t> bytes(s->bytes);
-    dis.disassemble(bytes.subspan(start - s->address), start, graph);
+    // The known code addresses go into the analysis itself: as function and
+    // block starts, and as the roots of a recursive traversal. They used to
+    // be added with Graph::addFunction() afterwards, which made no block (so
+    // functions reached only through pointers had none) and gave a
+    // recursive traversal nothing but the section start to begin from.
+    // readMemory lets jump-table resolution read a table in another section.
+    std::vector<std::uint64_t> entries;
+    for (std::uint64_t a : seeds)
+      if (a >= start && a < s->address + s->bytes.size())
+        entries.push_back(a);
+    if (entries.empty())
+      entries.push_back(start);
+    analyse(*s, start, std::move(entries));
   }
 
-  // Seed function starts from the image's own metadata. addFunction only marks
-  // an address as a valid function entry, so it is safe to call after the
-  // sections have been disassembled.
-  for (std::uint64_t a : seeds)
-    graph.addFunction(a);
+  // Each section is analysed on its own, so a call into another section
+  // (`bl` from .text to a .plt stub) registers a function start there that
+  // nothing decoded - under recursive traversal, the stub stays empty. Feed
+  // such starts back as entry points of their section until none is left.
+  for (int round = 0; round < 8; ++round) {
+    bool any = false;
+    for (const Section *s : sections) {
+      std::vector<std::uint64_t> missing;
+      for (std::uint64_t a : graph.validFunctionAddresses())
+        if (s->contains(a) && a - s->address < s->bytes.size() &&
+            !graph.get(a))
+          missing.push_back(a);
+      if (missing.empty())
+        continue;
+      any = true;
+      analyse(*s, s->address, std::move(missing));
+    }
+    if (!any)
+      break;
+  }
 
   return graph;
 }

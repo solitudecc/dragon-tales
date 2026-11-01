@@ -154,6 +154,8 @@ class LLVMLifter {
                                     llvm::Value *regsPtr);
 
   Architecture arch_;
+  // The graph being lifted by lift(), null otherwise (liftBlock).
+  const Graph *graph_ = nullptr;
   std::unique_ptr<llvm::LLVMContext> ctx_;
   std::unique_ptr<llvm::Module> module_;
 };

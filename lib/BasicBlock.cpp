@@ -99,6 +99,12 @@ computeSuccessors(const dragon::Instruction *term) {
     succs.insert(term->address() + term->size());
     return succs;
   }
+  // An unconditional jump goes only to its targets - none yet for an
+  // unresolved indirect `jmp rax` / `br x0`. It used to fall through to the
+  // next instruction like an ordinary one, inventing an edge into whatever
+  // follows (padding, the next function).
+  if (term->isJump())
+    return term->branches();
   if (!term->branches().empty())
     return term->branches();
   return {term->address() + term->size()};

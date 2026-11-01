@@ -81,11 +81,24 @@ dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
     return {};
   }
   // disassemble is just a wrapper over different disassembly algorithms
+  const std::uint64_t root = baseAddress;
+  return disassemble(bytes, baseAddress, std::span<const std::uint64_t>{&root, 1});
+}
+
+std::vector<dragon::Instruction>
+dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
+                                  std::uint64_t baseAddress,
+                                  std::span<const std::uint64_t> roots) const {
+  if (!isValid()) {
+    impl_->logger.log("disassemble: called on invalid disassembler");
+    return {};
+  }
+
   switch (configuration_.disassemblyStrategy) {
     case DisassemblyStrategy::LINEAR_SWEEP:
       return linearSweep(bytes, baseAddress);
     case DisassemblyStrategy::RECURSIVE_TRAVERSAL:
-      return recursiveTraversal(bytes, baseAddress);
+      return recursiveTraversal(bytes, baseAddress, roots);
   }
   return {};
 }
@@ -93,6 +106,12 @@ dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
 void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
                                        std::uint64_t baseAddress,
                                        Graph &graph) const {
+  disassemble(bytes, baseAddress, graph, AnalysisHints{});
+}
+
+void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
+                                       std::uint64_t baseAddress, Graph &graph,
+                                       const AnalysisHints &hints) const {
   if (!isValid()) {
     impl_->logger.log("disassemble: called on invalid disassembler");
     return;
@@ -104,7 +123,7 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
       x86::X86Analysis x86Analysis{architecture_, *this, configuration_,
                                    *impl_->target.instrInfo,
                                    *impl_->target.regInfo};
-      x86Analysis.analyze(bytes, baseAddress, graph);
+      x86Analysis.analyze(bytes, baseAddress, graph, hints);
       break;
     }
     case Architecture::ARM32:
@@ -112,7 +131,7 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
       arm::ARMAnalysis armAnalysis{architecture_, *this, configuration_,
                                    *impl_->target.instrInfo,
                                    *impl_->target.regInfo};
-      armAnalysis.analyze(bytes, baseAddress, graph);
+      armAnalysis.analyze(bytes, baseAddress, graph, hints);
       break;
     }
     case Architecture::RISCV32:
@@ -352,15 +371,20 @@ dragon::Disassembler::linearSweep(std::span<const std::uint8_t> bytes,
 }
 
 std::vector<dragon::Instruction>
-dragon::Disassembler::recursiveTraversal(std::span<const std::uint8_t> bytes,
-                                         std::uint64_t baseAddress) const {
+dragon::Disassembler::recursiveTraversal(
+        std::span<const std::uint8_t> bytes, std::uint64_t baseAddress,
+        std::span<const std::uint64_t> roots) const {
   impl_->logger.log("RecursiveTraversal: {} bytes at 0x{:x}", bytes.size(),
                     baseAddress);
   std::vector<Instruction> instructions;
   std::unordered_set<std::uint64_t> visited;
   std::stack<std::uint64_t> workList;
 
-  workList.push(baseAddress);
+  for (std::uint64_t r: roots)
+    if (r >= baseAddress && r - baseAddress < bytes.size())
+      workList.push(r);
+  if (workList.empty())
+    workList.push(baseAddress);
 
   while (!workList.empty()) {
     const std::uint64_t address = workList.top();
@@ -387,13 +411,22 @@ dragon::Disassembler::recursiveTraversal(std::span<const std::uint8_t> bytes,
 
       visited.insert(instrAddress);
 
-      // Push all known branch targets onto the worklist
+      // Follow every known target: branches, and the callees of direct
+      // calls - a called function is code too, and without this the
+      // traversal never reached any of them, leaving every call target a
+      // function start with no instructions.
       for (std::uint64_t target: instr.branches())
         workList.push(target);
+      for (std::uint64_t callee: instr.callees())
+        workList.push(callee);
 
+      // Control does not fall through an unconditional jump (direct or
+      // indirect), a return or a trap. Decoding on after a direct `jmp X`
+      // used to read whatever follows it - padding, data, the next
+      // function - as reachable code.
       const bool isTerminator =
-              instr.isReturn() ||
-              (instr.isJump() && instr.branches().empty()); // indirect jump
+              instr.isReturn() || instr.isTrap() ||
+              (instr.isJump() && !instr.isConditional());
 
       instructions.push_back(std::move(instr));
       if (isTerminator)

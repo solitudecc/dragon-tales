@@ -71,6 +71,12 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   auto *memPtr  = llfn->getArg(0);
   auto *regsPtr = llfn->getArg(1);
 
+  graph_ = &graph; // for resolved indirect-jump targets; see JMP
+  struct ResetGraph {
+    const Graph *&g;
+    ~ResetGraph() { g = nullptr; }
+  } resetGraph{graph_};
+
   auto bbMap = buildBlockMap(llfn, &fn, graph);
 
   if (!bbMap)
@@ -455,6 +461,26 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
         auto it = bbMap.find(ci->getZExtValue());
         if (it != bbMap.end()) {
           builder.CreateBr(it->second);
+          break;
+        }
+      }
+      // An indirect jump whose targets the analysis resolved (a jump table)
+      // carries them as branches of its instruction: dispatch on the target
+      // value. Anything else is unreachable here.
+      const Instruction *insn = graph_ ? graph_->get(op.address) : nullptr;
+      auto *intTy = llvm::dyn_cast<llvm::IntegerType>(target->getType());
+      if (insn && intTy && insn->isJump() && !insn->branches().empty()) {
+        std::vector<std::pair<std::uint64_t, llvm::BasicBlock *>> cases;
+        for (std::uint64_t t: insn->branches())
+          if (auto it = bbMap.find(t); it != bbMap.end())
+            cases.emplace_back(t, it->second);
+        if (!cases.empty()) {
+          auto *fn = builder.GetInsertBlock()->getParent();
+          auto *other = llvm::BasicBlock::Create(*ctx_, "jmp.unresolved", fn);
+          llvm::IRBuilder<>(other).CreateUnreachable();
+          auto *sw = builder.CreateSwitch(target, other, cases.size());
+          for (const auto &[t, bb]: cases)
+            sw->addCase(llvm::ConstantInt::get(intTy, t), bb);
           break;
         }
       }

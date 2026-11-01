@@ -510,3 +510,70 @@ TEST_CASE("X86Analysis x86_64 - indirect-jump target splits a lifted block "
   REQUIRE(retBlock != nullptr);
   CHECK(retBlock->ops().back().opcode == dragon::ignil::Opcode::RET);
 }
+
+// ---------------------------------------------------------------------------
+// Recursive traversal, entry points, and the edges of an unconditional jump.
+// ---------------------------------------------------------------------------
+
+namespace {
+dragon::Graph analyse(const std::vector<std::uint8_t> &bytes,
+                      dragon::DisassemblyStrategy strategy,
+                      std::vector<std::uint64_t> entries = {}) {
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = strategy;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dragon::Disassembler::AnalysisHints hints;
+  hints.entryPoints = std::move(entries);
+  dis.disassemble(bytes, 0x1000, g, hints);
+  return g;
+}
+} // namespace
+
+TEST_CASE("X86Analysis - recursive traversal follows call targets",
+          "[x86][analysis][recursive]") {
+  // 0x1000 call 0x1006 ; 0x1005 ret ; 0x1006 mov eax, 1 ; 0x100b ret
+  // The callee used to be registered as a function start but never decoded.
+  const std::vector<std::uint8_t> bytes = {0xe8, 0x01, 0x00, 0x00, 0x00, 0xc3,
+                                           0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3};
+  auto g = analyse(bytes, dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL);
+  REQUIRE(g.get(0x1006));
+  REQUIRE(hasFunction(g.functions(), 0x1006));
+}
+
+TEST_CASE("X86Analysis - recursive traversal stops at an unconditional jmp",
+          "[x86][analysis][recursive]") {
+  // 0x1000 jmp 0x1007 ; 0x1002 <5 bytes that decode as mov eax, 0> ;
+  // 0x1007 ret. Nothing reaches 0x1002; it used to be decoded as code.
+  const std::vector<std::uint8_t> bytes = {0xeb, 0x05, 0xb8, 0x00, 0x00,
+                                           0x00, 0x00, 0xc3};
+  auto g = analyse(bytes, dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL);
+  CHECK(g.get(0x1007));
+  CHECK_FALSE(g.get(0x1002));
+}
+
+TEST_CASE("X86Analysis - an unresolved indirect jmp has no successors",
+          "[x86][analysis]") {
+  // jmp rax ; ret - control never falls through `jmp rax`.
+  const std::vector<std::uint8_t> bytes = {0xff, 0xe0, 0xc3};
+  auto g = analyse(bytes, dragon::DisassemblyStrategy::LINEAR_SWEEP);
+  const dragon::BasicBlock bb{&g, 0x1000};
+  REQUIRE(bb.isValid());
+  CHECK(bb.successors().empty()); // was {0x1002}
+}
+
+TEST_CASE("X86Analysis - entry points become functions with blocks",
+          "[x86][analysis]") {
+  // 0x1000 ret ; 0x1001 mov eax, 1 ; 0x1006 ret - 0x1001 is reached by
+  // nothing in the code (a function called through a pointer).
+  const std::vector<std::uint8_t> bytes = {0xc3, 0xb8, 0x01, 0x00,
+                                           0x00, 0x00, 0xc3};
+  for (auto strategy: {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                       dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    auto g = analyse(bytes, strategy, {0x1000, 0x1001});
+    REQUIRE(hasFunction(g.functions(), 0x1000));
+    REQUIRE(hasFunction(g.functions(), 0x1001));
+    CHECK(g.getIGNILBlock(0x1001));
+  }
+}

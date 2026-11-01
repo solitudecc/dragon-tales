@@ -36,13 +36,24 @@ dragon::arm::ARMAnalysis::ARMAnalysis(Architecture architecture,
 dragon::arm::ARMAnalysis::~ARMAnalysis() = default;
 
 bool dragon::arm::ARMAnalysis::analyze(std::span<const std::uint8_t> bytes,
-                                       std::uint64_t baseAddr,
-                                       Graph &graph) const {
+                                       std::uint64_t baseAddr, Graph &graph,
+                                       const Disassembler::AnalysisHints &hints)
+        const {
   std::unordered_set<std::uint64_t> blockStarts;
   std::unordered_set<std::uint64_t> fnStarts;
 
+  // Entry points inside these bytes: the traversal roots, and function
+  // starts on their own. Without any, the start of `bytes` is the entry.
+  std::vector<std::uint64_t> roots;
+  for (std::uint64_t a: hints.entryPoints)
+    if (a >= baseAddr && a - baseAddr < bytes.size())
+      roots.push_back(a);
+  const bool explicitEntries = !hints.entryPoints.empty();
+  if (!explicitEntries)
+    roots.push_back(baseAddr);
+
   std::vector<Instruction> instructions =
-          disassembler_.disassemble(bytes, baseAddr);
+          disassembler_.disassemble(bytes, baseAddr, roots);
 
   // The caller explicitly asked us to start analysis here - trust that as a
   // function entry independent of prologue matching, same reasoning and
@@ -50,8 +61,22 @@ bool dragon::arm::ARMAnalysis::analyze(std::span<const std::uint8_t> bytes,
   // frame-pointer-omitting leaf functions unrecognized in
   // ToDo/LifterGaps.md #3: no `stp x29,x30`/`mov x29,sp` to match, and
   // until now no other signal claimed the entry address either.
-  if (!instructions.empty())
-    fnStarts.insert(baseAddr);
+  //
+  // Entry points supplied by the caller (an image's entry point and function
+  // symbols) are trusted the same way. They used to be registered with
+  // Graph::addFunction() only after analysis, never as block starts, so every
+  // function reached only through a pointer - most of a library's API - came
+  // out as a function with no blocks.
+  if (!instructions.empty()) {
+    if (explicitEntries) {
+      for (std::uint64_t a: roots) {
+        fnStarts.insert(a);
+        blockStarts.insert(a);
+      }
+    } else {
+      fnStarts.insert(baseAddr);
+    }
+  }
 
   // Discover block starts, Function starts, and end of functions
   discoverBlockStarts(instructions, blockStarts);
@@ -63,20 +88,18 @@ bool dragon::arm::ARMAnalysis::analyze(std::span<const std::uint8_t> bytes,
     graph.addInstruction(std::move(instruction));
   }
 
-  // Indirect-jump resolution via backward slicing and Z3 if available
-  // it requires a control-flow-accurate block set. Linear sweep decodes the
-  // whole section sequentially, so resolved targets routinely land
-  // mid-instructions or inside data, corrupting the existing block layout.
-  const bool canResolve = configuration_.disassemblyStrategy !=
-                          DisassemblyStrategy::LINEAR_SWEEP;
+  // Indirect-jump resolution. Under linear sweep only recognised jump tables
+  // whose targets are instructions the sweep already decoded are used (see
+  // resolveIndirectJumps): a free-form slice or Z3 guess can land
+  // mid-instruction or inside data the sweep decoded as code.
 
   bool changed = true;
   while (changed) {
     changed = false;
     commitPending(graph, blockStarts, fnStarts);
     liftPendingBlocks(graph);
-    if (canResolve &&
-        resolveIndirectJumps(graph, bytes, baseAddr, blockStarts, fnStarts)) {
+    if (resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts,
+                             fnStarts)) {
       changed = true;
     }
   }
@@ -315,9 +338,11 @@ bool dragon::arm::ARMAnalysis::integrateNewBlock(
 
 bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
         Graph &graph, std::span<const std::uint8_t> bytes,
-        std::uint64_t baseAddr, std::unordered_set<std::uint64_t> &blockStarts,
+        std::uint64_t baseAddr, const Disassembler::AnalysisHints &hints,
+        std::unordered_set<std::uint64_t> &blockStarts,
         std::unordered_set<std::uint64_t> &fnStarts) const {
-
+  const bool linear = configuration_.disassemblyStrategy ==
+                      DisassemblyStrategy::LINEAR_SWEEP;
   bool changed = false;
 
   for (const auto &block: graph.blocks()) {
@@ -339,8 +364,10 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
     // A memory-indirect jump's target is a value loaded from memory the
     // slicer cannot read, so only a recognised jump table resolves it -
     // enumerating the free load (Z3 fallback) would yield arbitrary targets,
-    // e.g. for every `jmp [import_slot]` thunk.
-    const bool viaMemory = std::holds_alternative<ignil::Temp>(last.srcs[0]);
+    // e.g. for every `jmp [import_slot]` thunk. Linear sweep takes tables
+    // only, for the reason given in analyze().
+    const bool tablesOnly =
+            linear || std::holds_alternative<ignil::Temp>(last.srcs[0]);
 
     std::vector<std::uint64_t> targets;
     if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
@@ -350,26 +377,48 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
                     block.startAddress(), sw->tableBase, sw->numCases,
                     sw->entrySize);
         targets = slice::readTableTargets(*sw, bytes, baseAddr);
+        // The table usually lives outside the code bytes (.rodata/.rdata).
+        if (targets.empty() && hints.readMemory) {
+          std::vector<std::uint8_t> table(std::size_t{sw->numCases} *
+                                          sw->entrySize);
+          if (hints.readMemory(sw->tableBase, table))
+            targets = slice::readTableTargets(*sw, table, sw->tableBase);
+        }
       } else {
         logger_.log(
                 "Switch at 0x{:x}: table=0x{:x} (bounds unknown, falling back)",
                 block.startAddress(), sw->tableBase);
-        if (!viaMemory)
-        targets = collectTargets(result, block.startAddress());
+        if (!tablesOnly)
+          targets = collectTargets(result, block.startAddress());
       }
-    } else {
-      if (!viaMemory)
-        targets = collectTargets(result, block.startAddress());
+    } else if (!tablesOnly) {
+      targets = collectTargets(result, block.startAddress());
     }
 
+    Instruction *jump = graph.get(block.terminatorAddress());
     for (std::uint64_t target: targets) {
       if (target < baseAddr || target >= baseAddr + bytes.size()) {
         logger_.log("Resolved target 0x{:x} is out of range, skipping", target);
         continue;
       }
+      if (linear && !graph.get(target)) {
+        logger_.log("Resolved target 0x{:x} is not on a decoded instruction, "
+                    "skipping",
+                    target);
+        continue;
+      }
 
       logger_.log("Resolved indirect jump @ 0x{:x} -> 0x{:x}",
                   block.startAddress(), target);
+
+      // Record the target as a CFG edge of the jump, so BasicBlock
+      // successors, Function membership and the LLVM lifter see it - the
+      // target used to become a block of its own, reachable from nothing.
+      if (jump && !jump->branches().contains(target)) {
+        jump->addBranch(target);
+        jump->setEdges(jump->branches().size());
+        changed = true;
+      }
 
       if (blockStarts.insert(target).second)
         changed = true;

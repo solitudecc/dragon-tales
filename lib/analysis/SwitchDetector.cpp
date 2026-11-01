@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <type_traits>
 
 namespace dragon::slice {
 
@@ -26,12 +27,45 @@ static std::optional<std::uint64_t> asConst(const Expr &e) {
   return std::nullopt;
 }
 
+// Bit width of a slice expression's value.
+static unsigned exprWidth(const Expr &e) {
+  return e.visit([](const auto &n) -> unsigned {
+    using T = std::decay_t<decltype(n)>;
+    if constexpr (std::is_same_v<T, Const>)
+      return n.width;
+    else if constexpr (std::is_same_v<T, SymReg>)
+      return n.reg.width;
+    else if constexpr (std::is_same_v<T, Load>)
+      return n.width;
+    else if constexpr (std::is_same_v<T, Undef>)
+      return n.width;
+    else if constexpr (std::is_same_v<T, UnaryOp>)
+      return n.resultWidth ? n.resultWidth
+                           : (n.operand ? exprWidth(*n.operand) : 64);
+    else { // BinOp: comparisons give 1 bit, the rest the wider operand
+      switch (n.op) {
+        case Opc::EQ: case Opc::NEQ: case Opc::ULT: case Opc::ULE:
+        case Opc::UGT: case Opc::UGE: case Opc::SLT: case Opc::SLE:
+        case Opc::SGT: case Opc::SGE:
+          return 1;
+        default:
+          return std::max(n.left ? exprWidth(*n.left) : 0u,
+                          n.right ? exprWidth(*n.right) : 0u);
+      }
+    }
+  });
+}
+
 // Peel width changes (ZEXT/SEXT/TRUNC) off an index: `mov edi, edi` before
-// the dispatch makes the index ZEXT(EDI), `movsxd` makes it SEXT(EDI).
-static const Expr &stripResize(const Expr &e) {
+// the dispatch makes the index ZEXT(EDI), `movsxd` makes it SEXT(EDI), and
+// `cmp al, N; ja; movzx eax, al` makes it ZEXT(TRUNC(x, 8)). `bits` is
+// narrowed to the index's real width - 8 in the last case: the table is
+// indexed by an 8-bit value, whatever x is.
+static const Expr &stripResize(const Expr &e, unsigned &bits) {
+  bits = std::min(bits, exprWidth(e));
   if (const auto *u = std::get_if<UnaryOp>(&e.data))
     if (u->op == Opc::ZEXT || u->op == Opc::SEXT || u->op == Opc::TRUNC)
-      return stripResize(*u->operand);
+      return stripResize(*u->operand, bits);
   return e;
 }
 
@@ -118,9 +152,7 @@ class GuardEvaluator {
     }
     if (toString(e) != indexText_)
       return std::nullopt;
-    unsigned w = 64;
-    if (const auto *l = std::get_if<Load>(&e.data))
-      w = l->width;
+    const unsigned w = exprWidth(e);
     return EvalValue{idx_ & lowMask(w), w};
   }
 
@@ -206,8 +238,8 @@ constexpr std::uint32_t kMaxCases = 4096;
 // into `dispatch`, provided every larger index tried leaves it. 0 if the
 // guard is not such a bound.
 static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
-                                    std::uint64_t dispatch,
-                                    const Expr &index) {
+                                    std::uint64_t dispatch, const Expr &index,
+                                    unsigned indexBits) {
   if (cjmp.srcs.size() < 3)
     return 0;
   const auto *t = std::get_if<ignil::Const>(&cjmp.srcs[1]);
@@ -224,8 +256,13 @@ static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
     return ((v->v & 1) != 0) == dispatchWhenTrue;
   };
 
+  // Only values the index can take are tried: an index that went through
+  // an 8-bit register has 256 possible values, and probing it with
+  // 0x80000000 would wrap to 0 and look like a hole in the bound.
+  const std::uint64_t domain = lowMask(std::min(indexBits, 63u)) + 1;
+  const std::uint64_t limit = std::min<std::uint64_t>(kMaxCases, domain);
   std::uint32_t n = 0;
-  for (; n < kMaxCases; ++n) {
+  for (; n < limit; ++n) {
     auto in = inBounds(n);
     if (!in)
       return 0;
@@ -235,11 +272,15 @@ static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
   if (n == 0 || n == kMaxCases)
     return 0;
   // A real bound keeps every larger index out, including the ones a signed
-  // compare would let through.
-  const std::uint64_t probes[] = {n + 1ull,   n + 2ull,    n + 15ull,
-                                  0x7fffffff, 0x80000000,  0xffffffff,
-                                  ~0ull >> 1, ~0ull};
-  for (std::uint64_t p: probes) {
+  // compare would let through (the top half of the index's range).
+  const std::uint64_t m = lowMask(indexBits);
+  const std::uint64_t probes[] = {n + 1ull,      n + 2ull,         n + 15ull,
+                                  m >> 1,        (m >> 1) + 1,     m,
+                                  0x7fffffff,    0x80000000,       ~0ull};
+  for (std::uint64_t raw: probes) {
+    const std::uint64_t p = raw & m;
+    if (p < n)
+      continue; // wrapped into the accepted range: not a value to probe
     auto in = inBounds(p);
     if (!in || *in)
       return 0;
@@ -313,20 +354,29 @@ std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
   if (scale != 4 && scale != 8)
     return std::nullopt;
 
-  const Expr &core = stripResize(*index);
+  unsigned indexBits = 64;
+  const Expr &core = stripResize(*index, indexBits);
   SwitchCandidate sw{tableBase, static_cast<std::uint32_t>(scale), 0,
                      ignil::Reg{0, 0, ""}};
   if (const auto *r = std::get_if<SymReg>(&core.data))
     sw.indexReg = r->reg;
 
   // Phase 2: the case count, from the bounds check that guards the block.
+  // The guard block is the dispatch block's predecessor, so its condition is
+  // sliced with one block less than the jump target was (callers use 5, as
+  // the disassembler does): the index then reads the same in both slices.
   if (const ignil::Block *predBlock = findCJMPPredecessor(blockAddr, graph)) {
     const ignil::Op &cjmp = predBlock->ops().back();
-    BackwardSlicer slicer{3};
+    BackwardSlicer slicer{4};
     Expr condExpr =
             slicer.slice(cjmp.srcs[0], predBlock->startAddress(), graph);
-    sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core);
+    sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core, indexBits);
   }
+
+  // Without a guard there is no bound. A masked index (`and eax, 0x7f`) is
+  // not one either: Lua's opcode dispatch masks to 128 values but its table
+  // has 83 entries - the compiler drops the guard because the default case
+  // is unreachable, and the bytes after the table are other data.
 
   return sw;
 }

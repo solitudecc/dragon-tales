@@ -7,6 +7,7 @@
 
 #include <dragon/Architecture.hpp>
 #include <dragon/Configuration.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include "utils/Logger.hpp"
 
@@ -42,7 +43,8 @@ class ARMAnalysis {
   /// @param baseAddr base address used to decode the instructions.
   /// @param graph graph where data will be populated.
   bool analyze(std::span<const std::uint8_t> bytes, std::uint64_t baseAddr,
-               Graph &graph) const;
+               Graph &graph,
+               const Disassembler::AnalysisHints &hints) const;
 
   private:
   /// We apply a simple analysis to retrieve possible block starts,
@@ -97,6 +99,7 @@ class ARMAnalysis {
   /// Returns true if at least one new block start was discovered.
   bool resolveIndirectJumps(Graph &graph, std::span<const std::uint8_t> bytes,
                             std::uint64_t baseAddr,
+                            const Disassembler::AnalysisHints &hints,
                             std::unordered_set<std::uint64_t> &blockStarts,
                             std::unordered_set<std::uint64_t> &fnStarts) const;
 

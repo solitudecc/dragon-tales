@@ -155,6 +155,11 @@ dragon::Disassembler dis(dragon::Architecture::X86_64, config);
 auto instrs = dis.disassemble(bytes, 0x1000);
 ```
 
+The traversal follows branch targets and the callees of direct calls, and
+stops after an unconditional jump, a return or a trap. To start it from more
+than one address, pass them as roots:
+`dis.disassemble(bytes, 0x1000, std::span<const uint64_t>(roots))`.
+
 ---
 
 ## Graph, BasicBlock and Function
@@ -326,8 +331,28 @@ exports.
 `disassembleImage` is the payoff: a file on disk to a populated `Graph` in one
 call, with no manual architecture or base-address bookkeeping. Every executable
 section is disassembled at its own virtual address, so cross-section calls and
-jumps resolve; the entry point and every function-typed symbol are registered
-as function starts.
+jumps resolve. The entry point and every function-typed symbol are passed to
+the analysis as entry points (`Disassembler::AnalysisHints`): each is a
+function and block start, and a root of a recursive traversal. A call into
+another section (a `.plt` stub) is analysed as an entry point of that
+section, and a jump table in a data section is read from the image.
+
+The same hints are available on raw bytes:
+
+```cpp
+dragon::Disassembler::AnalysisHints hints;
+hints.entryPoints = {0x401000, 0x401230};          // known code addresses
+hints.readMemory = [&](uint64_t addr, std::span<uint8_t> out) {
+    return readFromMyImage(addr, out);             // false if unmapped
+};
+dis.disassemble(textBytes, 0x401000, graph, hints);
+```
+
+Resolved indirect jumps are CFG edges: the targets of a recognised jump
+table become branches of the jump instruction, so they are the jump block's
+successors, members of its function, and an LLVM `switch` in lifted IR. An
+unresolved indirect jump has no successors. Under `LINEAR_SWEEP` only
+recognised tables whose targets are already-decoded instructions are used.
 
 ```cpp
 #include <dragon/loader/ImageDisassembler.hpp>

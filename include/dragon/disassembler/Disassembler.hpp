@@ -8,6 +8,9 @@
 #include <dragon/Architecture.hpp>
 #include <dragon/Configuration.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <functional>
+#include <span>
+#include <vector>
 #include <dragon/disassembler/Instruction.hpp>
 
 namespace dragon {
@@ -63,6 +66,36 @@ class Disassembler {
   void disassemble(std::span<const std::uint8_t> bytes,
                    std::uint64_t baseAddress, Graph &graph) const;
 
+  /// Extra knowledge about the code being analysed, for the Graph overload
+  /// below. Everything is optional.
+  struct AnalysisHints {
+    /// Addresses known to be code entry points - an image's entry point, its
+    /// function symbols and exports. Each becomes a function start and a
+    /// block start; with RECURSIVE_TRAVERSAL each is also a root the
+    /// traversal starts from. Addresses outside `bytes` are ignored. When
+    /// empty, `baseAddress` is the single entry point (the behaviour of the
+    /// plain overload).
+    std::vector<std::uint64_t> entryPoints;
+    /// Reads `out.size()` bytes at virtual address `address` from outside
+    /// `bytes` (e.g. a jump table in .rodata/.rdata while `bytes` is .text).
+    /// Returns false if the range is not mapped.
+    std::function<bool(std::uint64_t address, std::span<std::uint8_t> out)>
+            readMemory;
+  };
+
+  /// As above, with entry points and a memory reader for the analysis.
+  void disassemble(std::span<const std::uint8_t> bytes,
+                   std::uint64_t baseAddress, Graph &graph,
+                   const AnalysisHints &hints) const;
+
+  /// Decode `bytes` with the configured strategy. For RECURSIVE_TRAVERSAL
+  /// the traversal starts from every address in `roots` (those inside
+  /// `bytes`), or from `baseAddress` when none is; LINEAR_SWEEP ignores
+  /// `roots`.
+  [[nodiscard]] std::vector<Instruction>
+  disassemble(std::span<const std::uint8_t> bytes, std::uint64_t baseAddress,
+              std::span<const std::uint64_t> roots) const;
+
   /// Decode instructions starting at startAddress until a basic-block
   /// terminator (jump, return, or trap). Returns only the instructions
   /// belonging to that one block.
@@ -102,7 +135,8 @@ class Disassembler {
 
   [[nodiscard]] std::vector<Instruction>
   recursiveTraversal(std::span<const std::uint8_t> bytes,
-                     std::uint64_t baseAddress) const;
+                     std::uint64_t baseAddress,
+                     std::span<const std::uint64_t> roots) const;
 
   Architecture architecture_;
   Configuration configuration_;

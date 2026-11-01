@@ -8,6 +8,9 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/disassembler/Instruction.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
+#include <dragon/lifters/llvm/LLVMLifter.hpp>
+
+#include <llvm/IR/Verifier.h>
 
 #include <cstring>
 #include <set>
@@ -389,4 +392,90 @@ TEST_CASE("SwitchDetector - matches the x86 lifter's address shape",
   CHECK(sw->entrySize == 8);
   CHECK(sw->indexReg.offset == edi.offset);
   CHECK(sw->indexReg.width == 32);
+}
+
+// ---------------------------------------------------------------------------
+// A resolved table is part of the CFG.
+//
+// Resolution used to add the case blocks to the graph without any edge to
+// them: the jump block's only successor was the (made-up) fall-through, the
+// cases belonged to no function, and the LLVM lifter turned the dispatch into
+// `unreachable`. Linear sweep did not resolve tables at all, and a table
+// outside the analysed bytes (.rdata) could not be read.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// x86-64 non-PIC dispatch, 7 cases: the jump block is at 0x1009.
+std::vector<std::uint8_t> nonPicDispatch() {
+  std::vector<std::uint8_t> code = {0x83, 0xff, 0x06,       //
+                                    0x0f, 0x87, 0, 0, 0, 0, //
+                                    0x89, 0xff,             //
+                                    0xff, 0x24, 0xfd, 0, 0, 0, 0};
+  putLE(code, 5, kDefault - 0x1009, 4);
+  putLE(code, 14, kTable, 4);
+  return layout(code, 7, 8);
+}
+
+} // namespace
+
+TEST_CASE("SwitchDetector - resolved cases are CFG edges of the jump",
+          "[switch][e2e][cfg]") {
+  const auto bytes = nonPicDispatch();
+  std::set<std::uint64_t> cases;
+  for (unsigned i = 0; i < 7; ++i)
+    cases.insert(kCase0 + 0x10 * i);
+
+  for (auto strategy: {dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL,
+                       dragon::DisassemblyStrategy::LINEAR_SWEEP}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = strategy;
+    dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+    dragon::Graph g{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(bytes, kBase, g);
+
+    const dragon::BasicBlock jumpBlock{&g, 0x1009};
+    REQUIRE(jumpBlock.isValid());
+    CHECK(jumpBlock.successors() == cases);
+
+    const dragon::Function fn{&g, kBase};
+    REQUIRE(fn.isValid());
+    for (std::uint64_t c: cases) {
+      INFO("case 0x" << std::hex << c);
+      CHECK(fn.block(c) != nullptr);
+    }
+
+    // The LLVM lifter dispatches on the target instead of `unreachable`.
+    dragon::llvmlifter::LLVMLifter lifter{dragon::Architecture::X86_64};
+    REQUIRE(lifter.lift(fn, g));
+    REQUIRE_FALSE(llvm::verifyModule(lifter.module(), &llvm::errs()));
+    const std::string ir = lifter.ir();
+    CHECK(ir.find("switch i64") != std::string::npos);
+  }
+}
+
+TEST_CASE("SwitchDetector - a table outside the code bytes is read through "
+          "AnalysisHints::readMemory",
+          "[switch][e2e][cfg]") {
+  auto image = nonPicDispatch();
+  // Hand the analysis only the code, as loader::disassembleImage does with
+  // .text; the table stays reachable through readMemory.
+  const std::vector<std::uint8_t> code(image.begin(),
+                                       image.begin() + (kTable - kBase));
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g{dragon::Architecture::X86_64, cfg};
+  dragon::Disassembler::AnalysisHints hints;
+  hints.readMemory = [&image](std::uint64_t addr, std::span<std::uint8_t> out) {
+    if (addr < kBase || addr - kBase + out.size() > image.size())
+      return false;
+    std::memcpy(out.data(), image.data() + (addr - kBase), out.size());
+    return true;
+  };
+  dis.disassemble(code, kBase, g, hints);
+  const dragon::BasicBlock jumpBlock{&g, 0x1009};
+  REQUIRE(jumpBlock.isValid());
+  CHECK(jumpBlock.successors().size() == 7);
 }
