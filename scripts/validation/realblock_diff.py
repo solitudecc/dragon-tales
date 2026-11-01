@@ -10,6 +10,11 @@ elsewhere; the executor gets exactly the pages Unicorn touched.
 A difference is reported only when dragon gives a concrete value that differs
 from Unicorn's; an unknown (UNDEF, unlifted, NaN) is not a difference.
 
+Known, deliberate difference: after an x86 shift by more than one, OF is
+architecturally undefined; dragon models it like a 1-bit shift (see
+emitGatedShiftFlags - VMProtect folds RFLAGS into its state), Unicorn
+clears it.
+
 Usage: realblock_diff.py BINARY [BLOCKS] [TRIALS]
 """
 import os as _os, sys as _sys
@@ -186,7 +191,24 @@ for b in blocks:
             got = ex.concrete_register(reg)
             if got is not None and (got & 1) != ((fafter >> bit) & 1):
                 diffs.append(f'{f}: dragon={got} unicorn={(fafter >> bit) & 1}')
-        for a in sorted(written):
+        # A value at or above 2^47 in a register (e.g. a pointer assembled
+        # by an unaligned load) may have been used as an address, which
+        # Unicorn truncates: its writes are then not where the code wrote.
+        high = width == 64 and any(v >> 47 for v in list(init.values()) +
+                                   [uc.reg_read(ucr) for _, _, ucr in regs])
+        if high:
+            stats['memory not compared (high address)'] += 1
+        # Only writes inside the regions the harness laid out - the stack,
+        # the heap the register values point into, the image - are compared.
+        # A write through a pointer loaded from random memory may have gone
+        # through an intermediate address >= 2^47 that Unicorn truncated.
+        def known(a):
+            return (STACK <= a < STACK + PAGE or HEAP <= a < HEAP + 0x11000 or
+                    any(addr <= a < addr + size for addr, size, _ in sections))
+        skipped = [a for a in written if not known(a)]
+        if skipped and not high:
+            stats['writes outside known regions (not compared)'] += 1
+        for a in ([] if high else sorted(a for a in written if known(a))):
             got = ex.concrete_memory(a, 64)
             want = int.from_bytes(uc.mem_read(a, 8), 'little') if (a & ~(PAGE - 1)) in mapped and \
                 ((a + 7) & ~(PAGE - 1)) in mapped else None
