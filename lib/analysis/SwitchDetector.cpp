@@ -288,26 +288,24 @@ static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
   return n;
 }
 
-// Search the graph for the unique predecessor block of blockAddr whose IGNIL
-// representation ends with a CJMP.  Returns nullptr when no such predecessor
-// exists or when there are multiple candidates (ambiguous / join node).
+// The guard must be the only predecessor: another incoming edge (including
+// a self-edge) can bypass it with an unchecked index. A function entry can
+// also be entered without executing a predecessor guard.
 static const ignil::Block *findCJMPPredecessor(std::uint64_t blockAddr,
                                                const Graph &graph) {
+  if (graph.isValidFunction(blockAddr))
+    return nullptr;
   const ignil::Block *found = nullptr;
 
   for (const BasicBlock &b: graph.blocks()) {
-    if (b.startAddress() == blockAddr)
-      continue;
     if (!b.successors().count(blockAddr))
       continue;
 
     const ignil::Block *ib = graph.getIGNILBlock(b.startAddress());
-    if (!ib || ib->empty())
-      continue;
-    if (ib->ops().back().opcode != ignil::Opcode::CJMP)
-      continue;
+    if (!ib || ib->empty() ||
+        ib->ops().back().opcode != ignil::Opcode::CJMP)
+      return nullptr;
 
-    // More than one CJMP predecessor -- give up, not a simple switch guard.
     if (found)
       return nullptr;
     found = ib;

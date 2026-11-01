@@ -109,15 +109,6 @@ slice::Expr resize(slice::Expr e, ignil::Width from, ignil::Width to) {
           std::make_shared<slice::Expr>(std::move(e)), to}};
 }
 
-// Marker for "this path looped back to the join being resolved": an Undef
-// tagged with the join's address and this op index, which no real Undef has.
-constexpr int kLoopBack = -2;
-
-bool isLoopBack(const slice::Expr &e, std::uint64_t join) {
-  const auto *u = std::get_if<slice::Undef>(&e.data);
-  return u && u->opIndex == kLoopBack && u->blockAddress == join;
-}
-
 // Made of constants and operations on them only: the same on every path.
 bool isConstantOnly(const slice::Expr &e) {
   return e.visit([](const auto &n) -> bool {
@@ -331,11 +322,15 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
   // caller skips it.
   const auto key = std::make_tuple(block.startAddress(), r.offset,
                                    static_cast<std::uint32_t>(r.width));
-  if (preds.joinsInProgress.contains(key))
-    return slice::Expr{slice::Undef{r.width, block.startAddress(), kLoopBack}};
+  if (preds.joinsInProgress.contains(key)) {
+    const int marker = -2 - static_cast<int>(preds.loopMarkers.size());
+    preds.loopMarkers.emplace(marker, key);
+    return slice::Expr{slice::Undef{r.width, block.startAddress(), marker}};
+  }
 
   preds.joinsInProgress.insert(key);
   std::optional<slice::Expr> merged;
+  std::optional<slice::Expr> outerLoop;
   std::string mergedText;
   bool agree = true;
   for (std::uint64_t p: from) {
@@ -344,8 +339,20 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
       agree = false;
       break;
     }
-    if (isLoopBack(*e, block.startAddress()))
-      continue; // round the loop, unchanged
+    if (const auto *u = std::get_if<slice::Undef>(&e->data)) {
+      const auto marker = preds.loopMarkers.find(u->opIndex);
+      if (marker != preds.loopMarkers.end() &&
+          std::get<1>(marker->second) == r.offset &&
+          std::get<2>(marker->second) == r.width &&
+          preds.joinsInProgress.contains(marker->second)) {
+        // A transparent path can return to an enclosing join through several
+        // intermediate joins. Defer that equality to its owner rather than
+        // turning it into an unknown at the first intermediate join.
+        if (marker->second != key)
+          outerLoop = std::move(*e);
+        continue;
+      }
+    }
     const std::string text = slice::toString(*e);
     if (!isConstantOnly(*e) || (merged && text != mergedText)) {
       agree = false;
@@ -359,6 +366,8 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
   preds.joinsInProgress.erase(key);
   if (agree && merged)
     return std::move(*merged);
+  if (agree && outerLoop)
+    return std::move(*outerLoop);
   return slice::Expr{slice::SymReg{r}};
 }
 

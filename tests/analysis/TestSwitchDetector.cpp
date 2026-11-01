@@ -612,3 +612,155 @@ TEST_CASE("readTableTargets - signed, shifted offsets", "[switch][relative]") {
   CHECK(t[1] == 0x17c0);
   CHECK(t[2] == 0x1800);
 }
+
+namespace {
+
+// Hoist the table base before a dispatch loop. Case blocks are only reachable
+// after resolving the dispatch; linear sweep also sees an unreachable incoming
+// edge with an unknown R13. A case may deliberately invalidate the hypothesis.
+std::vector<std::uint8_t> loopDispatch(bool clobberBase) {
+  std::vector<std::uint8_t> bytes(kTable - kBase + 3 * 4, 0xcc);
+  auto emit = [&](std::uint64_t at, std::initializer_list<std::uint8_t> code) {
+    std::copy(code.begin(), code.end(), bytes.begin() + (at - kBase));
+  };
+  emit(0x1000, {0x4c, 0x8d, 0x2d, 0, 0, 0, 0, 0xeb, 0x17}); // lea r13,T; jmp loop
+  putLE(bytes, 3, kTable - 0x1007, 4);
+  emit(0x1020, {0x8b, 0x06,                         // mov eax,[rsi]
+                0x83, 0xf8, 0x02,                   // cmp eax,2
+                0x0f, 0x87, 0, 0, 0, 0,             // ja default
+                0x49, 0x63, 0x44, 0x85, 0x00,       // movsxd rax,[r13+rax*4]
+                0x4c, 0x01, 0xe8, 0xff, 0xe0});     // add rax,r13; jmp rax
+  putLE(bytes, 0x1027 - kBase, kDefault - 0x102b, 4);
+  emit(0x1070, {0x75, 0x0e}); // makes 0x1080 a block under linear sweep
+  emit(0x1080, {0xe9, 0, 0, 0, 0}); // unreachable predecessor of loop
+  putLE(bytes, 0x1081 - kBase, 0x1020 - 0x1085, 4);
+  for (unsigned i = 0; i < 3; ++i) {
+    const std::uint64_t at = kCase0 + 0x10 * i;
+    putLE(bytes, kTable - kBase + 4 * i, at - kTable, 4);
+    if (clobberBase && i == 1) {
+      emit(at, {0x49, 0x83, 0xc5, 0x04, 0xe9, 0, 0, 0, 0}); // add r13,4
+      putLE(bytes, at + 5 - kBase, 0x1020 - (at + 9), 4);
+    } else {
+      emit(at, {0xe9, 0, 0, 0, 0});
+      putLE(bytes, at + 1 - kBase, 0x1020 - (at + 5), 4);
+    }
+  }
+  bytes[kDefault - kBase] = 0xc3;
+  return bytes;
+}
+
+} // namespace
+
+TEST_CASE("SwitchDetector - iteratively proves a loop invariant table base",
+          "[switch][e2e][iterative]") {
+  for (auto strategy: {dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL,
+                       dragon::DisassemblyStrategy::LINEAR_SWEEP}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = strategy;
+    dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+    dragon::Graph g{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(loopDispatch(false), kBase, g);
+    REQUIRE(g.get(0x1033));
+    CHECK(g.get(0x1033)->branches() ==
+          std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
+    const dragon::Function fn{&g, kBase};
+    CHECK(fn.block(0x1100) != nullptr);
+    CHECK(fn.block(0x1120) != nullptr);
+  }
+}
+
+TEST_CASE("SwitchDetector - rolls back a base modified by a tentative case",
+          "[switch][e2e][iterative]") {
+  for (auto strategy: {dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL,
+                       dragon::DisassemblyStrategy::LINEAR_SWEEP}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = strategy;
+    dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+    dragon::Graph g{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(loopDispatch(true), kBase, g);
+    REQUIRE(g.get(0x1033));
+    CHECK(g.get(0x1033)->branches().empty());
+    CHECK(g.get(0x1033)->edges() == 1); // original unresolved jump metadata
+    CHECK_FALSE(g.isValidBlock(kCase0));
+    CHECK(g.getIGNILBlock(kCase0) == nullptr);
+    if (strategy == dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL)
+      CHECK(g.get(kCase0) == nullptr);
+  }
+}
+
+TEST_CASE("SwitchDetector - rechecks earlier tables after dependent resolution",
+          "[switch][e2e][iterative]") {
+  auto bytes = loopDispatch(false);
+  bytes.resize(0x1328 - kBase, 0xcc);
+  auto emit = [&](std::uint64_t at, std::initializer_list<std::uint8_t> code) {
+    std::copy(code.begin(), code.end(), bytes.begin() + (at - kBase));
+  };
+  emit(0x1100, {0xe9, 0, 0, 0, 0}); // case 0 reaches another dispatch
+  putLE(bytes, 0x1101 - kBase, 0x1140 - 0x1105, 4);
+  emit(0x1140, {0x8b, 0x4e, 0x04,             // mov ecx,[rsi+4]
+                0x83, 0xf9, 0x01,             // cmp ecx,1
+                0x0f, 0x87, 0, 0, 0, 0,       // ja default
+                0x48, 0x8d, 0x15, 0, 0, 0, 0, // lea rdx,table2
+                0x48, 0x63, 0x04, 0x8a,       // movsxd rax,[rdx+rcx*4]
+                0x48, 0x01, 0xd0, 0xff, 0xe0});
+  putLE(bytes, 0x1148 - kBase, kDefault - 0x114c, 4);
+  putLE(bytes, 0x114f - kBase, 0x1320 - 0x1153, 4);
+  putLE(bytes, 0x1320 - kBase, 0x1180 - 0x1320, 4);
+  putLE(bytes, 0x1324 - kBase, 0x1190 - 0x1320, 4);
+  emit(0x1180, {0x49, 0x83, 0xc5, 0x04, 0xe9, 0, 0, 0, 0}); // add r13,4
+  putLE(bytes, 0x1185 - kBase, 0x1020 - 0x1189, 4);
+  bytes[0x1190 - kBase] = 0xc3;
+
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g{dragon::Architecture::X86_64, cfg};
+  dis.disassemble(bytes, kBase, g);
+  REQUIRE(g.get(0x1033));
+  CHECK(g.get(0x1033)->branches().empty());
+  CHECK(g.get(0x1140) == nullptr);
+  CHECK(g.get(0x1180) == nullptr);
+  CHECK_FALSE(g.isValidBlock(0x1140));
+  CHECK(g.getIGNILBlock(0x1140) == nullptr);
+}
+
+TEST_CASE("SwitchDetector - rolls back a case that bypasses the index guard",
+          "[switch][e2e][iterative]") {
+  auto bytes = nonPicDispatch();
+  // Case 0 can install an out-of-bounds index and re-enter after the guard.
+  const std::uint8_t bypass[] = {0xbf, 0xff, 0x00, 0x00, 0x00, // mov edi,255
+                                  0xe9, 0, 0, 0, 0};
+  std::copy(std::begin(bypass), std::end(bypass),
+            bytes.begin() + (kCase0 - kBase));
+  putLE(bytes, kCase0 + 6 - kBase, 0x1009 - (kCase0 + 10), 4);
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g{dragon::Architecture::X86_64, cfg};
+  dis.disassemble(bytes, kBase, g);
+  REQUIRE(g.get(0x100b));
+  CHECK(g.get(0x100b)->branches().empty());
+  CHECK(g.get(kCase0) == nullptr);
+}
+
+TEST_CASE("SwitchDetector - explicit entries exclude speculative function roots",
+          "[switch][e2e][iterative]") {
+  auto bytes = loopDispatch(false);
+  // The case after a padded RET is heuristically tagged as another function
+  // by linear sweep. It is reached only through the table, with R13 intact.
+  bytes[0x1210 - kBase] = 0xe9;
+  putLE(bytes, 0x1211 - kBase, 0x1020 - 0x1215, 4);
+  putLE(bytes, kTable - kBase, 0x1210 - kTable, 4);
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g{dragon::Architecture::X86_64, cfg};
+  dragon::Disassembler::AnalysisHints hints;
+  hints.entryPoints = {kBase};
+  dis.disassemble(bytes, kBase, g, hints);
+  REQUIRE(g.get(0x1033));
+  CHECK(g.get(0x1033)->branches() ==
+        std::set<std::uint64_t>{0x1210, 0x1110, 0x1120});
+}

@@ -112,6 +112,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `difftest_sse.py` | 35 SSE templates vs Unicorn incl. NaN/±0/inf; NaN results counted as "unknown", not wrong. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |
+| `loop_slice_diff.py` | Nested-join loop slices vs 128 Unicorn executions: invariants, differing writes, increments and cross-register copies. |
 | `llvm_diff.py` | LLVM-lifted code (compiled with `llc-21`, run natively) vs SymbolicExecutor. |
 | `analyze_bin.py BIN OBJDUMP` | Whole-binary report: objdump agreement, function recovery, empty functions, IGNIL coverage + top unlifted, indirect jumps, LLVM lift success. `STRATEGY=0/1`, `LLVM=0/1`. |
 | `table_truth.py BIN OBJDUMP STRATEGY` | i386 absolute jump tables: resolved targets vs the table in the image. |
@@ -119,7 +120,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `fstarts.py BIN` | Classifies function starts: symbol / inside a symbol body (false) / other. |
 | `unlifted.py BIN [N]` | Census of unlifted instruction *forms* (mnemonic + operand shape). |
 
-## 5. Current state (main = `9b1f625` at the time of writing)
+## 5. Current state
 
 Work done in this fork (see `git log` for full messages): ARM32 branch
 targets; ARM lifter collisions; Python borrowed-pointer lifetimes; block
@@ -131,7 +132,8 @@ indirect-jump edges; function-start heuristics; Win64 calling convention;
 multi-byte nops; reachable-code decoding after resolution; AArch64
 register-offset memory + extended add/sub; relative jump tables; slicer
 join merging; x86 integer memory forms + moffs; AArch64 integer data
-processing; SSE low-half + FLT/FEQ/FUNO.
+processing; SSE low-half + FLT/FEQ/FUNO; optimistic x86 indirect-jump resolution
+with whole-candidate revalidation/rollback and nested-join loop invariants.
 
 Numbers on the Lua builds (linear sweep unless noted):
 
@@ -140,26 +142,35 @@ Numbers on the Lua builds (linear sweep unless noted):
 | objdump agreement | 100% | 100% | 100% |
 | functions without blocks | 0 | 2 | 0 |
 | unlifted instructions | 3.35% (x87 only) | 0.73% | 1.97% (FP only) |
-| jump tables resolved / wrong | 43 of 50 / 0 (4 are guardless Lua dispatch, 3 unverifiable) | 29 of 34 (recursive) / 0 | 7 of 8 / 0 |
+| jump tables verified / wrong | 43 of 50 / 0 (4 are guardless Lua dispatch, 3 unverifiable) | 32 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
 | LLVM lift | all functions | all | all |
+
+The x86-64 relative-table script now follows the base register used by
+`movsxd`, including a hoisted LEA outside its old 12-instruction window. This
+finds 37 tables: 32 verified, 4 without a script-visible bound and 1 unresolved
+(`str_pack`, jump at `0x140021b50`). The original three linear-sweep failures
+are resolved. Explicit entry hints seed speculative reachability (plus direct
+callees); heuristic function starts after padded RETs can actually be cases
+and must not inject independent unknown register states into that proof.
+The Lua x86-64 linear analysis currently takes about 13 s versus 6 s before
+speculation on this VM; repeated slicing/revalidation is a profiling target.
 
 ## 6. Backlog (suggested order)
 
-1. **Optimistic, iterative indirect-jump resolution.** The last x86-64 tables
-   fail because proving the table base loop-invariant needs the case blocks'
-   own edges back to the loop head — which exist only once the table is
-   resolved. Resolve tentatively, then re-check. (`truth_rel.py` shows them.)
-2. **Stack memory tracking in the slicer** (store→load through `[sp, #N]`):
+1. **Stack memory tracking in the slicer** (store→load through `[sp, #N]`):
    the last AArch64 table reloads its base from the stack.
-3. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
+2. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
    x86 128-bit stores (`movups [m], xmm` — needs full 128-bit XMM modelling),
    `cmpsd`/`cmpnlesd`, `punpck*`, `pshufd`, `bsr`, `tzcnt`, `popcnt`, `lzcnt`;
    AArch64 FP (`fmov`, `fcmp/fcmpe`, `scvtf`, `fcvtzs`, `frintm`, `ldr/str`
    of D/Q registers — note a 64-bit write to a V register must zero its upper
    half, which the current 32-bit-only zero-extension rule does not do),
    `clz`, `rbit`. Validate each with the difftests and add templates.
-4. Expose `AnalysisHints` and `callingConvention` through the C shim and
+3. Expose `AnalysisHints` and `callingConvention` through the C shim and
    Python (today only C++ and `disassembleImage` use them).
+4. Investigate the newly counted x86-64 `str_pack` table and extend the
+   speculative resolver to ARM when useful. Failed hypotheses remain
+   unresolved; never publish partial target sets or skip the final recheck.
 5. Design questions, not bugs (ask the owner before changing): CALL/RET
    abstraction; the loader marks defined `.symtab` globals of an executable
    (e.g. `__bss_start`) as exported.

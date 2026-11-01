@@ -92,10 +92,10 @@ class X86Analysis {
                          std::unordered_set<std::uint64_t> &blockStarts,
                          std::unordered_set<std::uint64_t> &fnStarts) const;
 
-  /// Scan all lifted IGNIL blocks for unresolved indirect JMPs, resolve them
-  /// via backward slicing (and optionally Z3), and integrate new targets.
-  /// Returns true if at least one new block start was discovered.
-  bool resolveIndirectJumps(Graph &graph, std::span<const std::uint8_t> bytes,
+  /// Tentatively resolve reachable indirect JMPs to a CFG fixed point.
+  /// Recheck every candidate after expansion; discard rejected candidates
+  /// and all instructions/blocks discovered through them before publishing.
+  void resolveIndirectJumps(Graph &graph, std::span<const std::uint8_t> bytes,
                             std::uint64_t baseAddr,
                             const Disassembler::AnalysisHints &hints,
                             std::unordered_set<std::uint64_t> &blockStarts,

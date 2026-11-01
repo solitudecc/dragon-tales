@@ -50,9 +50,14 @@ class BackwardSlicer {
   // Every predecessor of each block, and the join-node queries in progress
   // (block, register offset, width) used to recognise a loop back to one.
   struct PredMap {
+    using JoinKey =
+            std::tuple<std::uint64_t, std::uint32_t, std::uint32_t>;
     std::unordered_map<std::uint64_t, std::vector<std::uint64_t>> preds;
-    std::set<std::tuple<std::uint64_t, std::uint32_t, std::uint32_t>>
-            joinsInProgress;
+    std::set<JoinKey> joinsInProgress;
+    // Negative Undef op indices are private recursion markers. Keep the
+    // register identity as well as the join: COPY from another register must
+    // never be mistaken for an unchanged path around this register's loop.
+    std::unordered_map<int, JoinKey> loopMarkers;
     // Predecessor blocks still allowed to be entered by this slice() call:
     // following every path through joins is exponential in the worst case.
     int budget = 4096;

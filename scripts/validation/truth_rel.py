@@ -22,9 +22,19 @@ for k, l in enumerate(lines):
     win = lines[max(0, k - 12):k]
     a = None
     if re.search(r"\tjmp\s+rax$", l) and any("movsxd" in x for x in win[-3:]):
-        lea = next((x for x in reversed(win) if re.search(r"\tlea\s+\w+,\[rip\+", x)), None)
+        # A loop may hoist the actual table base far above the dispatch.
+        # Match the base register used by the load, not the nearest unrelated
+        # LEA (str_unpack also loads a string address into R8 just beforehand).
+        load = next((re.search(r"\tmovsxd\s+rax,DWORD PTR \[(\w+)\+\w+\*4(?:\+(0x[0-9a-f]+))?\]", x)
+                     for x in reversed(win[-3:]) if "movsxd" in x), None)
+        if not load: continue
+        lea = None
+        for x in reversed(lines[:k]):
+            if re.search(r"^[0-9a-f]+ <[^>]+>:$", x): break
+            if re.search(r"\tlea\s+" + re.escape(load.group(1)) + r",\[rip\+", x):
+                lea = x; break
         if not lea: continue
-        T = int(re.search(r"#\s*([0-9a-f]+)", lea).group(1), 16)
+        T = int(re.search(r"#\s*([0-9a-f]+)", lea).group(1), 16) + int(load.group(2) or "0", 0)
         size, shift, signed, base = 4, 0, True, T
         a = int(l.split(":")[0], 16)
     m = re.search(r"\tbr\s+(x\d+)$", l)

@@ -354,6 +354,14 @@ successors, members of its function, and an LLVM `switch` in lifted IR. An
 unresolved indirect jump has no successors. Under `LINEAR_SWEEP` only
 recognised tables whose targets are already-decoded instructions are used.
 
+On x86, resolution is optimistic and iterative. With explicit analysis hints,
+only blocks reachable from those entries and their direct callees contribute
+predecessors; without hints, recovered function entries seed the traversal.
+Its case edges and newly reachable code are added to a temporary graph, then
+every candidate is sliced again after each expansion. A changed or unprovable
+target set rejects the hypothesis; its edges, decoded instructions, block
+splits and IGNIL are discarded. Only a verified fixed point is published.
+
 ```cpp
 #include <dragon/loader/ImageDisassembler.hpp>
 
@@ -1194,13 +1202,15 @@ Recognition is two-phase:
    w3, sxth #2`) emit. `SwitchCandidate::relative` is then set, with
    `targetBase`, `entryShift`, `entryBits` and `entrySigned` describing how an
    entry becomes a target; entries may be 1, 2, 4 or 8 bytes.
-2. **Bounds extraction** — find the unique predecessor ending in a CJMP and
+2. **Bounds extraction** — the sole predecessor must end in a CJMP; then
    slice its condition. Instead of matching a comparison shape (which differs
    per lifter and per `ja`/`jae`/`b.hi`), the condition is evaluated with the
    index set to 0, 1, 2, ...: `numCases` is the first index for which the
    branch leaves the dispatch block, accepted only if every larger index
    probed (including ones a signed compare would let through) leaves it too.
    A condition that depends on anything but the index gives `numCases == 0`.
+   Additional predecessors and self-edges reject the bound because they can
+   bypass the guard, as does a dispatch that is itself a function entry.
 
 The disassembler's indirect-jump resolution runs this on every `JMP` through
 a register (`jmp rax`, `br x0`) and through memory (`jmp [eax*4 + table]`,

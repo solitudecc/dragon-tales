@@ -63,7 +63,7 @@ struct SwitchCandidate {
 ///      around the index (ZEXT(EDI) after `mov edi, edi`) are looked through.
 ///      A second variable term (a base register, as in position-independent
 ///      tables of relative offsets) is not matched.
-///   2. Bounds: the unique predecessor ending in a CJMP has its condition
+///   2. Bounds: the sole predecessor must end in a CJMP; its condition is
 ///      sliced and *evaluated* with the index set to 0, 1, 2, ... - the shape
 ///      of the comparison differs per lifter and per ja/jae/b.hi, so it is
 ///      not pattern-matched. numCases is the first index that leaves the

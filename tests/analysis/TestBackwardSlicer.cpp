@@ -411,3 +411,42 @@ TEST_CASE("BackwardSlicer - a value set before a loop is seen inside it",
     CHECK(text.find("0x9000") == std::string::npos);
   }
 }
+
+TEST_CASE("BackwardSlicer - loop invariants survive nested joins",
+          "[slicer][ignil][join][iterative]") {
+  // P -> H -> A/B -> J -> H/E. Backtracking through J reaches a loop
+  // marker belonging to J while resolving H, rather than H's own marker.
+  for (unsigned variant = 0; variant < 4; ++variant) {
+    INFO("variant " << variant);
+    ig::Block p{0x6000}, h{0x6010}, a{0x6020}, b{0x6030},
+            j{0x6040}, e{0x6050};
+    p.append(copyOp(x86::RDX, ig::Const{0x9000, 64}, 0x6000));
+    p.append(copyOp(x86::RAX, ig::Const{0x8000, 64}, 0x6007));
+    p.append(jmpOp(0x6010, 0x600e));
+    h.append(cjmpOp(0x6020, 0x6030, 0x6010));
+    if (variant == 3)
+      a.append(copyOp(x86::RDX, x86::RAX, 0x6020));
+    a.append(jmpOp(0x6040, 0x6023));
+    if (variant == 1)
+      b.append(copyOp(x86::RDX, ig::Const{0x9001, 64}, 0x6030));
+    if (variant == 2)
+      b.append({ig::Opcode::UNDEF, ig::Value{x86::RDX}, {}, 0x6030});
+    b.append(jmpOp(0x6040, 0x6037));
+    if (variant == 3)
+      j.append(copyOp(x86::RAX, x86::RDX, 0x6040));
+    j.append(cjmpOp(0x6010, 0x6050, 0x6043));
+    e.append(retOp(0x6050));
+    dragon::Graph g{dragon::Architecture::X86_64, dragon::Configuration{}};
+    for (auto *blk: {&p, &h, &a, &b, &j, &e})
+      addValidBlock(g, std::move(*blk));
+    auto result = dragon::BackwardSlicer{32}.slice(x86::RDX, 0x6050, g);
+    const auto value = evalConst(result);
+    INFO(dragon::slice::toString(result));
+    if (variant == 0) {
+      REQUIRE(value.has_value());
+      CHECK(*value == 0x9000);
+    } else {
+      CHECK_FALSE(value.has_value());
+    }
+  }
+}
