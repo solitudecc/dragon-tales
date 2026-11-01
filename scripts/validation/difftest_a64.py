@@ -211,6 +211,19 @@ T += [('sxtw x0, w1', []), ('rev32 x0, x1', []), ('smaddl x0, w1, w2, x3', []),
       ('smull x0, w1, w2', []), ('umull x0, w1, w2', []), ('smulh x0, x1, x2', []),
       ('umulh x0, x1, x2', [])]
 
+# register aliasing: Rd == Rn / Rd == Rm / Rn == Rm (flags must read the
+# operands, not the result)
+for w in ('x', 'w'):
+    for op in ('adds', 'subs', 'add', 'sub'):
+        T += [(f'{op} {w}1, {w}1, #1', []), (f'{op} {w}1, {w}1, {w}2', []),
+              (f'{op} {w}2, {w}1, {w}2', []), (f'{op} {w}1, {w}1, {w}1', []),
+              (f'{op} {w}1, {w}1, {w}2, lsl #3', [])]
+    T += [(f'ands {w}1, {w}1, {w}2', []), (f'bics {w}1, {w}1, {w}2', []),
+          (f'cmp {w}1, {w}1', []), (f'cmn {w}1, {w}1', []),
+          (f'ccmp {w}1, {w}1, #5, ne', []), (f'csinc {w}1, {w}1, {w}1, eq', []),
+          (f'madd {w}1, {w}1, {w}1, {w}1', []), (f'sdiv {w}1, {w}1, {w}2', []),
+          (f'adds {w}1, {w}1, w2, sxtb #2', []), (f'subs {w}2, {w}1, w2, uxth', [])]
+
 rng = random.Random(1234)
 summary = defaultdict(list)
 for item in T:

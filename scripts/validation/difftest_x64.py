@@ -227,6 +227,12 @@ T += [('mov ah, bl', {}), ('mov al, bh', {}), ('add ah, al', {}), ('mov rax, 0x1
 T += [(f'j{c} #{0x70 + i:02x}3e', {}) for i, c in enumerate(
         ('o', 'no', 'b', 'ae', 'e', 'ne', 'be', 'a', 's', 'ns', 'p', 'np', 'l', 'ge', 'le', 'g'))]
 
+# register aliasing
+T += [(f'{op} {r}, {r}', {}) for op in ('add', 'sub', 'adc', 'sbb', 'and', 'or', 'xor', 'cmp', 'test')
+      for r in ('rax', 'eax', 'ax', 'al', 'ah')]
+T += [('imul rax, rax', {}), ('imul ax, ax', {}), ('xadd rax, rax', {}), ('xchg rax, rax', {}), ('shld rax, rax, 3', {}), ('cmovs rax, rax', {}),
+      ('neg rax', {}), ('bswap rax', {}), ('mul rax', {}), ('imul rax', {})]
+
 rng = random.Random(4321)
 summary = defaultdict(list)
 import gc
