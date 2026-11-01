@@ -221,6 +221,18 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
   bool isTrap = desc.isTrap();
   bool hasIndirect = desc.isIndirectBranch();
 
+  // A32 has one branch opcode, Bcc, for both `b` and `bCC`: an unconditional
+  // `b` is just Bcc with the AL (14) predicate, and LLVM flags every Bcc as a
+  // conditional branch. Read the predicate operand so `b` is not given a
+  // fall-through edge it does not have.
+  if (architecture_ == Architecture::ARM32 && isConditional) {
+    constexpr std::int64_t kArmCondAL = 14;
+    const int predIdx = desc.findFirstPredOperandIdx();
+    if (predIdx >= 0 && inst.getOperand(predIdx).isImm() &&
+        inst.getOperand(predIdx).getImm() == kArmCondAL)
+      isConditional = false;
+  }
+
   offset += instSize;
 
   Instruction insn(address + offset - instSize,
@@ -238,12 +250,23 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
   // target is always the last operand: B=[tgt], Bcc=[cond,tgt],
   // CBZ/CBNZ=[Rt,tgt], TBZ/TBNZ=[Rt,bit,tgt]. Verified against
   // `llvm-mc -disassemble -show-inst` on raw AArch64 encodings.
+  //
+  // A32 is different again: the immediate is a byte offset (already scaled),
+  // always operand 0 of B/Bcc/BL/BLX, and relative to the value an A32
+  // instruction reads from PC - its own address + 8, not address + size.
+  // `ea000002` at 0 branches to 0x10 (llvm-objdump agrees).
+  constexpr std::uint64_t kArmPcBias = 8;
   if (isJump && !hasIndirect && inst.getNumOperands() > 0) {
     if (architecture_ == Architecture::ARM64) {
       const auto &op = inst.getOperand(inst.getNumOperands() - 1);
       if (op.isImm())
         insn.addBranch(insn.address() +
                        static_cast<std::uint64_t>(op.getImm()) * 4);
+    } else if (architecture_ == Architecture::ARM32) {
+      const auto &op = inst.getOperand(0);
+      if (op.isImm())
+        insn.addBranch(insn.address() + kArmPcBias +
+                       static_cast<std::uint64_t>(op.getImm()));
     } else {
       const auto &op = inst.getOperand(0);
       if (op.isImm()) {
@@ -261,6 +284,11 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
       if (op.isImm())
         insn.addCallee(insn.address() +
                        static_cast<std::uint64_t>(op.getImm()) * 4);
+    } else if (architecture_ == Architecture::ARM32) {
+      const auto &op = inst.getOperand(0);
+      if (op.isImm())
+        insn.addCallee(insn.address() + kArmPcBias +
+                       static_cast<std::uint64_t>(op.getImm()));
     } else {
       const auto &op = inst.getOperand(0);
       if (op.isImm()) {

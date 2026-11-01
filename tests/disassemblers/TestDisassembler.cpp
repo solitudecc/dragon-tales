@@ -2,6 +2,7 @@
 #include <dragon/disassembler/Disassembler.hpp>
 
 #include <algorithm>
+#include <set>
 
 // -----------------------------------------------------------------------
 // Helper
@@ -371,6 +372,7 @@ TEST_CASE("Disassembler ARM32 - generic CPU", "[disassembler][arm32]") {
     auto instrs = dis.disassemble(bytes, 0x1000);
     REQUIRE(instrs.size() == 1);
     REQUIRE(instrs[0].isCall());
+    REQUIRE(instrs[0].callees() == std::set<std::uint64_t>{0x1008});
   }
 
   SECTION("b - isJump, not a call") {
@@ -380,6 +382,43 @@ TEST_CASE("Disassembler ARM32 - generic CPU", "[disassembler][arm32]") {
     REQUIRE(instrs.size() == 1);
     REQUIRE(instrs[0].isJump());
     REQUIRE_FALSE(instrs[0].isCall());
+    REQUIRE(instrs[0].branches() == std::set<std::uint64_t>{0x1008});
+  }
+
+  // Regression: A32 branch targets were computed as address + size + imm
+  // (x86's rule, 4 bytes short) instead of address + 8 + imm, and `b` (Bcc
+  // with the AL predicate) was flagged conditional. Expected values are what
+  // llvm-objdump --triple=armv7 prints for the same words.
+  SECTION("A32 branch targets are relative to PC = address + 8") {
+    struct Case {
+      std::uint32_t word;
+      std::uint64_t target;
+      bool conditional;
+    };
+    const Case cases[] = {
+            {0xEA000002, 0x1010, false}, // b   #8
+            {0x0A000002, 0x1010, true},  // beq #8
+            {0xEAFFFFFD, 0x0FFC, false}, // b   #-12
+    };
+    for (const auto &c: cases) {
+      const std::vector<std::uint8_t> bytes = {
+              static_cast<std::uint8_t>(c.word),
+              static_cast<std::uint8_t>(c.word >> 8),
+              static_cast<std::uint8_t>(c.word >> 16),
+              static_cast<std::uint8_t>(c.word >> 24)};
+      auto instrs = dis.disassemble(bytes, 0x1000);
+      REQUIRE(instrs.size() == 1);
+      CHECK(instrs[0].branches() == std::set<std::uint64_t>{c.target});
+      CHECK(instrs[0].isConditional() == c.conditional);
+    }
+  }
+
+  SECTION("A32 bl target is relative to PC = address + 8") {
+    // EBFFFFFF = bl #-4 at 0x1008 -> 0x1008 + 8 - 4 = 0x100c
+    const std::vector<std::uint8_t> bytes = {0xFF, 0xFF, 0xFF, 0xEB};
+    auto instrs = dis.disassemble(bytes, 0x1008);
+    REQUIRE(instrs.size() == 1);
+    REQUIRE(instrs[0].callees() == std::set<std::uint64_t>{0x100c});
   }
 
   SECTION("address increments by 4 per instruction") {
