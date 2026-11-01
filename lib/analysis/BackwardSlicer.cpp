@@ -1,8 +1,12 @@
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/disassembler/Graph.hpp>
 
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+
 #include "utils/Utils.hpp"
 
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 
@@ -44,6 +48,61 @@ SuccessorInfo successorsOf(const ignil::Block &block) {
     pushValue(last.srcs[2]); // fallthrough
   }
   return info;
+}
+
+// The parent registers of `arch`'s register file, used to size the implicit
+// zeroing done by a 32-bit write (EAX/W0 clear 8 bytes, S0 clears V0's 16).
+std::vector<ignil::RegExtent> registerFileFor(Architecture arch) {
+  switch (arch) {
+    case Architecture::X86_32:
+    case Architecture::X86_64:
+      return x86::registerFile();
+    case Architecture::ARM32:
+    case Architecture::ARM64:
+      return arm::registerFile();
+    default:
+      return {};
+  }
+}
+
+std::uint32_t byteCount(ignil::Width w) { return (w + 7u) / 8u; }
+
+// Bytes of the register space a write to `w` replaces, starting at w.offset.
+// The IGNIL convention (shared with SymbolicExecutor and dead-store
+// elimination): a 32-bit write zero-extends into the rest of its parent
+// (EAX -> RAX, W0 -> X0, S0 -> V0); 8- and 16-bit writes leave the
+// surrounding bytes alone.
+std::uint32_t clobberBytes(const ignil::Reg &w,
+                           const std::vector<ignil::RegExtent> &regFile) {
+  const std::uint32_t own = byteCount(w.width);
+  if (w.width != 32)
+    return own;
+  for (const ignil::RegExtent &p: regFile)
+    if (p.offset <= w.offset && w.offset + own <= p.offset + p.byteSize)
+      return p.offset + p.byteSize - w.offset;
+  return std::max<std::uint32_t>(own, 8);
+}
+
+std::uint64_t lowMask(unsigned bits) {
+  return bits >= 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
+}
+
+slice::Expr mkConst(std::uint64_t v, ignil::Width w) {
+  return slice::Expr{slice::Const{v & lowMask(w), w}};
+}
+
+slice::Expr mkBin(ignil::Opcode op, slice::Expr l, slice::Expr r) {
+  return slice::Expr{slice::BinOp{op, std::make_shared<slice::Expr>(std::move(l)),
+                                  std::make_shared<slice::Expr>(std::move(r))}};
+}
+
+// ZEXT/TRUNC `e` (currently `from` bits wide) to `to` bits; no-op if equal.
+slice::Expr resize(slice::Expr e, ignil::Width from, ignil::Width to) {
+  if (from == to)
+    return e;
+  return slice::Expr{slice::UnaryOp{
+          to > from ? ignil::Opcode::ZEXT : ignil::Opcode::TRUNC,
+          std::make_shared<slice::Expr>(std::move(e)), to}};
 }
 
 } // namespace
@@ -138,41 +197,100 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                     return slice::Expr{slice::Undef{t.width}};
                   },
 
-                  // Registers: scan backwards within the block for the last
-                  // write.
-                  // If not found, and we still have depth budget, cross into
-                  // the unique
-                  // predecessor block.
+                  // Registers: see sliceReg - a write to an overlapping
+                  // sub-register is a definition too.
                   [&](const ignil::Reg &r) -> slice::Expr {
-                    const auto &ops = block.ops();
-                    for (int i = beforeIdx - 1; i >= 0; --i) {
-                      const ignil::Op &op = ops[i];
-                      if (!op.dst)
-                        continue;
-                      // Same as with temporal, look the destination is the
-                      // register with same offset and same width, maybe in
-                      // the future we can check with different width too
-                      if (const auto *dr = std::get_if<ignil::Reg>(&*op.dst)) {
-                        if (dr->offset == r.offset && dr->width == r.width)
-                          return buildFromOp(op, block, i, graph, preds, depth);
-                      }
-                    }
-                    // Not defined here - try predecessor block.
-                    if (depth <= 0)
-                      return slice::Expr{slice::SymReg{r}};
-                    auto predIt = preds.find(block.startAddress());
-                    if (predIt == preds.end())
-                      return slice::Expr{slice::SymReg{r}}; // join or entry
-                    const ignil::Block *predBlk =
-                            graph.getIGNILBlock(predIt->second);
-                    if (!predBlk)
-                      return slice::Expr{slice::SymReg{r}};
-                    int endIdx = static_cast<int>(predBlk->ops().size());
-                    return sliceValue(v, *predBlk, endIdx, graph, preds,
-                                      depth - 1);
+                    return sliceReg(r, block, beforeIdx, graph, preds, depth);
                   },
           },
           v);
+}
+
+// ---------------------------------------------------------------------------
+// sliceReg - the value of register `r` just before ops[beforeIdx]
+//
+// The register space is byte-addressed and sub-registers alias (RAX/EAX/AX/AL
+// share offset 0, AH is byte 1), so the definition of `r` is the latest write
+// touching *any* of its bytes, not only one with the same offset and width:
+//
+//   - the write covers all of `r` (exact match, or `r` lies inside the bytes
+//     the write replaces, e.g. reading RAX after `mov eax, ..`, which zeroes
+//     the upper half, or reading AH after `mov rax, ..`): `r` is that value,
+//     shifted and resized;
+//   - the write covers only part of `r` (`mov al, ..` then read RAX): the
+//     written bytes are merged into the value `r` had before the write.
+// ---------------------------------------------------------------------------
+
+slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
+                                     const ignil::Block &block, int beforeIdx,
+                                     const Graph &graph, const PredMap &preds,
+                                     int depth) const {
+  using Opc = ignil::Opcode;
+  const auto regFile = registerFileFor(graph.architecture());
+  const std::uint32_t rs = r.offset, re = r.offset + byteCount(r.width);
+
+  const auto &ops = block.ops();
+  for (int i = beforeIdx - 1; i >= 0; --i) {
+    const ignil::Op &op = ops[i];
+    if (!op.dst)
+      continue;
+    const auto *w = std::get_if<ignil::Reg>(&*op.dst);
+    if (!w)
+      continue;
+    const std::uint32_t ws = w->offset;
+    const std::uint32_t we = w->offset + clobberBytes(*w, regFile);
+    if (we <= rs || re <= ws)
+      continue; // no byte in common
+    if (ws == rs && w->width == r.width)
+      return buildFromOp(op, block, i, graph, preds, depth);
+
+    // The written value, as a `wbits`-wide quantity covering [ws, we): bytes
+    // past the write's own width are the zeroes of a 32-bit zero-extension.
+    const ignil::Width wbits = (we - ws) * 8;
+    slice::Expr value = resize(buildFromOp(op, block, i, graph, preds, depth),
+                               w->width, wbits);
+
+    if (ws <= rs && re <= we) {
+      // Fully covered: extract r's bytes.
+      if (rs > ws)
+        value = mkBin(Opc::SHR, std::move(value), mkConst((rs - ws) * 8, wbits));
+      return resize(std::move(value), wbits, r.width);
+    }
+
+    // Partially covered: merge into r's previous value. Needs masks of r's
+    // width, which a 64-bit Const can express only up to 64 bits.
+    if (r.width > 64 || wbits > 64)
+      return slice::Expr{slice::Undef{r.width}};
+    // r = (old & ~(mask << pos)) | (part << pos), where part is the written
+    // bytes [lo, hi) that fall inside r and pos their bit offset within r.
+    const std::uint32_t lo = std::max(ws, rs), hi = std::min(we, re);
+    slice::Expr part = std::move(value);
+    if (lo > ws)
+      part = mkBin(Opc::SHR, std::move(part), mkConst((lo - ws) * 8, wbits));
+    const unsigned partBits = (hi - lo) * 8;
+    if (partBits < wbits)
+      part = resize(std::move(part), wbits, partBits);
+    part = resize(std::move(part), partBits, r.width);
+    const unsigned pos = (lo - rs) * 8;
+    if (pos)
+      part = mkBin(Opc::SHL, std::move(part), mkConst(pos, r.width));
+    const std::uint64_t keep = ~(lowMask(partBits) << pos) & lowMask(r.width);
+    slice::Expr old = sliceReg(r, block, i, graph, preds, depth);
+    return mkBin(Opc::OR, mkBin(Opc::AND, std::move(old), mkConst(keep, r.width)),
+                 std::move(part));
+  }
+
+  // Not defined in this block - try the unique predecessor.
+  if (depth <= 0)
+    return slice::Expr{slice::SymReg{r}};
+  auto predIt = preds.find(block.startAddress());
+  if (predIt == preds.end())
+    return slice::Expr{slice::SymReg{r}}; // join or entry
+  const ignil::Block *predBlk = graph.getIGNILBlock(predIt->second);
+  if (!predBlk)
+    return slice::Expr{slice::SymReg{r}};
+  return sliceReg(r, *predBlk, static_cast<int>(predBlk->ops().size()), graph,
+                  preds, depth - 1);
 }
 
 // ---------------------------------------------------------------------------

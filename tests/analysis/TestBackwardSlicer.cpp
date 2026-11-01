@@ -5,6 +5,10 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
+
+#include <optional>
 
 #include <iostream>
 
@@ -185,4 +189,144 @@ TEST_CASE("BackwardSlicer - join node stops at SymReg",
   REQUIRE(std::holds_alternative<dragon::slice::SymReg>(result.data));
   REQUIRE(std::get<dragon::slice::SymReg>(result.data).reg.offset ==
           x86::RAX.offset);
+}
+
+// ---------------------------------------------------------------------------
+// Sub-register aliasing on real lifter output.
+//
+// The register space is byte-addressed: RAX/EAX/AX/AL share offset 0, AH is
+// byte 1. A write to any of them is a definition of the others. These used to
+// be skipped (only an exact offset+width match counted), so the slicer
+// answered with an *older* value - `mov rax, 0x100; mov eax, 5` sliced RAX to
+// 0x100.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Concrete value of a slice made only of constants, or nullopt.
+std::optional<std::uint64_t> evalConst(const dragon::slice::Expr &e) {
+  using namespace dragon::slice;
+  using Opc = dragon::ignil::Opcode;
+  auto mask = [](std::uint64_t v, unsigned w) {
+    return w >= 64 ? v : v & ((std::uint64_t{1} << w) - 1);
+  };
+  if (const auto *c = std::get_if<Const>(&e.data))
+    return mask(c->value, c->width);
+  if (const auto *u = std::get_if<UnaryOp>(&e.data)) {
+    auto v = evalConst(*u->operand);
+    if (!v)
+      return std::nullopt;
+    if (u->op == Opc::ZEXT || u->op == Opc::TRUNC)
+      return mask(*v, u->resultWidth);
+    return std::nullopt;
+  }
+  if (const auto *b = std::get_if<BinOp>(&e.data)) {
+    auto l = evalConst(*b->left), r = evalConst(*b->right);
+    if (!l || !r)
+      return std::nullopt;
+    switch (b->op) {
+      case Opc::AND: return *l & *r;
+      case Opc::OR:  return *l | *r;
+      case Opc::ADD: return *l + *r;
+      case Opc::SHL: return *r >= 64 ? 0 : *l << *r;
+      case Opc::SHR: return *r >= 64 ? 0 : *l >> *r;
+      default:       return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+// Lift `code` at 0x1000 and slice `reg` at the end of the entry block.
+dragon::slice::Expr sliceEntry(dragon::Architecture arch,
+                               const std::vector<std::uint8_t> &code,
+                               const dragon::ignil::Reg &reg) {
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(arch, cfg);
+  dragon::Graph g{arch, cfg};
+  dis.disassemble(code, 0x1000, g);
+  return dragon::BackwardSlicer{5}.slice(dragon::ignil::Value{reg}, 0x1000, g);
+}
+
+const std::vector<std::uint8_t> kMovRax12345678 = {0x48, 0xc7, 0xc0, 0x78,
+                                                   0x56, 0x34, 0x12};
+
+std::vector<std::uint8_t> withRaxPrefix(std::vector<std::uint8_t> tail) {
+  std::vector<std::uint8_t> code = kMovRax12345678;
+  code.insert(code.end(), tail.begin(), tail.end());
+  code.push_back(0xc3); // ret
+  return code;
+}
+
+} // namespace
+
+TEST_CASE("BackwardSlicer - sub-register writes define the full register",
+          "[slicer][ignil]") {
+  using dragon::Architecture;
+  struct Case {
+    const char *what;
+    std::vector<std::uint8_t> tail;
+    std::uint64_t rax;
+  };
+  const Case cases[] = {
+          {"mov eax, 5 (zero-extends)", {0xb8, 0x05, 0x00, 0x00, 0x00}, 0x5},
+          {"mov ax, 5 (merges)", {0x66, 0xb8, 0x05, 0x00}, 0x12340005},
+          {"mov al, 5 (merges)", {0xb0, 0x05}, 0x12345605},
+          {"mov ah, 0x99 (merges byte 1)", {0xb4, 0x99}, 0x12349978},
+          {"mov al, 5; mov ah, 0x99", {0xb0, 0x05, 0xb4, 0x99}, 0x12349905},
+  };
+  for (const Case &c: cases) {
+    INFO(c.what);
+    auto e = sliceEntry(Architecture::X86_64, withRaxPrefix(c.tail), x86::RAX);
+    INFO(dragon::slice::toString(e));
+    auto v = evalConst(e);
+    REQUIRE(v.has_value());
+    CHECK(*v == c.rax);
+  }
+}
+
+TEST_CASE("BackwardSlicer - narrow reads of a wider write", "[slicer][ignil]") {
+  using dragon::Architecture;
+  const auto code = withRaxPrefix({});
+  struct Case {
+    dragon::ignil::Reg reg;
+    std::uint64_t value;
+  };
+  const Case cases[] = {{x86::EAX, 0x12345678},
+                        {x86::AX, 0x5678},
+                        {x86::AL, 0x78},
+                        {x86::AH, 0x56}};
+  for (const Case &c: cases) {
+    INFO(c.reg.name);
+    auto e = sliceEntry(Architecture::X86_64, code, c.reg);
+    INFO(dragon::slice::toString(e));
+    auto v = evalConst(e);
+    REQUIRE(v.has_value());
+    CHECK(*v == c.value);
+  }
+}
+
+TEST_CASE("BackwardSlicer - partial write over an unknown register stays "
+          "symbolic",
+          "[slicer][ignil]") {
+  // mov al, 5 ; ret - the upper 56 bits of RAX are the caller's.
+  auto e = sliceEntry(dragon::Architecture::X86_64, {0xb0, 0x05, 0xc3},
+                      x86::RAX);
+  INFO(dragon::slice::toString(e));
+  CHECK_FALSE(evalConst(e).has_value());
+  CHECK(dragon::slice::toString(e).find("RAX") != std::string::npos);
+}
+
+TEST_CASE("BackwardSlicer - AArch64 W write zero-extends into X",
+          "[slicer][ignil]") {
+  // movn x0, #0 (x0 = -1) ; mov w0, #5 ; ret
+  const std::vector<std::uint8_t> code = {0x00, 0x00, 0x80, 0x92, //
+                                          0xa0, 0x00, 0x80, 0x52, //
+                                          0xc0, 0x03, 0x5f, 0xd6};
+  auto e = sliceEntry(dragon::Architecture::ARM64, code,
+                      dragon::ignil::Reg{dragon::arm::X0.offset, 64, "X0"});
+  INFO(dragon::slice::toString(e));
+  auto v = evalConst(e);
+  REQUIRE(v.has_value());
+  CHECK(*v == 5);
 }

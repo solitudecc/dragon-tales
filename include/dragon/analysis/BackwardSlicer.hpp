@@ -20,6 +20,11 @@ class Graph;
 /// than one predecessor - join nodes - are not crossed: the Reg is
 /// returned as SymReg (unknown).
 ///
+/// Registers alias by byte, as in the IGNIL register space: the definition of
+/// RAX is the latest write to RAX, EAX, AX, AL or AH. A 32-bit write zeroes
+/// the rest of its parent (EAX -> RAX, W0 -> X0); an 8/16-bit write is merged
+/// into the value the register had before it.
+///
 /// The depth parameter caps the number of inter-block steps, so the
 /// search terminates in bounded time even for deep chains.
 class BackwardSlicer {
@@ -45,6 +50,13 @@ class BackwardSlicer {
                                        const ignil::Block &block, int beforeIdx,
                                        const Graph &graph, const PredMap &preds,
                                        int depth) const;
+
+  // Resolve register `r` before ops[beforeIdx], honouring sub-register
+  // aliasing (a write to EAX/AL/AH is a definition of RAX too).
+  [[nodiscard]] slice::Expr sliceReg(const ignil::Reg &r,
+                                     const ignil::Block &block, int beforeIdx,
+                                     const Graph &graph, const PredMap &preds,
+                                     int depth) const;
 
   // Turn the op that defines a value into a SliceExpr by recursively slicing
   // each source operand.
