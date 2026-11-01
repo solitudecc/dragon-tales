@@ -467,7 +467,6 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"SHLD64rri8", &X86IGNILLifter::opShld64rri8_},
           {"SHRD64rrCL", &X86IGNILLifter::opShrd64rrCL_},
           {"SHRD64rri8", &X86IGNILLifter::opShrd64rri8_},
-          {"PXORrr", &X86IGNILLifter::opPxorRR_},
           {"CVTSI2SDrr_Int", &X86IGNILLifter::opCvtsi2sd32_},
           {"CVTSI642SDrr_Int", &X86IGNILLifter::opCvtsi2sd64_},
           {"CVTTSD2SIrr_Int", &X86IGNILLifter::opCvttsd2si32_},
@@ -1174,8 +1173,6 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftOpaque(addr, out, tempId, ignil::OpaqueKind::RDTSC);
   else if (opc == opRdtscp_)
     liftOpaque(addr, out, tempId, ignil::OpaqueKind::RDTSCP);
-  else if (opc == opPxorRR_)
-    liftXor(*mc, addr, out, tempId);
   else if (opc == opCvtsi2sd32_ || opc == opCvtsi2sd64_)
     liftCvtsi2sd(*mc, addr, out, tempId);
   else if (opc == opCvttsd2si32_ || opc == opCvttsd2si64_)

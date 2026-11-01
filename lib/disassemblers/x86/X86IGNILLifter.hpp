@@ -807,7 +807,6 @@ class X86IGNILLifter {
   // and lift to UNDEF (found via symbolic-execution differential testing).
   std::unordered_map<unsigned, unsigned> revToBase_;
 
-  unsigned opPxorRR_{};
   unsigned opCvtsi2sd32_{}, opCvtsi2sd64_{};
   unsigned opCvttsd2si32_{}, opCvttsd2si64_{};
   unsigned opAddsd_{}, opSubsd_{}, opMulsd_{}, opMulsdMem_{};

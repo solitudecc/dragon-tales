@@ -2657,3 +2657,30 @@ TEST_CASE("X86 IGNIL lifting - comisd sets ZF/PF/CF from an IEEE compare",
   }
 }
 #endif // DRAGON_WITH_Z3
+
+#ifdef DRAGON_WITH_Z3
+// PXOR was dispatched to the integer XOR lifter, which sets flags - after
+// `pxor xmm1, xmm1` ZF=1, PF=1, CF=OF=0 clobbered whatever a following jcc
+// tested. PXOR (like every SSE logic op) affects no flags. Found by the
+// real-block Unicorn difftest on an x86-64 Lua build.
+TEST_CASE("X86 IGNIL lifting - pxor leaves the flags alone",
+          "[ignil][x86][x86_64][sse]") {
+  const dragon::ignil::Reg xmm1{dragon::x86::kOffXMM0 + 8, 64, "XMM1"};
+  dragon::ignil::SymbolicExecutor ex;
+  std::uint64_t target = 0;
+  runOne({0x66, 0x0f, 0xef, 0xc9}, // pxor xmm1, xmm1
+         [&](dragon::ignil::SymbolicExecutor &e) {
+           e.setRegister(xmm1, 0x1234);
+           e.setRegister(x86r::CF, 1);
+           e.setRegister(x86r::ZF, 0);
+           e.setRegister(x86r::PF, 0);
+           e.setRegister(x86r::OF, 1);
+         },
+         ex, target);
+  CHECK(ex.evaluate(ex.readRegister(xmm1)) == 0);
+  CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == 1);
+  CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == 0);
+  CHECK(ex.evaluate(ex.readRegister(x86r::PF)) == 0);
+  CHECK(ex.evaluate(ex.readRegister(x86r::OF)) == 1);
+}
+#endif // DRAGON_WITH_Z3
