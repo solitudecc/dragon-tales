@@ -15,6 +15,7 @@
 #endif
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 #include <unordered_set>
@@ -97,8 +98,11 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
   // resolveIndirectJumps): a free-form slice or Z3 guess can land
   // mid-instruction or inside data the sweep decoded as code.
 
-  commitPending(graph, blockStarts, fnStarts);
-  liftPendingBlocks(graph);
+  {
+    LiftState liftState;
+    liftPendingBlocks(graph, liftState,
+                      commitPending(graph, blockStarts, fnStarts));
+  }
   resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts, fnStarts);
 
   return true;
@@ -287,7 +291,7 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
 // Fixpoint helpers
 // =============================================================================
 
-void dragon::x86::X86Analysis::commitPending(
+std::vector<std::uint64_t> dragon::x86::X86Analysis::commitPending(
         Graph &graph, const std::unordered_set<std::uint64_t> &blockStarts,
         const std::unordered_set<std::uint64_t> &fnStarts) const {
   // Keep the per-instruction flags in step with the Graph's sets: call
@@ -295,7 +299,10 @@ void dragon::x86::X86Analysis::commitPending(
   // instruction already at that address being flagged, and the flags are
   // what Instruction::isBlockStart()/isFunctionStart() report through the
   // C and Python APIs.
+  std::vector<std::uint64_t> added;
   for (std::uint64_t addr: blockStarts) {
+    if (!graph.isValidBlock(addr))
+      added.push_back(addr);
     graph.addBlock(addr);
     if (Instruction *insn = graph.get(addr))
       insn->setBlockStart(true);
@@ -305,6 +312,7 @@ void dragon::x86::X86Analysis::commitPending(
     if (Instruction *insn = graph.get(addr))
       insn->setFunctionStart(true);
   }
+  return added;
 }
 
 namespace {
@@ -321,20 +329,48 @@ bool coversMoreThan(const dragon::ignil::Block &ib,
 }
 } // namespace
 
-void dragon::x86::X86Analysis::liftPendingBlocks(Graph &graph) const {
-  for (BasicBlock &block: graph.blocks()) {
-    ignil::Block *existing = graph.getIGNILBlock(block.startAddress());
-    if (existing && !coversMoreThan(*existing, block))
-      continue;
+void dragon::x86::X86Analysis::liftPendingBlocks(
+        Graph &graph, LiftState &state,
+        const std::vector<std::uint64_t> &newStarts) const {
+  auto lift = [&](std::uint64_t addr, bool force) {
+    const BasicBlock block{&graph, addr};
+    ignil::Block *existing = graph.getIGNILBlock(addr);
+    if (!block.isValid()) {
+      if (!existing)
+        state.lacking.insert(addr);
+      return;
+    }
+    state.lacking.erase(addr);
+    if (existing && !force && !coversMoreThan(*existing, block))
+      return;
     auto ib = x86IgnilLifter_->liftBlock(block, graph);
     logger_.log("{} block @ 0x{:x} -> {} IGNIL ops",
-                existing ? "Re-lifted (split)" : "Lifted",
-                block.startAddress(), ib.size());
+                existing ? "Re-lifted (split)" : "Lifted", addr, ib.size());
     if (existing)
       *existing = std::move(ib); // in place: borrowed pointers stay valid
     else
       graph.addIGNILBlock(std::move(ib));
+  };
+
+  if (!state.initialized) {
+    state.initialized = true;
+    for (std::uint64_t addr: graph.validBlockAddresses())
+      lift(addr, false);
+    return;
   }
+  std::set<std::uint64_t> todo(state.lacking.begin(), state.lacking.end());
+  const auto &valid = graph.validBlockAddresses();
+  for (std::uint64_t s: newStarts) {
+    todo.insert(s);
+    // The block below a new start may have been split by it - or, having
+    // ended where the decoded code ended, now runs on into it.
+    auto it = valid.lower_bound(s);
+    if (it != valid.begin())
+      todo.insert(*std::prev(it));
+  }
+  const std::set<std::uint64_t> fresh(newStarts.begin(), newStarts.end());
+  for (std::uint64_t addr: todo)
+    lift(addr, !fresh.contains(addr) && !state.lacking.contains(addr));
 }
 
 std::vector<std::uint64_t>
@@ -545,18 +581,28 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
     std::map<std::uint64_t, std::set<std::uint64_t>> candidates;
     bool restart = false;
 
+    LiftState liftState; // per tentative graph: first round lifts it all
     for (;;) {
-      commitPending(tentative, starts, functions);
-      liftPendingBlocks(tentative);
+      liftPendingBlocks(tentative, liftState,
+                        commitPending(tentative, starts, functions));
       Graph cfg = reachableGraph(tentative, hints);
       // cfg is not modified in this round (new edges go to `tentative`), so
       // one predecessor map serves every slice taken in it.
       const auto cfgPreds = BackwardSlicer::predecessors(cfg);
+      // Views only for blocks whose IGNIL ends in an indirect JMP (the only
+      // ones targetsFor can resolve), not for every block every round.
       std::map<std::uint64_t, BasicBlock> jumps;
-      for (const auto &block: cfg.blocks())
+      for (std::uint64_t start: cfg.validBlockAddresses()) {
+        const auto *ib = cfg.getIGNILBlock(start);
+        if (!ib || ib->empty() || ib->ops().back().opcode != ignil::Opcode::JMP ||
+            ib->ops().back().srcs.empty() ||
+            std::holds_alternative<ignil::Const>(ib->ops().back().srcs[0]))
+          continue;
+        const BasicBlock block{&cfg, start};
         if (const auto *term = block.terminator();
             term && term->isJump() && term->hasIndirectTarget())
           jumps.emplace(term->address(), block);
+      }
 
       // Validate *all* hypotheses after every expansion, including ones
       // resolved in earlier rounds: another table can expose a new incoming

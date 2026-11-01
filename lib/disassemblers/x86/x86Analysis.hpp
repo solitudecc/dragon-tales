@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <set>
 #include <span>
 #include <unordered_set>
 #include <vector>
@@ -70,12 +71,23 @@ class X86Analysis {
           std::unordered_set<std::uint64_t> &functionStarts) const;
 
   /// Flush all pending block and function start addresses into the graph.
-  void commitPending(Graph &graph,
+  std::vector<std::uint64_t> commitPending(Graph &graph,
                      const std::unordered_set<std::uint64_t> &blockStarts,
                      const std::unordered_set<std::uint64_t> &fnStarts) const;
 
   /// Lift IGNIL for every block in the graph that has not been lifted yet.
-  void liftPendingBlocks(Graph &graph) const;
+  // Which blocks still need (re-)lifting. The first call lifts every block;
+  // later calls look only at the block starts committed since, the block
+  // just below each (split by it, or extended up to it after ending at the
+  // end of the decoded code), and blocks that had no valid view before.
+  // Rebuilding every BasicBlock view each round was quadratic on large
+  // binaries (minutes for a 7 MB python3).
+  struct LiftState {
+    bool initialized = false;
+    std::set<std::uint64_t> lacking; // valid starts without IGNIL
+  };
+  void liftPendingBlocks(Graph &graph, LiftState &state,
+                         const std::vector<std::uint64_t> &newStarts) const;
 
   /// Collect candidate jump targets from a backward-slice result.
   /// Returns the constant directly if the slicer resolved it; otherwise

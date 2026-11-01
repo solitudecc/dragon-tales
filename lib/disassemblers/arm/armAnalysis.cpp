@@ -16,6 +16,7 @@
 
 // C++ headers
 #include <algorithm>
+#include <iterator>
 #include <optional>
 #include <unordered_set>
 #include <vector>
@@ -96,10 +97,11 @@ bool dragon::arm::ARMAnalysis::analyze(std::span<const std::uint8_t> bytes,
   // mid-instruction or inside data the sweep decoded as code.
 
   bool changed = true;
+  LiftState liftState;
   while (changed) {
     changed = false;
-    commitPending(graph, blockStarts, fnStarts);
-    liftPendingBlocks(graph);
+    const auto added = commitPending(graph, blockStarts, fnStarts);
+    liftPendingBlocks(graph, liftState, added);
     if (resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts,
                              fnStarts)) {
       changed = true;
@@ -285,7 +287,7 @@ void dragon::arm::ARMAnalysis::discoverFunctionStarts(
 // Fixpoint helpers
 // =============================================================================
 
-void dragon::arm::ARMAnalysis::commitPending(
+std::vector<std::uint64_t> dragon::arm::ARMAnalysis::commitPending(
         Graph &graph, const std::unordered_set<std::uint64_t> &blockStarts,
         const std::unordered_set<std::uint64_t> &fnStarts) const {
   // Keep the per-instruction flags in step with the Graph's sets: call
@@ -293,7 +295,10 @@ void dragon::arm::ARMAnalysis::commitPending(
   // instruction already at that address being flagged, and the flags are
   // what Instruction::isBlockStart()/isFunctionStart() report through the
   // C and Python APIs.
+  std::vector<std::uint64_t> added;
   for (std::uint64_t addr: blockStarts) {
+    if (!graph.isValidBlock(addr))
+      added.push_back(addr);
     graph.addBlock(addr);
     if (Instruction *insn = graph.get(addr))
       insn->setBlockStart(true);
@@ -303,6 +308,7 @@ void dragon::arm::ARMAnalysis::commitPending(
     if (Instruction *insn = graph.get(addr))
       insn->setFunctionStart(true);
   }
+  return added;
 }
 
 namespace {
@@ -319,20 +325,48 @@ bool coversMoreThan(const dragon::ignil::Block &ib,
 }
 } // namespace
 
-void dragon::arm::ARMAnalysis::liftPendingBlocks(Graph &graph) const {
-  for (BasicBlock &block: graph.blocks()) {
-    ignil::Block *existing = graph.getIGNILBlock(block.startAddress());
-    if (existing && !coversMoreThan(*existing, block))
-      continue;
+void dragon::arm::ARMAnalysis::liftPendingBlocks(
+        Graph &graph, LiftState &state,
+        const std::vector<std::uint64_t> &newStarts) const {
+  auto lift = [&](std::uint64_t addr, bool force) {
+    const BasicBlock block{&graph, addr};
+    ignil::Block *existing = graph.getIGNILBlock(addr);
+    if (!block.isValid()) {
+      if (!existing)
+        state.lacking.insert(addr);
+      return;
+    }
+    state.lacking.erase(addr);
+    if (existing && !force && !coversMoreThan(*existing, block))
+      return;
     auto ib = armIgnilLifter_->liftBlock(block, graph);
     logger_.log("{} block @ 0x{:x} -> {} IGNIL ops",
-                existing ? "Re-lifted (split)" : "Lifted",
-                block.startAddress(), ib.size());
+                existing ? "Re-lifted (split)" : "Lifted", addr, ib.size());
     if (existing)
       *existing = std::move(ib); // in place: borrowed pointers stay valid
     else
       graph.addIGNILBlock(std::move(ib));
+  };
+
+  if (!state.initialized) {
+    state.initialized = true;
+    for (std::uint64_t addr: graph.validBlockAddresses())
+      lift(addr, false);
+    return;
   }
+  std::set<std::uint64_t> todo(state.lacking.begin(), state.lacking.end());
+  const auto &valid = graph.validBlockAddresses();
+  for (std::uint64_t s: newStarts) {
+    todo.insert(s);
+    // The block below a new start may have been split by it - or, having
+    // ended where the decoded code ended, now runs on into it.
+    auto it = valid.lower_bound(s);
+    if (it != valid.begin())
+      todo.insert(*std::prev(it));
+  }
+  const std::set<std::uint64_t> fresh(newStarts.begin(), newStarts.end());
+  for (std::uint64_t addr: todo)
+    lift(addr, !fresh.contains(addr) && !state.lacking.contains(addr));
 }
 
 std::vector<std::uint64_t>
@@ -436,9 +470,20 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
     return *preds;
   };
 
-  for (const auto &block: graph.blocks()) {
-    const auto *ignilBlock = graph.getIGNILBlock(block.startAddress());
+  // Only blocks whose IGNIL ends in an indirect JMP get a BasicBlock view:
+  // building one for every block, every round, dominated large binaries.
+  const std::vector<std::uint64_t> starts(graph.validBlockAddresses().begin(),
+                                          graph.validBlockAddresses().end());
+  for (std::uint64_t start: starts) {
+    const auto *ignilBlock = graph.getIGNILBlock(start);
     if (!ignilBlock || ignilBlock->ops().empty())
+      continue;
+    const auto &tail = ignilBlock->ops().back();
+    if (tail.opcode != ignil::Opcode::JMP || tail.srcs.empty() ||
+        std::holds_alternative<ignil::Const>(tail.srcs[0]))
+      continue;
+    const BasicBlock block{&graph, start};
+    if (!block.isValid())
       continue;
 
     const auto &last = ignilBlock->ops().back();

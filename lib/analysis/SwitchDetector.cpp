@@ -280,13 +280,27 @@ static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
 // The guard must be the only predecessor: another incoming edge (including
 // a self-edge) can bypass it with an unchecked index. A function entry can
 // also be entered without executing a predecessor guard.
-static const ignil::Block *findCJMPPredecessor(std::uint64_t blockAddr,
-                                               const Graph &graph) {
+static const ignil::Block *
+findCJMPPredecessor(std::uint64_t blockAddr, const Graph &graph,
+                    const BackwardSlicer::Predecessors *predecessors) {
   if (graph.isValidFunction(blockAddr))
     return nullptr;
   const ignil::Block *found = nullptr;
 
-  for (const BasicBlock &b: graph.blocks()) {
+  // The blocks with blockAddr as a successor. With the caller's predecessor
+  // map only those are visited; scanning every block of the graph for each
+  // candidate jump dominated the analysis of large binaries (libcrypto).
+  std::vector<BasicBlock> candidates;
+  if (predecessors) {
+    if (auto it = predecessors->find(blockAddr); it != predecessors->end())
+      for (std::uint64_t p: it->second)
+        if (BasicBlock b{&graph, p}; b.isValid())
+          candidates.push_back(std::move(b));
+  } else {
+    candidates = graph.blocks();
+  }
+
+  for (const BasicBlock &b: candidates) {
     if (!b.successors().count(blockAddr))
       continue;
 
@@ -450,7 +464,8 @@ std::optional<SwitchCandidate> detectPossibleSwitch(
   // The guard block is the dispatch block's predecessor, so its condition is
   // sliced with one block less than the jump target was (sliceDepth): the
   // index then reads the same in both slices.
-  if (const ignil::Block *predBlock = findCJMPPredecessor(blockAddr, graph)) {
+  if (const ignil::Block *predBlock =
+              findCJMPPredecessor(blockAddr, graph, predecessors)) {
     const ignil::Op &cjmp = predBlock->ops().back();
     BackwardSlicer slicer{std::max(sliceDepth - 1, 0)};
     Expr condExpr =
