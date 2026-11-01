@@ -121,6 +121,8 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `truth_rel.py BIN OBJDUMP STRATEGY` | x86-64 PIC / AArch64 relative tables vs the image. |
 | `fstarts.py BIN` | Classifies function starts: symbol / inside a symbol body (false) / other. |
 | `unlifted.py BIN [N]` | Census of unlifted instruction *forms* (mnemonic + operand shape). |
+| `corpus_check.py DIR` | Every binary of a directory, one subprocess each: objdump agreement, empty symbol functions, blocks without IGNIL, edges to undecoded addresses, LLVM lift + `opt -passes=verify`, time. Corpus on the VM: `~/bench/corpus` (sqlite/zlib/Lua × gcc aarch64 -O0/2/3/s, mingw i686/x64 -O0/2/s, stripped, system bash/libz; `~/bench/build_corpus.sh`). |
+| `realblock_diff.py BIN [BLOCKS] [TRIALS]` | Real basic blocks of a binary vs Unicorn from random states (x86-64/i386/AArch64). Expected: only the deliberate x86 OF difference after multi-bit shifts (see `emitGatedShiftFlags`). Unicorn truncates addresses >= 2^47; the script keeps values below that and compares only writes into known regions. |
 
 The `[join-width]` C++ tests cover partial join knowledge on x86-64/AArch64,
 guarded dispatch and 240 Unicorn loop executions. A narrow guard alone never
@@ -148,7 +150,7 @@ Numbers on the Lua builds (linear sweep unless noted):
 | objdump agreement | 100% | 100% | 100% |
 | functions without blocks | 0 | 2 | 0 |
 | unlifted instructions | 3.35% (x87 only) | 0.73% | 1.97% (FP only) |
-| jump tables verified / wrong | 43 of 50 / 0 (4 guardless dispatches + 1 ambiguous reload unresolved; 2 unverified) | 33 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
+| jump tables verified / wrong | 46 of 50 / 0 (4 guardless opcode dispatches) | 36 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
 | LLVM lift | all functions | all | all |
 
 The x86-64 relative-table script now follows the base register used by
@@ -163,8 +165,23 @@ table uses RBX. The slicer queries the upper bytes independently and retains
 paths are never equated. Explicit entry hints seed speculative reachability
 (plus direct callees); heuristic function starts after padded RETs can actually be cases
 and must not inject independent unknown register states into that proof.
-The Lua x86-64 linear analysis currently takes about 15 s versus 6 s before
-speculation on this VM; repeated slicing/revalidation is a profiling target.
+Performance: slices share one predecessor map per resolution round (x86)
+or until the graph changes (ARM). Lua x86-64 analyses in ~2.4 s, sqlite
+aarch64 -O3 in ~7 s, bash in ~4 s. What is left is std::map/set lookups in
+BasicBlock construction (Graph::get / isValidBlock). The slowest corpus
+samples are x86 sqlite (x86-64 -O2 ~36-40 s, i686 -O2 ~18-22 s): the
+speculative x86 resolver copies the graph twice per round
+(copyGraph/reachableGraph) - the next profiling target.
+
+`corpus_check.py ~/bench/corpus` is clean on all 34 samples except a known
+false alarm on the x86-64 Lua builds: 2 "blocks without IGNIL" and 2
+"objdump-only" addresses are constants embedded in .text before x87 code.
+
+Corpus findings fixed in this round: PXOR set flags; adds/subs (ARM) and
+add/sub (x86) computed flags from the result when the destination is also
+a source; LLVM IR lacked a dedicated entry block and terminators after
+traps; a store to disjoint bytes of the same object ended a load's
+snapshot. Every lifted module of the corpus verifies.
 
 Slice values carry producing-op/program-point identity, including a bounded
 loop context. LOADs share values only for the same event or a proven equal
@@ -184,19 +201,27 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 ## 6. Backlog (suggested order)
 
 1. **Stack memory tracking in the slicer** (store→load through `[sp, #N]`):
-   the last AArch64 table reloads its base from the stack.
-2. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
+   the last AArch64 table reloads its base from the stack. The disjoint-store
+   rule in `memoryState` (same base value + non-overlapping constant offsets)
+   is the starting point: a store that *does* match the load could forward
+   its value.
+2. **Function starts for stripped binaries**: a stripped PIE reaches `main`
+   only through the GOT, so recursive traversal of the corpus' stripped
+   aarch64 sqlite decodes 48 instructions. Seed entries from `.eh_frame`
+   FDEs (ELF), `.pdata` (PE x64), `.init_array`, and relocations pointing
+   into code.
+3. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
    x86 128-bit stores (`movups [m], xmm` — needs full 128-bit XMM modelling),
    `cmpsd`/`cmpnlesd`, `punpck*`, `pshufd`, `bsr`, `tzcnt`, `popcnt`, `lzcnt`;
    AArch64 FP (`fmov`, `fcmp/fcmpe`, `scvtf`, `fcvtzs`, `frintm`, `ldr/str`
    of D/Q registers — note a 64-bit write to a V register must zero its upper
    half, which the current 32-bit-only zero-extension rule does not do),
    `clz`, `rbit`. Validate each with the difftests and add templates.
-3. Expose `AnalysisHints` and `callingConvention` through the C shim and
+4. Expose `AnalysisHints` and `callingConvention` through the C shim and
    Python (today only C++ and `disassembleImage` use them).
-4. Extend the speculative resolver to ARM when useful. Failed hypotheses remain
+5. Extend the speculative resolver to ARM when useful. Failed hypotheses remain
    unresolved; never publish partial target sets or skip the final recheck.
-5. Design questions, not bugs (ask the owner before changing): CALL/RET
+6. Design questions, not bugs (ask the owner before changing): CALL/RET
    abstraction; the loader marks defined `.symtab` globals of an executable
    (e.g. `__bss_start`) as exported.
 
