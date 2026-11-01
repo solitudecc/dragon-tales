@@ -554,10 +554,20 @@
   // armIGNILRegs.hpp), the same convention dragon_slicer_slice_reg uses.
   typedef struct {
       uint64_t table_base;    // base address of the jump table in the image
-      uint32_t entry_size;    // bytes per entry: 4 or 8
+      uint32_t entry_size;    // bytes per entry: 4 or 8 (pointers);
+                              // 1, 2, 4 or 8 (offsets, see relative)
       uint32_t num_cases;     // 0 means the bounds check was not found
       uint32_t index_reg_offset;
       uint8_t  index_reg_width;
+      // A table of offsets: case i is at
+      //   target_base + (ext(entry[i]) << entry_shift),
+      // ext = sign- (entry_signed) or zero-extension of the low entry_bits
+      // bits (0 = entry_size * 8). All zero for a table of pointers.
+      uint8_t  relative;
+      uint8_t  entry_shift;
+      uint8_t  entry_bits;
+      uint8_t  entry_signed;
+      uint64_t target_base;
   } dragon_switch_candidate_t;
 
   // Inspect a backward-slice result (typically from dragon_slicer_slice_reg

@@ -1073,16 +1073,27 @@ class SwitchCandidate:
     """
 
     def __init__(self, table_base, entry_size, num_cases,
-                 index_reg_offset, index_reg_width):
+                 index_reg_offset, index_reg_width, relative=False,
+                 target_base=0, entry_shift=0, entry_bits=0,
+                 entry_signed=False):
         self.table_base = table_base
         self.entry_size = entry_size
         self.num_cases = num_cases
         self.index_reg_offset = index_reg_offset
         self.index_reg_width = index_reg_width
+        # A table of offsets: case i is at
+        #   target_base + (ext(entry[i]) << entry_shift)
+        self.relative = relative
+        self.target_base = target_base
+        self.entry_shift = entry_shift
+        self.entry_bits = entry_bits
+        self.entry_signed = entry_signed
 
     def __repr__(self):
+        rel = (f' relative target_base=0x{self.target_base:x} '
+               f'shift={self.entry_shift}' if self.relative else '')
         return (f'<SwitchCandidate table_base=0x{self.table_base:x} '
-                f'entry_size={self.entry_size} num_cases={self.num_cases}>')
+                f'entry_size={self.entry_size} num_cases={self.num_cases}{rel}>')
 
 
 def detect_possible_switch(jump_target, block_addr, graph):
@@ -1110,7 +1121,10 @@ def detect_possible_switch(jump_target, block_addr, graph):
     if not matched:
         return None
     return SwitchCandidate(out.table_base, out.entry_size, out.num_cases,
-                            out.index_reg_offset, out.index_reg_width)
+                            out.index_reg_offset, out.index_reg_width,
+                            bool(out.relative), out.target_base,
+                            out.entry_shift, out.entry_bits,
+                            bool(out.entry_signed))
 
 
 def read_table_targets(candidate, data, base_addr):
@@ -1140,6 +1154,11 @@ def read_table_targets(candidate, data, base_addr):
     sw.num_cases = candidate.num_cases
     sw.index_reg_offset = candidate.index_reg_offset
     sw.index_reg_width = candidate.index_reg_width
+    sw.relative = 1 if candidate.relative else 0
+    sw.target_base = candidate.target_base
+    sw.entry_shift = candidate.entry_shift
+    sw.entry_bits = candidate.entry_bits
+    sw.entry_signed = 1 if candidate.entry_signed else 0
     ptr = lib.dragon_read_table_targets(sw, buf, len(data), base_addr, out_count)
     try:
         return [ptr[i] for i in range(out_count[0])]

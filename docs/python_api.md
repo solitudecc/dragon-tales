@@ -655,6 +655,12 @@ you already know the table's shape from other analysis.
 | Function | Returns | Notes |
 |---|---|---|
 | `detect_possible_switch(jump_target, block_addr, graph)` | `SwitchCandidate` or `None` | A returned candidate with `num_cases == 0` means the pattern matched but the bounds guard wasn't found |
+
+For a table of offsets (x86-64 PIC, AArch64 gcc) the candidate has
+`relative=True`; case *i* is at
+`target_base + (ext(entry[i]) << entry_shift)`, where `ext` sign-extends
+(`entry_signed`) or zero-extends the low `entry_bits` bits of the entry.
+`read_table_targets()` applies that.
 | `read_table_targets(candidate, data, base_addr)` | `list[int]` | Empty if `num_cases == 0` or the table falls outside `data` |
 
 Not every indirect jump is a jump table — GCC and Clang often lower a

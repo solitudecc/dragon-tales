@@ -1158,6 +1158,11 @@ int dragon_detect_possible_switch(const dragon_slice_expr_t *jump_target,
   out->num_cases = sw->numCases;
   out->index_reg_offset = sw->indexReg.offset;
   out->index_reg_width = sw->indexReg.width;
+  out->relative = sw->relative ? 1 : 0;
+  out->entry_shift = sw->entryShift;
+  out->entry_bits = sw->entryBits;
+  out->entry_signed = sw->entrySigned ? 1 : 0;
+  out->target_base = sw->targetBase;
   return 1;
 }
 
@@ -1172,6 +1177,11 @@ uint64_t *dragon_read_table_targets(const dragon_switch_candidate_t *sw,
   dragon::slice::SwitchCandidate candidate{
       sw->table_base, sw->entry_size, sw->num_cases,
       dragon::ignil::Reg{sw->index_reg_offset, sw->index_reg_width, ""}};
+  candidate.relative = sw->relative != 0;
+  candidate.targetBase = sw->target_base;
+  candidate.entryShift = sw->entry_shift;
+  candidate.entryBits = sw->entry_bits;
+  candidate.entrySigned = sw->entry_signed != 0;
   std::vector<std::uint64_t> targets = dragon::slice::readTableTargets(
       candidate, std::span<const std::uint8_t>(bytes, bytes_len), base_addr);
   if (out_count)

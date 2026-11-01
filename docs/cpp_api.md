@@ -1187,6 +1187,13 @@ Recognition is two-phase:
    register inside them (width 0 if the index is not a plain register).
    A second variable term (a base register, as in position-independent
    tables of relative offsets) is not matched.
+   Besides `LOAD(table)` (a table of pointers), a **table of offsets** is
+   recognised: `targetBase + (ext(LOAD(table)) << shift)`. That is what
+   position-independent x86-64 code (`movsxd rax, [rdx+rax*4]; add rax, rdx`)
+   and gcc on AArch64 (`ldrh w3, [x3, w20, uxtw #1]; adr x0, L; add x3, x0,
+   w3, sxth #2`) emit. `SwitchCandidate::relative` is then set, with
+   `targetBase`, `entryShift`, `entryBits` and `entrySigned` describing how an
+   entry becomes a target; entries may be 1, 2, 4 or 8 bytes.
 2. **Bounds extraction** — find the unique predecessor ending in a CJMP and
    slice its condition. Instead of matching a comparison shape (which differs
    per lifter and per `ja`/`jae`/`b.hi`), the condition is evaluated with the

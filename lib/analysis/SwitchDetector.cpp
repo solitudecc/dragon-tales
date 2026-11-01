@@ -320,44 +320,142 @@ static const ignil::Block *findCJMPPredecessor(std::uint64_t blockAddr,
 // Public API
 // =============================================================================
 
+// A table load: LOAD(base + index * scale [+ more constants]). The address is
+// matched as a sum of terms rather than one tree shape, so a hand-built
+// ADD(base, MUL(idx, scale)), the x86 lifter's ADD(ADD(0, SHL(idx, 3)), base)
+// and AArch64's ADD(ADD(adrp, lo12), SHL(ZEXT(W20), 1)) are all recognised.
+// A byte table has no scale term: the index is added as is.
+struct TableLoad {
+  std::uint64_t tableBase = 0;
+  std::uint64_t scale = 0;
+  const Expr *index = nullptr;
+};
+
+static std::optional<TableLoad> matchTableLoad(const Load &load) {
+  if (!load.addr)
+    return std::nullopt;
+  std::vector<const Expr *> terms;
+  flattenAdd(*load.addr, terms);
+  TableLoad t;
+  for (const Expr *term: terms) {
+    if (auto c = asConst(*term)) {
+      t.tableBase += *c;
+      continue;
+    }
+    if (t.index)
+      return std::nullopt; // a second variable term: a base register, etc.
+    const Expr *idx = nullptr;
+    std::uint64_t sc = 0;
+    if (asScaledIndex(*term, idx, sc)) {
+      t.index = idx;
+      t.scale = sc;
+    } else {
+      t.index = term;
+      t.scale = 1;
+    }
+  }
+  if (!t.index || t.tableBase == 0)
+    return std::nullopt;
+  return t;
+}
+
+// targetBase + (ext(LOAD(table)) << shift): the dispatch of a table of
+// offsets. Fills the relative fields of `sw` and returns the table load.
+static const Load *matchRelativeTarget(const Expr &jumpTarget,
+                                       SwitchCandidate &sw) {
+  std::vector<const Expr *> terms;
+  flattenAdd(jumpTarget, terms);
+  std::uint64_t base = 0;
+  const Expr *entry = nullptr;
+  for (const Expr *t: terms) {
+    if (auto c = asConst(*t)) {
+      base += *c;
+      continue;
+    }
+    if (entry)
+      return nullptr;
+    entry = t;
+  }
+  if (!entry || base == 0)
+    return nullptr;
+
+  unsigned shift = 0;
+  if (const auto *b = std::get_if<BinOp>(&entry->data);
+      b && b->op == Opc::SHL && b->left && b->right) {
+    auto k = asConst(*b->right);
+    if (!k || *k > 4)
+      return nullptr;
+    shift = static_cast<unsigned>(*k);
+    entry = b->left.get();
+  }
+
+  // Width changes between the load and the add, outermost first.
+  std::vector<const UnaryOp *> chain;
+  while (const auto *u = std::get_if<UnaryOp>(&entry->data)) {
+    if (u->op != Opc::ZEXT && u->op != Opc::SEXT && u->op != Opc::TRUNC)
+      return nullptr;
+    chain.push_back(u);
+    entry = u->operand.get();
+    if (!entry)
+      return nullptr;
+  }
+  const auto *load = std::get_if<Load>(&entry->data);
+  if (!load)
+    return nullptr;
+
+  // Replay them from the load outwards: the entry's value is its low `bits`
+  // bits, extended as the extension applied at that width says.
+  unsigned bits = load->width;
+  bool isSigned = false;
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+    const UnaryOp &u = **it;
+    if (u.op == Opc::TRUNC) {
+      bits = std::min<unsigned>(bits, u.resultWidth);
+    } else if (exprWidth(*u.operand) <= bits) {
+      bits = std::min(bits, exprWidth(*u.operand));
+      isSigned = u.op == Opc::SEXT;
+    }
+  }
+
+  sw.relative = true;
+  sw.targetBase = base;
+  sw.entryShift = static_cast<std::uint8_t>(shift);
+  sw.entryBits = static_cast<std::uint8_t>(bits);
+  sw.entrySigned = isSigned;
+  return load;
+}
+
 std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
                                                     std::uint64_t blockAddr,
                                                     const Graph &graph) {
-  // Phase 1: the target is LOAD(base + index * scale [+ more constants]).
-  // The address is matched as a sum of terms rather than one tree shape, so
-  // both a hand-built ADD(base, MUL(idx, scale)) and the x86 lifter's
-  // ADD(ADD(0, SHL(idx, 3)), base) are recognised.
-  const auto *load = std::get_if<Load>(&jumpTarget.data);
-  if (!load || !load->addr)
+  // Phase 1: the target is LOAD(table) - a table of pointers - or
+  // targetBase + (ext(LOAD(table)) << shift) - a table of offsets.
+  SwitchCandidate sw{0, 0, 0, ignil::Reg{0, 0, ""}};
+  const Load *load = std::get_if<Load>(&jumpTarget.data);
+  if (!load)
+    load = matchRelativeTarget(jumpTarget, sw);
+  if (!load)
+    return std::nullopt;
+  auto table = matchTableLoad(*load);
+  if (!table)
     return std::nullopt;
 
-  std::vector<const Expr *> terms;
-  flattenAdd(*load->addr, terms);
-  std::uint64_t tableBase = 0, scale = 0;
-  const Expr *index = nullptr;
-  for (const Expr *t: terms) {
-    if (auto c = asConst(*t)) {
-      tableBase += *c;
-      continue;
-    }
-    const Expr *idx = nullptr;
-    std::uint64_t sc = 0;
-    if (index || !asScaledIndex(*t, idx, sc))
-      return std::nullopt; // a second variable term: a base register, etc.
-    index = idx;
-    scale = sc;
+  if (sw.relative) {
+    // An entry is one load wide and the index steps by exactly one entry.
+    const std::uint64_t entryBytes = load->width / 8;
+    if (table->scale != entryBytes ||
+        (entryBytes != 1 && entryBytes != 2 && entryBytes != 4 &&
+         entryBytes != 8))
+      return std::nullopt;
+  } else if (table->scale != 4 && table->scale != 8) {
+    // Only 4-byte and 8-byte pointer tables.
+    return std::nullopt;
   }
-  if (!index || tableBase == 0)
-    return std::nullopt;
-
-  // Only 4-byte and 8-byte pointer tables are supported.
-  if (scale != 4 && scale != 8)
-    return std::nullopt;
+  sw.tableBase = table->tableBase;
+  sw.entrySize = static_cast<std::uint32_t>(table->scale);
 
   unsigned indexBits = 64;
-  const Expr &core = stripResize(*index, indexBits);
-  SwitchCandidate sw{tableBase, static_cast<std::uint32_t>(scale), 0,
-                     ignil::Reg{0, 0, ""}};
+  const Expr &core = stripResize(*table->index, indexBits);
   if (const auto *r = std::get_if<SymReg>(&core.data))
     sw.indexReg = r->reg;
 
@@ -384,26 +482,38 @@ std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
 std::vector<std::uint64_t> readTableTargets(const SwitchCandidate &sw,
                                             std::span<const std::uint8_t> bytes,
                                             std::uint64_t baseAddr) {
-  if (sw.numCases == 0)
+  if (sw.numCases == 0 || sw.entrySize == 0 || sw.entrySize > 8)
     return {};
   if (sw.tableBase < baseAddr)
     return {};
 
-  const std::size_t tableOffset =
-          sw.tableBase - baseAddr;
-  const std::size_t tableBytes = sw.numCases * sw.entrySize;
+  const std::size_t tableOffset = sw.tableBase - baseAddr;
+  const std::size_t tableBytes =
+          std::size_t{sw.numCases} * sw.entrySize;
 
   if (tableOffset >= bytes.size() || tableBytes > bytes.size() - tableOffset)
     return {};
+
+  const unsigned bits =
+          sw.entryBits ? std::min<unsigned>(sw.entryBits, sw.entrySize * 8)
+                       : sw.entrySize * 8;
 
   std::vector<std::uint64_t> targets;
   targets.reserve(sw.numCases);
 
   for (std::uint32_t i = 0; i < sw.numCases; ++i) {
-    const std::size_t offset = tableOffset + i * sw.entrySize;
-    std::uint64_t target = 0;
-    std::memcpy(&target, bytes.data() + offset, sw.entrySize);
-    targets.push_back(target);
+    const std::size_t offset = tableOffset + std::size_t{i} * sw.entrySize;
+    std::uint64_t entry = 0;
+    for (unsigned b = 0; b < sw.entrySize; ++b) // little-endian
+      entry |= std::uint64_t{bytes[offset + b]} << (8 * b);
+    if (!sw.relative) {
+      targets.push_back(entry);
+      continue;
+    }
+    entry &= lowMask(bits);
+    if (sw.entrySigned && bits < 64 && (entry >> (bits - 1)) & 1)
+      entry |= ~lowMask(bits);
+    targets.push_back(sw.targetBase + (entry << sw.entryShift));
   }
 
   return targets;

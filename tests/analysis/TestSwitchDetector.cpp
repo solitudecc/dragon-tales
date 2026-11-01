@@ -4,6 +4,7 @@
 #include <dragon/Configuration.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include <dragon/analysis/SwitchDetector.hpp>
+#include <dragon/assembler/Assembler.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/disassembler/Instruction.hpp>
@@ -505,4 +506,109 @@ TEST_CASE("SwitchDetector - code reachable from a case is decoded too",
     INFO("empty block 0x" << std::hex << b);
     CHECK(g.get(b) != nullptr);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Tables of offsets.
+//
+// Position-independent x86-64 code and gcc's AArch64 output dispatch through
+// a table of signed offsets, not pointers - none of them was recognised (0 of
+// 34 tables in an x86-64 mingw Lua build, 0 of 8 in an aarch64 gcc one).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::set<std::uint64_t> jumpSuccessors(dragon::Architecture arch,
+                                       const std::vector<std::uint8_t> &bytes,
+                                       std::uint64_t jumpBlock) {
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(arch, cfg);
+  dragon::Graph g{arch, cfg};
+  dis.disassemble(bytes, kBase, g);
+  const dragon::BasicBlock bb{&g, jumpBlock};
+  REQUIRE(bb.isValid());
+  return bb.successors();
+}
+
+} // namespace
+
+TEST_CASE("SwitchDetector - x86-64 PIC table of 32-bit offsets",
+          "[switch][e2e][relative]") {
+  //   cmp edi, 6 ; ja default ; mov edi, edi ; lea rdx, [rip + table] ;
+  //   movsxd rax, dword ptr [rdx + rdi*4] ; add rax, rdx ; jmp rax
+  // entry[i] = case_i - table
+  std::vector<std::uint8_t> code = {0x83, 0xff, 0x06,                   //
+                                    0x0f, 0x87, 0, 0, 0, 0,             //
+                                    0x89, 0xff,                         //
+                                    0x48, 0x8d, 0x15, 0, 0, 0, 0,       //
+                                    0x48, 0x63, 0x04, 0xba,             //
+                                    0x48, 0x01, 0xd0,                   //
+                                    0xff, 0xe0};
+  putLE(code, 5, kDefault - 0x1009, 4);
+  putLE(code, 14, kTable - 0x1012, 4);
+  std::vector<std::uint8_t> bytes(kTable - kBase + 11 * 4, 0xcc);
+  std::copy(code.begin(), code.end(), bytes.begin());
+  std::set<std::uint64_t> cases;
+  for (unsigned i = 0; i < 7; ++i) {
+    const std::uint64_t c = kCase0 + 0x10 * i;
+    cases.insert(c);
+    bytes[c - kBase] = 0xc3;
+    putLE(bytes, kTable - kBase + 4 * i, c - kTable, 4);
+  }
+  bytes[kDefault - kBase] = 0xc3;
+  for (unsigned i = 7; i < 11; ++i) // decoys past the bound
+    putLE(bytes, kTable - kBase + 4 * i, kCase0 + 0x10 * i + 8 - kTable, 4);
+
+  CHECK(jumpSuccessors(dragon::Architecture::X86_64, bytes, 0x1009) == cases);
+}
+
+TEST_CASE("SwitchDetector - AArch64 gcc table of 16-bit offsets",
+          "[switch][e2e][relative]") {
+  //   0x1000 cmp w0, #6 ; b.hi default ; adr x1, table ;
+  //   0x100c ldrh w0, [x1, w0, uxtw #1] ; adr x2, L ;
+  //   0x1014 add x0, x2, w0, sxth #2 ; br x0 ; 0x101c L:
+  // entry[i] = (case_i - L) / 4, as gcc emits it.
+  dragon::Assembler as{dragon::Architecture::ARM64, dragon::Configuration{}};
+  std::vector<std::uint8_t> code;
+  for (const char *line: {"cmp w0, #6", "b.hi #0x1fc", "adr x1, #0x2f8",
+                          "ldrh w0, [x1, w0, uxtw #1]", "adr x2, #0xc",
+                          "add x0, x2, w0, sxth #2", "br x0"}) {
+    auto insn = as.assemble(line);
+    REQUIRE(insn.size() == 4);
+    code.insert(code.end(), insn.begin(), insn.end());
+  }
+  constexpr std::uint64_t kLabel = 0x101c;
+  const std::uint8_t ret[] = {0xc0, 0x03, 0x5f, 0xd6};
+  std::vector<std::uint8_t> bytes(kTable - kBase + 11 * 2, 0);
+  std::copy(code.begin(), code.end(), bytes.begin());
+  std::set<std::uint64_t> cases;
+  for (unsigned i = 0; i < 7; ++i) {
+    const std::uint64_t c = kCase0 + 0x10 * i;
+    cases.insert(c);
+    std::copy(std::begin(ret), std::end(ret), bytes.begin() + (c - kBase));
+    putLE(bytes, kTable - kBase + 2 * i, (c - kLabel) / 4, 2);
+  }
+  std::copy(std::begin(ret), std::end(ret),
+            bytes.begin() + (kDefault - kBase));
+  for (unsigned i = 7; i < 11; ++i)
+    putLE(bytes, kTable - kBase + 2 * i, (kCase0 + 0x10 * i + 8 - kLabel) / 4,
+          2);
+  CHECK(jumpSuccessors(dragon::Architecture::ARM64, bytes, 0x1008) == cases);
+}
+
+TEST_CASE("readTableTargets - signed, shifted offsets", "[switch][relative]") {
+  SwitchCandidate sw{0x2000, 2, 3, ignil::Reg{0, 64, "X0"}};
+  sw.relative = true;
+  sw.targetBase = 0x1800;
+  sw.entryShift = 2;
+  sw.entryBits = 16;
+  sw.entrySigned = true;
+  // entries 0x0010, 0xfff0 (-16), 0x0000
+  const std::vector<std::uint8_t> table = {0x10, 0x00, 0xf0, 0xff, 0x00, 0x00};
+  auto t = readTableTargets(sw, table, 0x2000);
+  REQUIRE(t.size() == 3);
+  CHECK(t[0] == 0x1840);
+  CHECK(t[1] == 0x17c0);
+  CHECK(t[2] == 0x1800);
 }

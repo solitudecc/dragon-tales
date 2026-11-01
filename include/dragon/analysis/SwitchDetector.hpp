@@ -19,7 +19,8 @@ struct SwitchCandidate {
     /// Base address of the jump table in the binary image.
     std::uint64_t tableBase;
 
-    /// Bytes per table entry: 4 (32-bit pointers) or 8 (64-bit pointers).
+    /// Bytes per table entry: 4 or 8 for a table of pointers; 1, 2, 4 or 8
+    /// for a table of offsets (`relative`).
     std::uint32_t entrySize;
 
     /// Number of table entries (cases).  0 means the bounds check was not
@@ -30,10 +31,28 @@ struct SwitchCandidate {
     /// expression (inside any ZEXT/SEXT/TRUNC). Width 0 when the index is
     /// not a plain register, e.g. a value loaded from the stack.
     ignil::Reg indexReg;
+
+    /// A table of offsets rather than of pointers: case i is at
+    ///   targetBase + (ext(entry[i]) << entryShift)
+    /// where ext sign-extends (entrySigned) or zero-extends the low
+    /// entryBits bits of the entry. x86-64 PIC code (`movsxd rax,
+    /// [rdx+rax*4]; add rax, rdx`) has 4-byte signed entries relative to the
+    /// table itself; gcc's AArch64 tables (`ldrh w3, [x3, w20, uxtw #1]; adr
+    /// x0, L; add x3, x0, w3, sxth #2`) 1- or 2-byte signed entries counted
+    /// in instructions (shift 2) from a label after the dispatch.
+    bool relative = false;
+    std::uint64_t targetBase = 0;
+    std::uint8_t entryShift = 0;
+    std::uint8_t entryBits = 0; ///< 0 = entrySize * 8
+    bool entrySigned = false;
 };
 
 /// Inspect a backward-slice result and determine whether it is a jump-table
 /// indirect branch.
+///
+/// Two target shapes are recognised: LOAD(table) - a table of pointers - and
+/// targetBase + (ext(LOAD(table)) << shift) - a table of offsets (see
+/// SwitchCandidate::relative).
 ///
 /// Recognition is two-phase:
 ///   1. Address match: the expression must be a LOAD whose address is a sum
@@ -60,7 +79,8 @@ std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
 
 /// Read numCases pointer-sized entries from the jump table encoded in bytes.
 ///
-/// Entries are read as little-endian integers (suitable for x86/x86-64).
+/// Entries are read as little-endian integers; for a table of offsets each is
+/// turned into targetBase + (ext(entry) << entryShift).
 /// Returns an empty vector when numCases == 0 or the table extends outside
 /// the provided byte range.
 std::vector<std::uint64_t> readTableTargets(
