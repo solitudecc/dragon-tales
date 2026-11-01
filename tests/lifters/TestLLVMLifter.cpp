@@ -143,3 +143,54 @@ TEST_CASE("LLVMLifter - IEEE double compares become fcmp",
   CHECK(ir.find("fcmp uno double") != std::string::npos);
   CHECK(ir.find("fcmp oeq double") != std::string::npos);
 }
+
+// -----------------------------------------------------------------------
+// Invalid IR found by verifying every function of real binaries (opt
+// -passes=verify over Lua/sqlite/zlib builds): the function's first block
+// doubled as the LLVM entry block, and a block ending in a trap had no
+// terminator.
+// -----------------------------------------------------------------------
+
+namespace {
+std::string liftAndVerify(const std::vector<std::uint8_t> &bytes,
+                          std::uint64_t entry,
+                          std::vector<std::uint64_t> entries) {
+  dragon::Configuration cfg;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dragon::Disassembler::AnalysisHints hints;
+  hints.entryPoints = std::move(entries);
+  dis.disassemble(bytes, 0x1000, g, hints);
+  const dragon::Function fn{&g, entry};
+  REQUIRE(fn.isValid());
+  dragon::llvmlifter::LLVMLifter llvml{dragon::Architecture::X86_64};
+  REQUIRE(llvml.lift(fn, g));
+  std::string err;
+  llvm::raw_string_ostream os(err);
+  CHECK_FALSE(llvm::verifyModule(llvml.module(), &os));
+  INFO(err);
+  return llvml.ir();
+}
+} // namespace
+
+TEST_CASE("LLVMLifter - a loop back to the function start is valid IR",
+          "[llvm][lifter]") {
+  // 0x1000: dec ecx ; jnz 0x1000 ; ret - the entry block is a branch target.
+  liftAndVerify({0xff, 0xc9, 0x75, 0xfc, 0xc3}, 0x1000, {0x1000});
+}
+
+TEST_CASE("LLVMLifter - a block ending in a trap gets a terminator",
+          "[llvm][lifter]") {
+  // 0x1000: test edi, edi ; je 0x1005 ; ret ; 0x1005: ud2
+  liftAndVerify({0x85, 0xff, 0x74, 0x01, 0xc3, 0x0f, 0x0b}, 0x1000, {0x1000});
+}
+
+TEST_CASE("LLVMLifter - execution starts at the entry, not the lowest block",
+          "[llvm][lifter]") {
+  // 0x1000: mov eax, 1 ; ret          <- a cold part below the entry
+  // 0x1006: test edi, edi ; je 0x1000 ; xor eax, eax ; ret   <- entry
+  const auto ir = liftAndVerify({0xb8, 0x01, 0x00, 0x00, 0x00, 0xc3, //
+                                 0x85, 0xff, 0x74, 0xf6, 0x31, 0xc0, 0xc3},
+                                0x1006, {0x1006});
+  CHECK(ir.find("br label %bb_4102") != std::string::npos); // 0x1006
+}

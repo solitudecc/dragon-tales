@@ -77,10 +77,20 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     ~ResetGraph() { g = nullptr; }
   } resetGraph{graph_};
 
+  // A dedicated entry block holds the allocas and the register loads and
+  // branches to the function's first block. Using that block itself as the
+  // LLVM entry broke two ways: a loop back to the function start made the
+  // entry block a branch target ("Entry block to function must not have
+  // predecessors!"), and with code below the entry address (gcc's cold
+  // parts) the lowest-addressed block, not the entry, came first.
+  auto *entryBB = llvm::BasicBlock::Create(*ctx_, "entry", llfn);
   auto bbMap = buildBlockMap(llfn, &fn, graph);
 
-  if (!bbMap)
+  if (!bbMap || !bbMap->contains(fn.startAddress())) {
+    llfn->eraseFromParent();
     return false;
+  }
+  llvm::IRBuilder<>(entryBB).CreateBr(bbMap->at(fn.startAddress()));
 
   auto regFile = buildRegFile(llfn, &fn, graph);
 
@@ -245,8 +255,16 @@ void dragon::llvmlifter::LLVMLifter::liftBlock(
         const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap) {
   llvm::IRBuilder<> builder(bbMap.at(ib->startAddress()));
 
-  for (const auto &op: ib->ops())
+  for (const auto &op: ib->ops()) {
+    if (builder.GetInsertBlock()->getTerminator())
+      break; // nothing executes after a branch or a return
     liftOp(op, *regs, *temps, memPtr, regsPtr, builder, bbMap);
+  }
+  // A block that ends in a trap (ud2, hlt, brk) or an instruction without
+  // semantics has no IGNIL terminator and no successor; LLVM still needs
+  // one. Control does not continue past it.
+  if (!builder.GetInsertBlock()->getTerminator())
+    builder.CreateUnreachable();
 }
 void dragon::llvmlifter::LLVMLifter::liftOp(
         const ignil::Op &op, RegFile &regs, TempMap &temps, llvm::Value *memPtr,
