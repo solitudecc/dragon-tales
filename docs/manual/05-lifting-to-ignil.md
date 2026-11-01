@@ -223,7 +223,7 @@ IGNIL lifting is implemented for **x86 (32/64) and ARM64** — see
 `lib/disassemblers/arm/armIGNILLifter.cpp`. ARM32 and RISC-V do not have a
 lifter yet (RISC-V is decode-only end to end; ARM32 has full disassembly/
 analysis but no IGNIL lifter). Known gaps even within x86/ARM64 — register-
-offset addressing modes, some literal-pool forms, `ROR` shifts — lower to
+offset addressing modes and some literal-pool forms — lower to
 an explicit `UNDEF` rather than silently producing a wrong value; check for
 `UNDEF` in a block's ops if a slice or downstream analysis is coming back
 empty.

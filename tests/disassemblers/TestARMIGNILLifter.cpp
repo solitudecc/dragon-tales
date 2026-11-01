@@ -4,6 +4,9 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+#ifdef DRAGON_WITH_Z3
+#include <dragon/lifters/ignil/SymbolicExecutor.hpp>
+#endif
 
 #include <algorithm>
 #include <set>
@@ -332,3 +335,48 @@ TEST_CASE("ARM IGNIL lifting - unlifted AArch64 instruction clobbers its defs",
     CHECK(blk->unlifted() == std::vector<std::uint64_t>{0x1000});
   }
 }
+
+// -----------------------------------------------------------------------
+// ROR-shifted logical operands. Regression: emitShiftedReg emitted UNDEF for
+// ROR (IGNIL has no rotate), so `eor x0, x1, x2, ror #9` lost its value.
+// Found by differential testing against Unicorn; expected values below are
+// Unicorn's.
+// -----------------------------------------------------------------------
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("ARM IGNIL lifting - ROR-shifted logical operand", "[ignil][arm64]") {
+  struct Case {
+    std::uint32_t word;     // instruction encoding
+    std::uint64_t x1, x2;   // inputs
+    std::uint64_t x0;       // expected result (Unicorn)
+  };
+  const Case cases[] = {
+          // eor x0, x1, x2, ror #9
+          {0xcac22420, 0x5f0fa65e03262fdf, 0x6da30e2e5275a86a,
+           0x5f0fa65e03262fdfULL ^ ((0x6da30e2e5275a86aULL >> 9) |
+                                    (0x6da30e2e5275a86aULL << 55))},
+          // orr w0, w1, w2, ror #9  (32-bit rotate, result zero-extended)
+          {0x2ac22420, 0x455ca3fa737a18bd, 0xff7565d790ffb3e4, 0xf37a7ffd},
+  };
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+  for (const auto &c: cases) {
+    const std::vector<std::uint8_t> bytes = {
+            static_cast<std::uint8_t>(c.word), static_cast<std::uint8_t>(c.word >> 8),
+            static_cast<std::uint8_t>(c.word >> 16),
+            static_cast<std::uint8_t>(c.word >> 24)};
+    auto insns = dis.disassemble(bytes, 0x1000);
+    REQUIRE(insns.size() == 1);
+    const auto block = dis.liftTrace(insns);
+    for (const auto &op: block)
+      REQUIRE(op.opcode != dragon::ignil::Opcode::UNDEF);
+
+    dragon::ignil::SymbolicExecutor ex;
+    ex.setRegister(arm::X1, c.x1);
+    ex.setRegister(arm::X2, c.x2);
+    ex.setRegister(arm::X0, 0x1111111111111111);
+    REQUIRE(ex.run(block).ok());
+    INFO(insns[0].disassembly());
+    CHECK(ex.evaluate(ex.readRegister(arm::X0)) == c.x0);
+  }
+}
+#endif

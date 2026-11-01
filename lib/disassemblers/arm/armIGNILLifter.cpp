@@ -812,14 +812,22 @@ dragon::ignil::Value dragon::arm::ARMIGNILLifter::emitShiftedReg(
                   {base, ignil::Const{amount, 8}},
                   addr});
       break;
-    default:
-      // ROR - only valid for logical (AND/ORR/EOR) shifted-register forms,
-      // never ADD/SUB, and rare even there in compiler-generated code. IGNIL
-      // has no rotate opcode, so be conservative and UNDEF rather than
-      // silently mis-lift.
-      logger_.log("emitShiftedReg: ROR shift unsupported at addr {:#x}", addr);
-      out.append({ignil::Opcode::UNDEF, result, {}, addr});
+    default: {
+      // ROR - only valid for logical (AND/ORR/EOR/ANDS) shifted-register
+      // forms. IGNIL has no rotate opcode, but a rotate right by `amount`
+      // (1..width-1 here; 0 took the fast path) is exactly
+      // (x >> amount) | (x << (width - amount)). This used to emit UNDEF.
+      auto hi = newTemp(tmp, width);
+      out.append({ignil::Opcode::SHR, hi, {base, ignil::Const{amount, 8}},
+                  addr});
+      auto lo = newTemp(tmp, width);
+      out.append({ignil::Opcode::SHL,
+                  lo,
+                  {base, ignil::Const{width - amount, 8}},
+                  addr});
+      out.append({ignil::Opcode::OR, result, {hi, lo}, addr});
       break;
+    }
   }
   return result;
 }
