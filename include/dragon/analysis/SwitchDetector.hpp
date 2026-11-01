@@ -1,5 +1,6 @@
 #pragma once
 
+#include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
@@ -77,10 +78,12 @@ struct SwitchCandidate {
 /// `sliceDepth` is the BackwardSlicer depth `jumpTarget` was sliced with; the
 /// guard is sliced with one less (it sits one block earlier) so that the
 /// index reads the same in both.
-std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
-                                                    std::uint64_t blockAddr,
-                                                    const Graph &graph,
-                                                    int sliceDepth = 5);
+/// `predecessors`, when given, is BackwardSlicer::predecessors(graph), shared
+/// with the caller's own slices of the unchanged graph.
+std::optional<SwitchCandidate> detectPossibleSwitch(
+        const Expr &jumpTarget, std::uint64_t blockAddr, const Graph &graph,
+        int sliceDepth = 5,
+        const BackwardSlicer::Predecessors *predecessors = nullptr);
 
 /// Read numCases pointer-sized entries from the jump table encoded in bytes.
 ///

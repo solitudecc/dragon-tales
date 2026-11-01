@@ -136,10 +136,10 @@ BackwardSlicer::BackwardSlicer(int maxBlocks) : maxBlocks_(maxBlocks) {}
 // Every predecessor of every valid block: from the IGNIL terminators (what
 // hand-built IGNIL graphs have) and from the BasicBlock successors (which
 // also carry resolved indirect-jump targets and fall-throughs).
-BackwardSlicer::PredMap
-BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
-  PredMap result;
-  auto &incoming = result.preds;
+BackwardSlicer::Predecessors
+BackwardSlicer::predecessors(const Graph &graph) {
+  Predecessors result;
+  auto &incoming = result;
   for (std::uint64_t addr: graph.validBlockAddresses())
     incoming.emplace(addr, std::vector<std::uint64_t>{});
   auto addEdge = [&](std::uint64_t from, std::uint64_t to) {
@@ -258,8 +258,8 @@ std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
       if (opcode == ignil::Opcode::STORE || opcode == ignil::Opcode::CALL)
         return slice::ValueOrigin{block->startAddress(), i, context};
     }
-    auto it = preds.preds.find(block->startAddress());
-    if (it == preds.preds.end() || it->second.size() != 1)
+    auto it = preds.preds->find(block->startAddress());
+    if (it == preds.preds->end() || it->second.size() != 1)
       return slice::ValueOrigin{block->startAddress(), -1, context};
     block = graph.getIGNILBlock(it->second.front());
     if (!block)
@@ -274,9 +274,13 @@ std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
 // ---------------------------------------------------------------------------
 
 slice::Expr BackwardSlicer::slice(const ignil::Value &root,
-                                  std::uint64_t blockAddr,
-                                  const Graph &graph) const {
-  PredMap preds = buildPredecessorMap(graph);
+                                  std::uint64_t blockAddr, const Graph &graph,
+                                  const Predecessors *precomputed) const {
+  PredMap preds;
+  if (precomputed)
+    preds.preds = precomputed;
+  else
+    preds.owned = predecessors(graph);
   const ignil::Block *blk = graph.getIGNILBlock(blockAddr);
   if (!blk)
     return slice::Expr{slice::Undef{ignil::widthOf(root)}};
@@ -352,8 +356,8 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
                                      int depth) const {
   using Opc = ignil::Opcode;
   auto unknown = [&] {
-    const auto it = preds.preds.find(block.startAddress());
-    if (it == preds.preds.end() || it->second.empty())
+    const auto it = preds.preds->find(block.startAddress());
+    if (it == preds.preds->end() || it->second.empty())
       return slice::Expr{slice::SymReg{r}}; // graph inputs keep their public names
     return slice::Expr{slice::SymReg{
             r, slice::ValueOrigin{block.startAddress(), -1, depth}}};
@@ -421,8 +425,8 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
   // Not defined in this block - try the predecessors.
   if (depth <= 0)
     return unknown();
-  auto predIt = preds.preds.find(block.startAddress());
-  if (predIt == preds.preds.end() || predIt->second.empty())
+  auto predIt = preds.preds->find(block.startAddress());
+  if (predIt == preds.preds->end() || predIt->second.empty())
     return unknown(); // entry
   const std::vector<std::uint64_t> &from = predIt->second;
 

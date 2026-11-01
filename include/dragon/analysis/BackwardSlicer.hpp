@@ -45,9 +45,19 @@ class BackwardSlicer {
 
   /// Slice `root` as it appears at the end of the block at `blockAddr`.
   /// Returns a SliceExpr tree suitable for Z3 lowering.
+  /// Every predecessor of every valid block of `graph`: from the IGNIL
+  /// terminators and the BasicBlock successors (resolved indirect-jump
+  /// targets, fall-throughs).
+  using Predecessors =
+          std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>;
+  [[nodiscard]] static Predecessors predecessors(const Graph &graph);
+
+  /// `precomputed`, when given, must be predecessors(graph) for the graph
+  /// as it is now - building it walks the whole graph, so a caller slicing
+  /// many values in an unchanged graph computes it once and passes it.
   [[nodiscard]] slice::Expr slice(const ignil::Value &root,
-                                  std::uint64_t blockAddr,
-                                  const Graph &graph) const;
+                                  std::uint64_t blockAddr, const Graph &graph,
+                                  const Predecessors *precomputed = nullptr) const;
 
   private:
   // Every predecessor of each block, and the join-node queries in progress
@@ -55,7 +65,11 @@ class BackwardSlicer {
   struct PredMap {
     using JoinKey =
             std::tuple<std::uint64_t, std::uint32_t, std::uint32_t>;
-    std::unordered_map<std::uint64_t, std::vector<std::uint64_t>> preds;
+    PredMap() = default;
+    PredMap(const PredMap &) = delete; // `preds` may point at `owned`
+    PredMap &operator=(const PredMap &) = delete;
+    Predecessors owned;
+    const Predecessors *preds = &owned;
     std::set<JoinKey> joinsInProgress;
     // Negative Undef op indices are private recursion markers. Keep the
     // register identity as well as the join: COPY from another register must
@@ -69,7 +83,6 @@ class BackwardSlicer {
     int budget = 4096;
   };
 
-  [[nodiscard]] PredMap buildPredecessorMap(const Graph &graph) const;
 
   // The memory snapshot a load of `width` bits at `loadAddr` reads: the
   // nearest preceding store or call that may change it, or the join where

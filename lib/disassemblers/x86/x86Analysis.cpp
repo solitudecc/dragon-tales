@@ -479,6 +479,7 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
   // Loops in real dispatchers can be substantially deeper than the default
   // five-block slice. The slicer's per-query budget still caps join expansion.
   auto targetsAtDepth = [&](const BasicBlock &block, const Graph &cfg,
+                            const BackwardSlicer::Predecessors &cfgPreds,
                             int depth) {
     std::set<std::uint64_t> targets;
     const auto *ib = cfg.getIGNILBlock(block.startAddress());
@@ -490,14 +491,14 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
       return targets;
 
     const auto result = BackwardSlicer{depth}.slice(
-            last.srcs[0], block.startAddress(), cfg);
+            last.srcs[0], block.startAddress(), cfg, &cfgPreds);
     // A free LOAD must never be enumerated as arbitrary addresses; linear
     // sweep additionally requires a recognised table at decoded boundaries.
     const bool tablesOnly =
             linear || std::holds_alternative<ignil::Temp>(last.srcs[0]);
     std::vector<std::uint64_t> values;
     if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
-                                              cfg, depth);
+                                              cfg, depth, &cfgPreds);
         sw && sw->numCases > 0) {
       values = slice::readTableTargets(*sw, bytes, baseAddr);
       if (values.empty() && hints.readMemory) {
@@ -520,12 +521,13 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
     return targets;
   };
 
-  auto targetsFor = [&](const BasicBlock &block, const Graph &cfg) {
+  auto targetsFor = [&](const BasicBlock &block, const Graph &cfg,
+                        const BackwardSlicer::Predecessors &cfgPreds) {
     // Keep the short slice first: expanding an index through a loop can lose
     // its correspondence with the guard. Deeper slices are for hoisted bases
     // that cannot be reached within five blocks.
     for (int depth: {5, 16, 64}) {
-      auto targets = targetsAtDepth(block, cfg, depth);
+      auto targets = targetsAtDepth(block, cfg, cfgPreds, depth);
       if (!targets.empty())
         return targets;
     }
@@ -547,6 +549,9 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
       commitPending(tentative, starts, functions);
       liftPendingBlocks(tentative);
       Graph cfg = reachableGraph(tentative, hints);
+      // cfg is not modified in this round (new edges go to `tentative`), so
+      // one predecessor map serves every slice taken in it.
+      const auto cfgPreds = BackwardSlicer::predecessors(cfg);
       std::map<std::uint64_t, BasicBlock> jumps;
       for (const auto &block: cfg.blocks())
         if (const auto *term = block.terminator();
@@ -562,7 +567,7 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
           return BasicBlock{&tentative, target}.isValid();
         });
         if (!complete || it == jumps.end() ||
-            targetsFor(it->second, cfg) != expected) {
+            targetsFor(it->second, cfg, cfgPreds) != expected) {
           logger_.log("Rejecting tentative indirect jump @ 0x{:x}", addr);
           rejected.insert(addr);
           restart = true;
@@ -577,7 +582,7 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
         if (rejected.contains(addr) || candidates.contains(addr) ||
             !tentative.get(addr)->branches().empty())
           continue;
-        const auto targets = targetsFor(block, cfg);
+        const auto targets = targetsFor(block, cfg, cfgPreds);
         if (targets.empty())
           continue;
         candidates.emplace(addr, targets);

@@ -412,10 +412,9 @@ static const Load *matchRelativeTarget(const Expr &jumpTarget,
   return load;
 }
 
-std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
-                                                    std::uint64_t blockAddr,
-                                                    const Graph &graph,
-                                                    int sliceDepth) {
+std::optional<SwitchCandidate> detectPossibleSwitch(
+        const Expr &jumpTarget, std::uint64_t blockAddr, const Graph &graph,
+        int sliceDepth, const BackwardSlicer::Predecessors *predecessors) {
   // Phase 1: the target is LOAD(table) - a table of pointers - or
   // targetBase + (ext(LOAD(table)) << shift) - a table of offsets.
   SwitchCandidate sw{0, 0, 0, ignil::Reg{0, 0, ""}};
@@ -455,7 +454,8 @@ std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
     const ignil::Op &cjmp = predBlock->ops().back();
     BackwardSlicer slicer{std::max(sliceDepth - 1, 0)};
     Expr condExpr =
-            slicer.slice(cjmp.srcs[0], predBlock->startAddress(), graph);
+            slicer.slice(cjmp.srcs[0], predBlock->startAddress(), graph,
+                         predecessors);
     sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core, indexBits, *table->index);
   }
 
