@@ -2719,3 +2719,42 @@ TEST_CASE("X86 IGNIL lifting - add/sub with source == destination",
   }
 }
 #endif // DRAGON_WITH_Z3
+
+#ifdef DRAGON_WITH_Z3
+// BSR/BSF with a zero source: the destination is undefined (Intel SDM) -
+// processors and Unicorn keep the old value. It was lifted as 0, a value no
+// processor produces (found by the LLVM real-block difftest: `bsr ebx, eax;
+// xor ebx, 31; add ebx, 32` came out as 63). Now it is unknown; with a
+// nonzero source the index is exact.
+TEST_CASE("X86 IGNIL lifting - bsr/bsf of zero is undefined",
+          "[ignil][x86][x86_64]") {
+  for (const std::vector<std::uint8_t> &insn:
+       {std::vector<std::uint8_t>{0x0f, 0xbd, 0xd8},    // bsr ebx, eax
+        std::vector<std::uint8_t>{0x0f, 0xbc, 0xd8}}) { // bsf ebx, eax
+    {
+      dragon::ignil::SymbolicExecutor ex;
+      std::uint64_t target = 0;
+      runOne(insn,
+             [&](dragon::ignil::SymbolicExecutor &e) {
+               e.setRegister(x86r::RAX, 0);
+               e.setRegister(x86r::RBX, 0x1234);
+             },
+             ex, target);
+      CHECK_FALSE(ex.evaluate(ex.readRegister(x86r::EBX)).has_value());
+      CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == 1);
+    }
+    {
+      dragon::ignil::SymbolicExecutor ex;
+      std::uint64_t target = 0;
+      runOne(insn,
+             [&](dragon::ignil::SymbolicExecutor &e) {
+               e.setRegister(x86r::RAX, 0x90);
+             },
+             ex, target);
+      CHECK(ex.evaluate(ex.readRegister(x86r::EBX)) ==
+            (insn[1] == 0xbd ? 7u : 4u));
+      CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == 0);
+    }
+  }
+}
+#endif // DRAGON_WITH_Z3

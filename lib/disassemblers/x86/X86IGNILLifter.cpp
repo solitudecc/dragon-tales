@@ -4762,8 +4762,7 @@ void dragon::x86::X86IGNILLifter::liftBitScan(const llvm::MCInst &mc,
 
   // dst = index of the lowest (BSF) / highest (BSR) set bit, as an unrolled
   // "last write wins" scan. BSF scans from the high bit down so the lowest set
-  // bit is written last; BSR scans from the low bit up. A source of 0 leaves
-  // dst at its initial 0 (the ISA leaves it undefined; ZF flags the case).
+  // bit is written last; BSR scans from the low bit up.
   auto result = newTemp(tmp, w);
   out.append({ignil::Opcode::COPY, result, {ignil::Const{0, w}}, addr});
   for (unsigned step = 0; step < W; ++step) {
@@ -4794,7 +4793,32 @@ void dragon::x86::X86IGNILLifter::liftBitScan(const llvm::MCInst &mc,
                 addr});
     result = next;
   }
-  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{result}}, addr});
+  // A source of 0 leaves dst undefined (the SDM; AMD and Unicorn keep the old
+  // value, which is not what the 64-bit zero-extension rule would give). It
+  // used to come out as 0 - a value no processor produces - so `bsr ebx, eax;
+  // xor ebx, 31; add ebx, 32` with eax = 0 was a confident 63. Now:
+  // dst = (src == 0) ? UNDEF : index.
+  auto unknown = newTemp(tmp, w);
+  out.append({ignil::Opcode::UNDEF, unknown, {}, addr});
+  auto zero = newTemp(tmp, 1);
+  out.append({ignil::Opcode::EQ, zero, {ignil::Value{srcV}, ignil::Const{0, w}},
+              addr});
+  auto zeroW = newTemp(tmp, w);
+  out.append({ignil::Opcode::ZEXT, zeroW, {ignil::Value{zero}}, addr});
+  auto zeroMask = newTemp(tmp, w);
+  out.append({ignil::Opcode::NEG, zeroMask, {ignil::Value{zeroW}}, addr});
+  auto indexMask = newTemp(tmp, w);
+  out.append({ignil::Opcode::NOT, indexMask, {ignil::Value{zeroMask}}, addr});
+  auto fromUnknown = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, fromUnknown,
+              {ignil::Value{unknown}, ignil::Value{zeroMask}}, addr});
+  auto fromIndex = newTemp(tmp, w);
+  out.append({ignil::Opcode::AND, fromIndex,
+              {ignil::Value{result}, ignil::Value{indexMask}}, addr});
+  auto value = newTemp(tmp, w);
+  out.append({ignil::Opcode::OR, value,
+              {ignil::Value{fromUnknown}, ignil::Value{fromIndex}}, addr});
+  out.append({ignil::Opcode::COPY, *dst, {ignil::Value{value}}, addr});
 
   // ZF reflects a zero source; every other flag is architecturally undefined.
   emitArithFlags(addr, out, tmp, {{X86Flag::ZF, zfEqZero(ignil::Value{srcV}, addr)}});
