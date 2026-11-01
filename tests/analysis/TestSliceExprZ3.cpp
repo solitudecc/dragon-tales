@@ -285,4 +285,55 @@ TEST_CASE("SliceExprZ3 - load values keep producing-op identity across stores",
     }
 }
 
+// ---------------------------------------------------------------------------
+// A store to other bytes of the same object does not change a load.
+//
+// Two reads of [rbx+0x10] are one value unless something in between may
+// write those bytes. Every store used to count as such a write, so a store
+// to [rbx+0x18] separated them too (and an i386 switch whose index is re-read
+// after `mov byte [ebx+0x4f], 1` lost its bound).
+// ---------------------------------------------------------------------------
+
+#include <dragon/disassembler/Disassembler.hpp>
+
+namespace {
+std::optional<std::uint64_t> diffOfReads(std::vector<std::uint8_t> store) {
+  // mov eax, [rbx+0x10] ; <store> ; mov ecx, [rbx+0x10] ; sub eax, ecx ; ret
+  std::vector<std::uint8_t> code = {0x8b, 0x43, 0x10};
+  code.insert(code.end(), store.begin(), store.end());
+  for (std::uint8_t b: {0x8b, 0x4b, 0x10, 0x29, 0xc8, 0xc3})
+    code.push_back(b);
+  dragon::Configuration cfg;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dis.disassemble(code, 0x1000, g);
+  auto e = dragon::BackwardSlicer{5}.slice(dragon::ignil::Value{x86::EAX},
+                                           0x1000, g);
+  z3::context ctx;
+  return solveUnique(e, ctx);
+}
+} // namespace
+
+TEST_CASE("SliceExprZ3 - a store to disjoint bytes keeps a load's value",
+          "[z3][slicer][memory]") {
+  // mov byte [rbx+0x18], 1 - bytes 0x18, the reads cover 0x10..0x13.
+  auto v = diffOfReads({0xc6, 0x43, 0x18, 0x01});
+  REQUIRE(v.has_value());
+  CHECK(*v == 0);
+  // mov byte [rbx+0x0f], 1 - just below the read.
+  v = diffOfReads({0xc6, 0x43, 0x0f, 0x01});
+  REQUIRE(v.has_value());
+  CHECK(*v == 0);
+}
+
+TEST_CASE("SliceExprZ3 - a store that may overlap separates two loads",
+          "[z3][slicer][memory]") {
+  // mov byte [rbx+0x13], 1 - the last byte of the read.
+  CHECK_FALSE(diffOfReads({0xc6, 0x43, 0x13, 0x01}).has_value());
+  // mov dword [rbx+0x0e], 1 - straddles the start of the read.
+  CHECK_FALSE(diffOfReads({0xc7, 0x43, 0x0e, 0x01, 0, 0, 0}).has_value());
+  // mov byte [rcx+0x18], 1 - another base: may alias.
+  CHECK_FALSE(diffOfReads({0xc6, 0x41, 0x18, 0x01}).has_value());
+}
+
 #endif // DRAGON_WITH_Z3

@@ -16,7 +16,7 @@ for k, l in enumerate(lines):
     a, T = int(m.group(1), 16), int(m.group(3), 16)
     N = None
     for x in reversed(lines[max(0, k-8):k]):
-        c = re.search(r"\bcmp\s+\w+,(0x[0-9a-f]+)", x)
+        c = re.search(r"\bcmp\s+(?:\w+|(?:BYTE|WORD|DWORD) PTR \[[^\]]+\]),(0x[0-9a-f]+)", x)
         if c: N = int(c.group(1), 16) + 1; break
         am = re.search(r"\band\s+\w+,(0x[0-9a-f]+)", x)
         if am and x is lines[k-1]: N = int(am.group(1), 16) + 1; break

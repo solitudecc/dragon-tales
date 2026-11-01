@@ -913,3 +913,26 @@ TEST_CASE("Indirect jumps - a truncated Z3 enumeration is not a target set",
   CHECK(graph.get(kBase + 13)->branches().empty());
 }
 #endif
+
+TEST_CASE("SwitchDetector - index re-read after a store to another field",
+          "[switch][e2e][memory]") {
+  // i686 gcc, from Lua's singlestep:
+  //   cmp byte [ebx+0x4d], 6 ; mov byte [ebx+0x4f], 1 ; ja default ;
+  //   movzx eax, byte [ebx+0x4d] ; jmp [eax*4 + table]
+  // The store does not touch byte 0x4d, so the guard bounds the index.
+  // With the store to 0x4d itself, nothing is resolved.
+  auto build = [](std::uint8_t storeOffset) {
+    std::vector<std::uint8_t> code = {0x80, 0x7b, 0x4d, 0x06,          //
+                                      0xc6, 0x43, storeOffset, 0x01,   //
+                                      0x0f, 0x87, 0, 0, 0, 0,          //
+                                      0x0f, 0xb6, 0x43, 0x4d,          //
+                                      0xff, 0x24, 0x85, 0, 0, 0, 0};
+    putLE(code, 10, kDefault - 0x100e, 4);
+    putLE(code, 21, kTable, 4);
+    return layout(code, 7, 4);
+  };
+  requireExactlyCases(
+          blockStarts(dragon::Architecture::X86_32, build(0x4f)), 7);
+  auto blocks = blockStarts(dragon::Architecture::X86_32, build(0x4d));
+  CHECK_FALSE(blocks.count(kCase0));
+}

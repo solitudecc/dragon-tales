@@ -34,8 +34,9 @@ for k, l in enumerate(lines):
             if re.search(r"\tlea\s+" + re.escape(load.group(1)) + r",\[rip\+", x):
                 lea = x; break
         if not lea: continue
-        T = int(re.search(r"#\s*([0-9a-f]+)", lea).group(1), 16) + int(load.group(2) or "0", 0)
-        size, shift, signed, base = 4, 0, True, T
+        reg = int(re.search(r"#\s*([0-9a-f]+)", lea).group(1), 16)
+        T = reg + int(load.group(2) or "0", 0)   # the table: [reg + idx*4 + disp]
+        size, shift, signed, base = 4, 0, True, reg  # targets: reg + entry
         a = int(l.split(":")[0], 16)
     m = re.search(r"\tbr\s+(x\d+)$", l)
     if m and any(re.search(r"\tadd\s+x\d+, x\d+, w\d+, sxt[bh] #2", x) for x in win[-2:]):
@@ -53,7 +54,9 @@ for k, l in enumerate(lines):
     stat["total"] += 1
     N = None
     for x in reversed(lines[max(0, k - 25):k]):
-        c = re.search(r"\tcmp\s+\w+, ?#?(0x[0-9a-f]+|\d+)$", x)
+        # register or memory operand: `cmp eax,0x6`, `cmp w0, #6`,
+        # `cmp BYTE PTR [rbx+0x65],0x8`
+        c = re.search(r"\tcmp\s+(?:\w+|(?:BYTE|WORD|DWORD|QWORD) PTR \[[^\]]+\]), ?#?(0x[0-9a-f]+|\d+)$", x)
         if c: N = int(c.group(1), 0) + 1; break
     blk = blocks[bisect.bisect_right(blocks, a) - 1]
     succ = set(g.get_block(blk).successors())

@@ -160,9 +160,75 @@ BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
   return result;
 }
 
+namespace {
+
+// An address as base + offset: the constant terms of its ADD tree summed, the
+// one non-constant term (if any) as the base.
+struct SplitAddress {
+  const slice::Expr *base = nullptr;
+  std::uint64_t offset = 0;
+  unsigned width = 64;
+};
+
+void addTerms(const slice::Expr &e, std::vector<const slice::Expr *> &out) {
+  if (const auto *b = std::get_if<slice::BinOp>(&e.data);
+      b && b->op == ignil::Opcode::ADD && b->left && b->right) {
+    addTerms(*b->left, out);
+    addTerms(*b->right, out);
+    return;
+  }
+  out.push_back(&e);
+}
+
+std::optional<SplitAddress> splitAddress(const slice::Expr &e) {
+  std::vector<const slice::Expr *> terms;
+  addTerms(e, terms);
+  SplitAddress a;
+  for (const slice::Expr *t: terms) {
+    if (const auto *c = std::get_if<slice::Const>(&t->data)) {
+      a.offset += c->value;
+      a.width = c->width;
+    } else if (a.base) {
+      return std::nullopt; // two variable terms
+    } else {
+      a.base = t;
+    }
+  }
+  return a;
+}
+
+// True when a store of `storeBytes` at `store` cannot touch any byte of a
+// load of `loadBytes` at `load`: both are the same base value plus constant
+// offsets (or both absolute) and the byte ranges do not intersect.
+bool provablyDisjoint(const slice::Expr &load, unsigned loadBytes,
+                      const slice::Expr &store, unsigned storeBytes) {
+  auto l = splitAddress(load), s = splitAddress(store);
+  if (!l || !s || (l->base == nullptr) != (s->base == nullptr))
+    return false;
+  if (l->base && !slice::sameValue(*l->base, *s->base))
+    return false;
+  // Offsets wrap at the address width; compare their signed difference.
+  const unsigned aw = std::max(l->width, s->width);
+  const std::uint64_t m = aw >= 64 ? ~0ull : (1ull << aw) - 1;
+  std::uint64_t d = (s->offset - l->offset) & m; // store - load
+  std::int64_t sd = aw >= 64 ? static_cast<std::int64_t>(d)
+                             : static_cast<std::int64_t>(
+                                       (d ^ (1ull << (aw - 1))) -
+                                       (1ull << (aw - 1)));
+  constexpr std::int64_t kNear = std::int64_t{1} << 30;
+  if (sd > kNear || sd < -kNear)
+    return false; // too far apart to reason about wrap-around safely
+  return sd >= static_cast<std::int64_t>(loadBytes) ||
+         sd <= -static_cast<std::int64_t>(storeBytes);
+}
+
+} // namespace
+
 std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
         const ignil::Block &start, int beforeIdx, const Graph &graph,
-        const PredMap &preds, int context) const {
+        PredMap &preds, int context, const slice::Expr &loadAddr,
+        ignil::Width width) const {
+  const unsigned loadBytes = (width + 7) / 8;
   const ignil::Block *block = &start;
   std::set<std::uint64_t> seen;
   int budget = 4096;
@@ -174,7 +240,21 @@ std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
     for (int i = beforeIdx - 1; i >= 0; --i) {
       if (--budget < 0)
         return std::nullopt;
-      const auto opcode = block->ops()[i].opcode;
+      const ignil::Op &op = block->ops()[i];
+      const auto opcode = op.opcode;
+      if (opcode == ignil::Opcode::STORE && op.srcs.size() == 2) {
+        // A store to other bytes of the same object does not change what
+        // this load reads (`mov byte [ebx+0x4f], 1` between a guard and the
+        // re-load of `[ebx+0x4d]`). Its address is sliced from its own
+        // position; sameValue's origins make the bases equal only when they
+        // are the same value there and at the load.
+        const slice::Expr storeAddr = sliceValue(
+                op.srcs[0], *block, i, graph, preds, std::max(context, 0));
+        const unsigned storeBytes = (ignil::widthOf(op.srcs[1]) + 7) / 8;
+        if (provablyDisjoint(loadAddr, loadBytes, storeAddr, storeBytes))
+          continue;
+        return slice::ValueOrigin{block->startAddress(), i, context};
+      }
       if (opcode == ignil::Opcode::STORE || opcode == ignil::Opcode::CALL)
         return slice::ValueOrigin{block->startAddress(), i, context};
     }
@@ -450,10 +530,10 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
     case Opc::LOAD: {
       auto addrExpr = src(0);
       ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : 64;
+      auto state = memoryState(block, opIdx, graph, preds, depth, addrExpr, w);
       return slice::Expr{slice::Load{
               std::make_shared<slice::Expr>(std::move(addrExpr)), w,
-              block.startAddress(), opIdx, depth,
-              memoryState(block, opIdx, graph, preds, depth)}};
+              block.startAddress(), opIdx, depth, std::move(state)}};
     }
 
     // Binary arithmetic / bitwise / comparison ops.

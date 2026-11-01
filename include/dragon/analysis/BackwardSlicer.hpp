@@ -71,9 +71,14 @@ class BackwardSlicer {
 
   [[nodiscard]] PredMap buildPredecessorMap(const Graph &graph) const;
 
+  // The memory snapshot a load of `width` bits at `loadAddr` reads: the
+  // nearest preceding store or call that may change it, or the join where
+  // the walk stops. A store whose bytes provably do not overlap the load
+  // (same base value, disjoint constant offsets) is stepped over.
   [[nodiscard]] std::optional<slice::ValueOrigin> memoryState(
           const ignil::Block &block, int beforeIdx, const Graph &graph,
-          const PredMap &preds, int context) const;
+          PredMap &preds, int context, const slice::Expr &loadAddr,
+          ignil::Width width) const;
 
   // Resolve `v` starting the backward scan at `beforeIdx` (exclusive) inside
   // `block`.  Crosses into predecessor blocks when `depth` > 0.
