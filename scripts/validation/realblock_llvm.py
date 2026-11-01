@@ -67,7 +67,9 @@ else:
 MASK = (1 << width) - 1
 HEAP = 0x10000000 if width == 32 else 0x7f0000000000
 STACK = 0x20000000 if width == 32 else 0x7ff000000000
-sections = [(s.address, s.virtual_size, s.data) for s in img.sections()]
+# Only sections in the address space (an ELF section without SHF_ALLOC sits at
+# address 0 and is not readable).
+sections = [(s.address, s.virtual_size, s.data) for s in img.sections() if s.readable or s.executable]
 
 
 def page_content(base):

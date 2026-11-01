@@ -64,7 +64,9 @@ MASK = (1 << width) - 1
 HEAP = 0x10000000 if width == 32 else 0x7f0000000000
 STACK = 0x20000000 if width == 32 else 0x7ff000000000
 
-sections = [(s.address, s.virtual_size, s.data) for s in img.sections()]
+# Only sections in the address space (an ELF section without SHF_ALLOC sits at
+# address 0 and is not readable).
+sections = [(s.address, s.virtual_size, s.data) for s in img.sections() if s.readable or s.executable]
 def page_content(base):
     # Every 4-byte word below 2^15: any 4-aligned 8-byte load assembled from
     # this memory stays below 2^47, the range Unicorn addresses faithfully
