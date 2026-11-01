@@ -6,6 +6,9 @@
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
+#ifdef DRAGON_WITH_Z3
+#include <dragon/lifters/ignil/SymbolicExecutor.hpp>
+#endif
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
@@ -587,10 +590,9 @@ TEST_CASE("IGNIL lifting - 3-operand imul with immediate (IMUL64rri32/"
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::MUL));
-  // All flags UNDEF for every IMUL form - SF/ZF/AF/PF are architecturally
-  // undefined for IMUL, CF/OF would need a double-width product IGNIL
-  // doesn't model. 4 IMULs * 7 flags each.
-  REQUIRE(countUndef(*ib) == 24);  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
+  // SF/ZF/AF/PF are architecturally undefined for IMUL and stay UNDEF;
+  // CF/OF are computed from the double-width product. 4 IMULs * 4 flags.
+  REQUIRE(countUndef(*ib) == 16);
 
   std::cout << "\n=== IGNIL Lifting: 3-operand imul with immediate ===";
   printIgnilComparison(g);
@@ -878,7 +880,7 @@ TEST_CASE("IGNIL lifting - 2-operand imul eax, ebx (IMUL32rr)",
   const dragon::ignil::Block *ib = g.getIGNILBlock(0x1000);
   REQUIRE(ib != nullptr);
   REQUIRE(hasOpcode(*ib, dragon::ignil::Opcode::MUL));
-  REQUIRE(countUndef(*ib) == 6); // all 7 flags UNDEF, same as IMUL-immediate  // PF/AF modeled, DF untouched (LifterGaps #7 r4)
+  REQUIRE(countUndef(*ib) == 4); // SF/ZF/AF/PF undefined; CF/OF computed
 
   std::cout << "\n=== IGNIL Lifting: imul eax, ebx ===";
   printIgnilComparison(g);
@@ -2403,3 +2405,129 @@ TEST_CASE("IGNIL lifting - i386 loop (LOOP)", "[ignil][x86_32]") {
     });
   }));
 }
+
+// -----------------------------------------------------------------------
+// Instructions found wrong by differential testing against Unicorn
+// (lift_trace + SymbolicExecutor on concrete random states). Expected values
+// are Unicorn's / the SDM's.
+// -----------------------------------------------------------------------
+
+#ifdef DRAGON_WITH_Z3
+namespace {
+namespace x86r = dragon::x86;
+
+// Run one instruction (raw bytes at 0x100000) from the given state; RCX/ZF
+// and the rest of the inputs are set by `seed`.
+template <typename Seed>
+void runOne(const std::vector<std::uint8_t> &bytes, Seed seed,
+            dragon::ignil::SymbolicExecutor &ex, std::uint64_t &target) {
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  auto insns = dis.disassemble(bytes, 0x100000);
+  REQUIRE(insns.size() == 1);
+  const auto block = dis.liftTrace(insns);
+  REQUIRE(block.unlifted().empty());
+  seed(ex);
+  auto result = ex.run(block);
+  REQUIRE(result.ok());
+  target = 0;
+  for (const auto &s: result.successors)
+    if (ex.proves(s.condition).value_or(false))
+      target = s.address;
+}
+} // namespace
+
+// Regression: JRCXZ/JECXZ/LOOPE/LOOPNE have no condition-code operand, and
+// the generic conditional-branch fallback read the missing operand as
+// CondCode 0 (O): all four were lifted as `jo`, and LOOPcc never decremented
+// its counter.
+TEST_CASE("X86 IGNIL lifting - jrcxz/jecxz/loope/loopne",
+          "[ignil][x86][x86_64]") {
+  constexpr std::uint64_t kTaken = 0x100040;
+
+  struct Case {
+    const char *name;
+    std::vector<std::uint8_t> bytes;
+    std::uint64_t rcx;
+    std::uint8_t zf, of;
+    std::uint64_t target; // expected successor
+    std::uint64_t rcxAfter;
+  };
+  const Case cases[] = {
+          // jrcxz: RCX == 0. OF is set opposite to the answer each time so
+          // the old `jo` lift cannot pass by accident.
+          {"jrcxz, rcx=0", {0xe3, 0x3e}, 0, 0, 0, kTaken, 0},
+          {"jrcxz, rcx=2", {0xe3, 0x3e}, 2, 0, 1, 0x100002, 2},
+          // jecxz (0x67): only ECX counts.
+          {"jecxz, ecx=0", {0x67, 0xe3, 0x3e}, 1ULL << 32, 0, 0, 0x100041,
+           1ULL << 32},
+          {"jecxz, ecx=1", {0x67, 0xe3, 0x3e}, 1, 0, 1, 0x100003, 1},
+          // loope: --RCX != 0 && ZF.
+          {"loope, rcx=3 zf=1", {0xe1, 0x3e}, 3, 1, 0, kTaken, 2},
+          {"loope, rcx=3 zf=0", {0xe1, 0x3e}, 3, 0, 1, 0x100002, 2},
+          {"loope, rcx=1 zf=1", {0xe1, 0x3e}, 1, 1, 1, 0x100002, 0},
+          // loopne: --RCX != 0 && !ZF.
+          {"loopne, rcx=3 zf=0", {0xe0, 0x3e}, 3, 0, 0, kTaken, 2},
+          {"loopne, rcx=3 zf=1", {0xe0, 0x3e}, 3, 1, 1, 0x100002, 2},
+  };
+  for (const auto &c: cases) {
+    INFO(c.name);
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne(c.bytes,
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.setRegister(x86r::RCX, c.rcx);
+             e.setRegister(x86r::ZF, c.zf);
+             e.setRegister(x86r::OF, c.of);
+           },
+           ex, target);
+    CHECK(target == c.target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RCX)) == c.rcxAfter);
+  }
+}
+
+// Regression: two/three-operand IMUL left CF/OF UNDEF ("IGNIL cannot form a
+// double-width product"), though they are defined (set when the signed
+// product does not fit) and one-operand IMUL already computed them.
+TEST_CASE("X86 IGNIL lifting - imul r,r / r,r,imm set CF and OF",
+          "[ignil][x86][x86_64]") {
+  struct Case {
+    const char *name;
+    std::vector<std::uint8_t> bytes;
+    std::uint64_t rax, rbx;
+    std::uint64_t raxAfter;
+    std::uint8_t overflow;
+  };
+  const Case cases[] = {
+          // imul rax, rbx
+          {"imul rax,rbx no overflow", {0x48, 0x0f, 0xaf, 0xc3}, 3,
+           0xfffffffffffffffe, 0xfffffffffffffffa, 0},
+          {"imul rax,rbx overflow", {0x48, 0x0f, 0xaf, 0xc3},
+           0x4000000000000000, 2, 0x8000000000000000, 1},
+          // imul eax, ebx (32-bit; result zero-extended into RAX)
+          {"imul eax,ebx overflow", {0x0f, 0xaf, 0xc3}, 0x10000, 0x10000, 0, 1},
+          {"imul eax,ebx no overflow", {0x0f, 0xaf, 0xc3}, 0xffffffff, 5,
+           0xfffffffb, 0},
+          // imul rax, rbx, 7 / imul eax, ebx, -3
+          {"imul rax,rbx,7 overflow", {0x48, 0x6b, 0xc3, 0x07}, 0,
+           0x2000000000000000, 0xe000000000000000, 1},
+          {"imul eax,ebx,-3 no overflow", {0x6b, 0xc3, 0xfd}, 0, 10,
+           0xffffffe2, 0},
+  };
+  for (const auto &c: cases) {
+    INFO(c.name);
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne(c.bytes,
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.setRegister(x86r::RAX, c.rax);
+             e.setRegister(x86r::RBX, c.rbx);
+             e.setRegister(x86r::CF, 1 - c.overflow);
+             e.setRegister(x86r::OF, 1 - c.overflow);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == c.raxAfter);
+    CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == c.overflow);
+    CHECK(ex.evaluate(ex.readRegister(x86r::OF)) == c.overflow);
+  }
+}
+#endif

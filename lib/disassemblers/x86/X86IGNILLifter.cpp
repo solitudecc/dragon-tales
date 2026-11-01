@@ -196,6 +196,11 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"JMP64r", &X86IGNILLifter::opJmp64r_},
           {"JMP_1", &X86IGNILLifter::opJmp_},
           {"LOOP", &X86IGNILLifter::opLoop_},
+          {"LOOPE", &X86IGNILLifter::opLoope_},
+          {"LOOPNE", &X86IGNILLifter::opLoopne_},
+          {"JCXZ", &X86IGNILLifter::opJcxz_},
+          {"JECXZ", &X86IGNILLifter::opJecxz_},
+          {"JRCXZ", &X86IGNILLifter::opJrcxz_},
           {"JMP64m", &X86IGNILLifter::opJmp64m_},
           {"JMP32m", &X86IGNILLifter::opJmp32m_},
           {"CALL64r", &X86IGNILLifter::opCall64r_},
@@ -953,7 +958,13 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opCall_ || opc == opCall32_ || opc == opCall64r_ ||
            opc == opCall32r_)
     liftCall(*mc, addr, insn.size(), out, tempId);
-  else if (opc == opLoop_)
+  // LOOP/LOOPE/LOOPNE and JCXZ/JECXZ/JRCXZ have no condition-code operand.
+  // They must be dispatched before the generic isConditionalBranch()
+  // fallback, whose liftJcc reads a missing operand as CondCode 0 (O) -
+  // which lifted `jrcxz`/`loope`/`loopne` as `jo` (and dropped LOOPcc's
+  // counter decrement).
+  else if (opc == opLoop_ || opc == opLoope_ || opc == opLoopne_ ||
+           opc == opJcxz_ || opc == opJecxz_ || opc == opJrcxz_)
     liftLoop(*mc, addr, insn.size(), hasAddressSizePrefix(insn), out, tempId);
   else if (opc == opRet64_ || opc == opRet32_ || opc == opRetI64_ ||
            opc == opRetI32_)
@@ -2152,11 +2163,32 @@ void dragon::x86::X86IGNILLifter::liftLoop(const llvm::MCInst &mc,
                                            bool addressSizePrefix,
                                            ignil::Block &out,
                                            std::uint32_t &tmp) const {
+  // Handles LOOP, LOOPE, LOOPNE, JCXZ, JECXZ and JRCXZ.
   // op[0] = signed PC-relative offset. No flags are touched.
+  const unsigned opc = mc.getOpcode();
   const std::uint64_t taken =
           pcRelTarget(addr, insnSize, mc.getOperand(0).getImm());
   const std::uint64_t fallthrough = pcRelTarget(addr, insnSize, 0);
-  // The counter is as wide as the address size: 0x67 halves it.
+
+  if (opc == opJcxz_ || opc == opJecxz_ || opc == opJrcxz_) {
+    // Jump if the counter is zero; nothing is written. The opcode itself
+    // names the register (the 0x67 prefix is what selects JECXZ in 64-bit
+    // mode, and LLVM already folded it into the opcode).
+    const ignil::Reg counter =
+            opc == opJrcxz_ ? regRCX_ : (opc == opJecxz_ ? regECX_ : regCX_);
+    auto cond = newTemp(tmp, 1);
+    out.append({ignil::Opcode::EQ,
+                cond,
+                {counter, ignil::Const{0, counter.width}},
+                addr});
+    out.append({ignil::Opcode::CJMP,
+                std::nullopt,
+                {cond, ignil::Const{taken, 64}, ignil::Const{fallthrough, 64}},
+                addr});
+    return;
+  }
+
+  // LOOP/LOOPcc: the counter is as wide as the address size (0x67 halves it).
   const bool is64 = architecture_ == Architecture::X86_64;
   const ignil::Reg counter = is64 ? (addressSizePrefix ? regECX_ : regRCX_)
                                   : (addressSizePrefix ? regCX_ : regECX_);
@@ -2172,6 +2204,17 @@ void dragon::x86::X86IGNILLifter::liftLoop(const llvm::MCInst &mc,
               cond,
               {next, ignil::Const{0, counter.width}},
               addr});
+  if (opc == opLoope_ || opc == opLoopne_) {
+    // ... and ZF == 1 (LOOPE) / ZF == 0 (LOOPNE).
+    auto zf = newTemp(tmp, 1);
+    out.append({opc == opLoope_ ? ignil::Opcode::NEQ : ignil::Opcode::EQ,
+                zf,
+                {regZF_, ignil::Const{0, regZF_.width}},
+                addr});
+    auto both = newTemp(tmp, 1);
+    out.append({ignil::Opcode::AND, both, {cond, zf}, addr});
+    cond = both;
+  }
   out.append({ignil::Opcode::CJMP,
               std::nullopt,
               {cond, ignil::Const{taken, 64}, ignil::Const{fallthrough, 64}},
@@ -2424,18 +2467,15 @@ void dragon::x86::X86IGNILLifter::liftImulImm(const llvm::MCInst &mc,
   }
   const auto imm = static_cast<std::uint64_t>(mc.getOperand(2).getImm());
 
-  auto result = newTemp(tmp, dst->width);
-  out.append({ignil::Opcode::MUL,
-              result,
-              {*src, ignil::Const{imm, dst->width}},
-              addr});
-  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
-
-  // All flags UNDEF: SF/ZF/AF/PF are architecturally undefined for IMUL,
-  // and CF/OF would need a full double-width product to detect overflow
-  // correctly, which IGNIL's fixed-width model doesn't support - honestly
-  // UNDEF rather than a guessed, likely-wrong formula.
-  emitArithFlags(addr, out, tmp, {});
+  // CF = OF = the signed product does not fit in dst (SF/ZF/AF/PF stay
+  // UNDEF - architecturally undefined). See liftImulRR.
+  const std::uint64_t mask =
+          dst->width >= 64 ? ~0ULL : ((1ULL << dst->width) - 1);
+  const ignil::Value factor = ignil::Const{imm & mask, dst->width};
+  const auto [lowHalf, highHalf] =
+          emitWideProduct(*src, factor, dst->width, true, addr, out, tmp);
+  out.append({ignil::Opcode::COPY, *dst, {lowHalf}, addr});
+  emitProductFlags(lowHalf, highHalf, true, dst->width, addr, out, tmp);
 }
 
 void dragon::x86::X86IGNILLifter::liftImulRR(const llvm::MCInst &mc,
@@ -2458,12 +2498,13 @@ void dragon::x86::X86IGNILLifter::liftImulRR(const llvm::MCInst &mc,
     return;
   }
 
-  auto result = newTemp(tmp, dst->width);
-  out.append({ignil::Opcode::MUL, result, {*dst, *src}, addr});
-  out.append({ignil::Opcode::COPY, *dst, {result}, addr});
-
-  // Same all-UNDEF rationale as liftImulImm.
-  emitArithFlags(addr, out, tmp, {});
+  // CF = OF = the signed product does not fit in dst. This used to leave
+  // every flag UNDEF on the grounds that IGNIL cannot form a double-width
+  // product - but emitWideProduct does exactly that for one-operand IMUL.
+  const auto [lowHalf, highHalf] =
+          emitWideProduct(*dst, *src, dst->width, true, addr, out, tmp);
+  out.append({ignil::Opcode::COPY, *dst, {lowHalf}, addr});
+  emitProductFlags(lowHalf, highHalf, true, dst->width, addr, out, tmp);
 }
 
 void dragon::x86::X86IGNILLifter::liftLeaTrunc32(const llvm::MCInst &mc,
@@ -3562,6 +3603,36 @@ void dragon::x86::X86IGNILLifter::liftMulDiv(const llvm::MCInst &mc,
     return;
   }
 
+  const auto [lowHalf, highHalf] =
+          emitWideProduct(acc, src, w, isSigned, addr, out, tmp);
+  out.append({Opcode::COPY, low, {lowHalf}, addr});
+  out.append({Opcode::COPY, high, {highHalf}, addr});
+
+  emitProductFlags(lowHalf, highHalf, isSigned, w, addr, out, tmp);
+}
+
+
+std::pair<dragon::ignil::Temp, dragon::ignil::Temp>
+dragon::x86::X86IGNILLifter::emitWideProduct(ignil::Value acc, ignil::Value src,
+                                             ignil::Width w, bool isSigned,
+                                             std::uint64_t addr,
+                                             ignil::Block &out,
+                                             std::uint32_t &tmp) const {
+  // The full 2w-bit product of two w-bit values, as (low half, high half).
+  // Shared by one-operand MUL/IMUL and the two/three-operand IMUL forms.
+  using ignil::Opcode;
+  auto binary = [&](Opcode op, ignil::Width width, ignil::Value a, ignil::Value b) {
+    auto t = newTemp(tmp, width);
+    out.append({op, t, {a, b}, addr});
+    return t;
+  };
+  auto unary = [&](Opcode op, ignil::Width width, ignil::Value a) {
+    auto t = newTemp(tmp, width);
+    out.append({op, t, {a}, addr});
+    return t;
+  };
+  const Opcode extend = isSigned ? Opcode::SEXT : Opcode::ZEXT;
+
   ignil::Temp lowHalf = newTemp(tmp, w);
   ignil::Temp highHalf = newTemp(tmp, w);
   if (w < 64) {
@@ -3606,9 +3677,15 @@ void dragon::x86::X86IGNILLifter::liftMulDiv(const llvm::MCInst &mc,
       out.append({Opcode::COPY, highHalf, {unsignedHigh}, addr});
     }
   }
-  out.append({Opcode::COPY, low, {lowHalf}, addr});
-  out.append({Opcode::COPY, high, {highHalf}, addr});
+  return {lowHalf, highHalf};
+}
 
+void dragon::x86::X86IGNILLifter::emitProductFlags(ignil::Temp lowHalf,
+                                                   ignil::Temp highHalf,
+                                                   bool isSigned, ignil::Width w,
+                                                   std::uint64_t addr,
+                                                   ignil::Block &out,
+                                                   std::uint32_t &tmp) const {
   // CF = OF = "the high half is significant": non-zero for MUL, not the sign
   // extension of the low half for IMUL. SF, ZF, AF and PF are undefined.
   FlagSetter significant = [this, lowHalf, highHalf, isSigned, w,
@@ -3627,8 +3704,7 @@ void dragon::x86::X86IGNILLifter::liftMulDiv(const llvm::MCInst &mc,
   };
   emitArithFlags(addr, out, tmp,
                  {{X86Flag::CF, significant},
-                  {X86Flag::OF, [](ignil::Block &, std::uint32_t &) {}}});
-}
+                  {X86Flag::OF, [](ignil::Block &, std::uint32_t &) {}}});}
 
 void dragon::x86::X86IGNILLifter::liftBt(const llvm::MCInst &mc,
                                          std::uint64_t addr, ignil::Block &out,

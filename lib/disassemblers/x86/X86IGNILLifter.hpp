@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <span>
+#include <utility>
 #include <unordered_map>
 
 namespace dragon {
@@ -345,6 +346,15 @@ class X86IGNILLifter {
   /// half from 32-bit partial products. 64-bit DIV/IDIV have a 128-bit
   /// dividend IGNIL cannot hold: their results are UNDEF and the instruction
   /// is recorded in Block::unlifted().
+  // Full 2w-bit product of two w-bit values as (low half, high half), and the
+  // MUL/IMUL CF = OF flags it implies (SF/ZF/AF/PF UNDEF).
+  [[nodiscard]] std::pair<ignil::Temp, ignil::Temp>
+  emitWideProduct(ignil::Value acc, ignil::Value src, ignil::Width w,
+                  bool isSigned, std::uint64_t addr, ignil::Block &out,
+                  std::uint32_t &tmp) const;
+  void emitProductFlags(ignil::Temp lowHalf, ignil::Temp highHalf,
+                        bool isSigned, ignil::Width w, std::uint64_t addr,
+                        ignil::Block &out, std::uint32_t &tmp) const;
   void liftMulDiv(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                   std::uint32_t &tmp, MulDivForm form) const;
   /// BT reg, reg/imm8: CF = bit (index mod width) of the register. The other
@@ -626,7 +636,8 @@ class X86IGNILLifter {
   unsigned opJmp64m_{}, opJmp32m_{}; // indirect memory jump
   unsigned opCall64m_{}, opCall32m_{}; // indirect memory call
   unsigned opJmp_{}; // direct
-  unsigned opLoop_{};
+  unsigned opLoop_{}, opLoope_{}, opLoopne_{};
+  unsigned opJcxz_{}, opJecxz_{}, opJrcxz_{};
   unsigned opCall64r_{}, opCall32r_{}; // indirect
   unsigned opCall_{}, opCall32_{}; // direct
   unsigned opRet64_{}, opRet32_{};
