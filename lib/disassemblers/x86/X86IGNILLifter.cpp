@@ -1827,7 +1827,11 @@ void dragon::x86::X86IGNILLifter::liftAdd(const llvm::MCInst &mc,
       emitUndef(*dst, addr, out);
       return;
     }
-    src = *srcReg;
+    // A copy: with `add eax, eax` / `sub eax, eax` the source is the
+    // destination, and the flags below must see its value before the write.
+    auto srcCopy = newTemp(tmp, dst->width);
+    out.append({ignil::Opcode::COPY, srcCopy, {*srcReg}, addr});
+    src = srcCopy;
   }
 
   // Save original dst before overwrite so OF can compare pre- and post-signs.
@@ -2103,7 +2107,11 @@ void dragon::x86::X86IGNILLifter::liftSub(const llvm::MCInst &mc,
       emitUndef(*dst, addr, out);
       return;
     }
-    src = *srcReg;
+    // A copy: with `add eax, eax` / `sub eax, eax` the source is the
+    // destination, and the flags below must see its value before the write.
+    auto srcCopy = newTemp(tmp, dst->width);
+    out.append({ignil::Opcode::COPY, srcCopy, {*srcReg}, addr});
+    src = srcCopy;
   }
 
   // Save original dst before overwrite so CF/OF see the pre-subtraction value.

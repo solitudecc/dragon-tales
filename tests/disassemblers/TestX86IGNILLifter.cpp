@@ -2684,3 +2684,38 @@ TEST_CASE("X86 IGNIL lifting - pxor leaves the flags alone",
   CHECK(ex.evaluate(ex.readRegister(x86r::OF)) == 1);
 }
 #endif // DRAGON_WITH_Z3
+
+#ifdef DRAGON_WITH_Z3
+// `add eax, eax` / `sub eax, eax`: the source register is the destination.
+// The flags were computed from the source read *after* the result had been
+// written back, so CF/OF/AF came out of (old, result) instead of
+// (old, old). Found by the real-block Unicorn difftest.
+TEST_CASE("X86 IGNIL lifting - add/sub with source == destination",
+          "[ignil][x86][x86_64]") {
+  struct Case {
+    const char *name;
+    std::vector<std::uint8_t> bytes;
+    std::uint64_t rax;
+    int cf, of, af, zf;
+  };
+  const Case cases[] = {
+          {"add eax, eax", {0x01, 0xc0}, 0x80000000, 1, 1, 0, 1},
+          {"sub eax, eax", {0x29, 0xc0}, 0x80000010, 0, 0, 0, 1},
+          {"add rax, rax", {0x48, 0x01, 0xc0}, 0x8000000000000008, 1, 1, 1, 0},
+  };
+  for (const auto &c: cases) {
+    INFO(c.name);
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne(c.bytes,
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.setRegister(x86r::RAX, c.rax);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == c.cf);
+    CHECK(ex.evaluate(ex.readRegister(x86r::OF)) == c.of);
+    CHECK(ex.evaluate(ex.readRegister(x86r::AF)) == c.af);
+    CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == c.zf);
+  }
+}
+#endif // DRAGON_WITH_Z3
