@@ -2,6 +2,7 @@
 #include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include "GuardProof.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -235,11 +236,11 @@ class GuardEvaluator {
 constexpr std::uint32_t kMaxCases = 4096;
 
 // The number of index values 0, 1, ..., N-1 for which the guard CJMP falls
-// into `dispatch`, provided every larger index tried leaves it. 0 if the
-// guard is not such a bound.
+// into `dispatch`, provided the resulting bound is proved over all inputs.
+// Prefix evaluation proposes a count, never establishes its completeness.
 static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
                                     std::uint64_t dispatch, const Expr &index,
-                                    unsigned indexBits) {
+                                    unsigned indexBits, const Expr &fullIndex) {
   if (cjmp.srcs.size() < 3)
     return 0;
   const auto *t = std::get_if<ignil::Const>(&cjmp.srcs[1]);
@@ -271,21 +272,9 @@ static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
   }
   if (n == 0 || n == kMaxCases)
     return 0;
-  // A real bound keeps every larger index out, including the ones a signed
-  // compare would let through (the top half of the index's range).
-  const std::uint64_t m = lowMask(indexBits);
-  const std::uint64_t probes[] = {n + 1ull,      n + 2ull,         n + 15ull,
-                                  m >> 1,        (m >> 1) + 1,     m,
-                                  0x7fffffff,    0x80000000,       ~0ull};
-  for (std::uint64_t raw: probes) {
-    const std::uint64_t p = raw & m;
-    if (p < n)
-      continue; // wrapped into the accepted range: not a value to probe
-    auto in = inBounds(p);
-    if (!in || *in)
-      return 0;
-  }
-  return n;
+  // Enumeration proposes a count only. Prove the bound over every input,
+  // including wider guard views and values no finite probe list can cover.
+  return proveGuardBound(cond, fullIndex, index, indexBits, n, dispatchWhenTrue) ? n : 0;
 }
 
 // The guard must be the only predecessor: another incoming edge (including
@@ -467,7 +456,7 @@ std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
     BackwardSlicer slicer{std::max(sliceDepth - 1, 0)};
     Expr condExpr =
             slicer.slice(cjmp.srcs[0], predBlock->startAddress(), graph);
-    sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core, indexBits);
+    sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core, indexBits, *table->index);
   }
 
   // Without a guard there is no bound. A masked index (`and eax, 0x7f`) is

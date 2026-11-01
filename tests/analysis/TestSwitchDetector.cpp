@@ -15,6 +15,7 @@
 
 #include <cstring>
 #include <set>
+#include "SwitchGuardFixtures.hpp"
 
 // Namespace aliases to disambiguate slice::Const from ignil::Const.
 namespace slice = dragon::slice;
@@ -832,3 +833,83 @@ TEST_CASE("SwitchDetector - a reloaded index after a write is not the guarded va
   CHECK(jumpSuccessors(dragon::Architecture::X86_64,
                         layout(code, 3, 8), 0x100b).empty());
 }
+
+TEST_CASE("SwitchDetector - wide signed guards cannot bound a truncated index",
+          "[switch][e2e][bound-proof]") {
+  for (auto strategy: {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                       dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    for (bool signedGuard: {false, true}) {
+      INFO("strategy " << static_cast<int>(strategy) << " signed " << signedGuard);
+      const auto fixture = dragon::test::guard::narrow(signedGuard);
+      dragon::Configuration cfg;
+      cfg.disassemblyStrategy = strategy;
+      dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+      dragon::Graph g{dragon::Architecture::X86_64, cfg};
+      dis.disassemble(fixture.bytes, kBase, g);
+      const dragon::BasicBlock block{&g, fixture.dispatch};
+      REQUIRE(block.isValid());
+      if (signedGuard)
+        CHECK(block.successors().empty());
+      else
+        CHECK(block.successors() == std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
+    }
+  }
+}
+
+TEST_CASE("SwitchDetector - isolated accepted indices cannot hide beyond probes",
+          "[switch][e2e][bound-proof]") {
+  for (std::uint32_t rare: {6u, 17u, 31u, 127u, 255u, 0x12345678u}) {
+    INFO("rare " << rare);
+    const auto fixture = dragon::test::guard::hole(rare);
+    CHECK(jumpSuccessors(dragon::Architecture::X86_64,
+                          fixture.bytes, fixture.dispatch).empty());
+  }
+}
+
+TEST_CASE("SwitchDetector - a vacuous guard cannot bound a masked index",
+          "[switch][e2e][bound-proof]") {
+  const auto fixture = dragon::test::guard::masked();
+  CHECK(jumpSuccessors(dragon::Architecture::X86_64,
+                        fixture.bytes, fixture.dispatch).empty());
+}
+
+TEST_CASE("SwitchDetector - sign extended indices need a guard excluding negatives",
+          "[switch][e2e][bound-proof]") {
+  for (bool signedGuard: {false, true}) {
+    const auto fixture = dragon::test::guard::signExtended(signedGuard);
+    const auto targets = jumpSuccessors(dragon::Architecture::X86_64,
+                                         fixture.bytes, fixture.dispatch);
+    if (signedGuard)
+      CHECK(targets.empty());
+    else
+      CHECK(targets == std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
+  }
+}
+
+TEST_CASE("SwitchDetector - safe wrapped preimages preserve a narrow bound",
+          "[switch][e2e][bound-proof]") {
+  const auto fixture = dragon::test::guard::wrappedPrefix();
+  CHECK(jumpSuccessors(dragon::Architecture::X86_64, fixture.bytes, fixture.dispatch) ==
+        std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
+}
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("Indirect jumps - a truncated Z3 enumeration is not a target set",
+          "[switch][e2e][bound-proof]") {
+  // 512 possible byte-sized RET targets, more than the enumeration budget.
+  std::vector<std::uint8_t> bytes(0x1300, 0xcc);
+  const std::uint8_t code[] = {0x81, 0xe7, 0xff, 0x01, 0, 0, // and edi,511
+                                0x48, 0x81, 0xc7, 0, 0x20, 0, 0, // add rdi,0x2000
+                                0xff, 0xe7}; // jmp rdi
+  std::copy(std::begin(code), std::end(code), bytes.begin());
+  std::fill(bytes.begin() + 0x1000, bytes.begin() + 0x1200, 0xc3);
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  cfg.useZ3ForPathDiscovery = true;
+  dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+  dragon::Graph graph{dragon::Architecture::X86_64, cfg};
+  dis.disassemble(bytes, kBase, graph);
+  REQUIRE(graph.get(kBase + 13));
+  CHECK(graph.get(kBase + 13)->branches().empty());
+}
+#endif

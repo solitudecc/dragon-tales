@@ -6,6 +6,7 @@
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/analysis/SliceExprZ3.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+#include "../analysis/SwitchGuardFixtures.hpp"
 #endif
 
 #include <vector>
@@ -13,6 +14,32 @@
 using namespace dragon::test;
 
 #ifdef DRAGON_WITH_Z3
+TEST_CASE("Switch bounds include every guarded Unicorn target or stay unresolved",
+          "[semantic][switch][bound-proof]") {
+  using namespace dragon::test;
+  std::vector<guard::Fixture> fixtures{guard::narrow(true), guard::signExtended(true),
+                                       guard::signExtended(false), guard::wrappedPrefix()};
+  for (auto rare: {6u, 17u, 31u, 127u, 255u})
+    fixtures.push_back(guard::hole(rare));
+  for (const auto &fixture: fixtures) {
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+    dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+    dragon::Graph g{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(fixture.bytes, kCodeBase, g);
+    const auto successors = dragon::BasicBlock{&g, fixture.dispatch}.successors();
+    for (std::uint64_t input: {0ULL, 1ULL, 2ULL, 6ULL, 17ULL, 31ULL, 127ULL,
+                               255ULL, 256ULL, 257ULL, 258ULL, 259ULL, 0xffffffffULL}) {
+      auto regs = defaultInitialRegs();
+      setReg64(regs, x86off::RDI, input);
+      const auto target = getReg64(runUnicorn(fixture.bytes, regs, {}).regs,
+                                    x86off::RAX);
+      if (target != guard::fallback)
+        CHECK((successors.empty() || successors.contains(target)));
+    }
+  }
+}
+
 TEST_CASE("Slicer - memory writes between loads agree with Unicorn",
           "[semantic][slicer][load-identity]") {
   for (bool copy: {false, true}) {

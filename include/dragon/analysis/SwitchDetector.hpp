@@ -64,11 +64,11 @@ struct SwitchCandidate {
 ///      A second variable term (a base register, as in position-independent
 ///      tables of relative offsets) is not matched.
 ///   2. Bounds: the sole predecessor must end in a CJMP; its condition is
-///      sliced and *evaluated* with the index set to 0, 1, 2, ... - the shape
-///      of the comparison differs per lifter and per ja/jae/b.hi, so it is
-///      not pattern-matched. numCases is the first index that leaves the
-///      dispatch block, accepted only if every larger index probed (including
-///      ones a signed compare would let through) leaves it as well.
+///      sliced and evaluated at a prefix of index values to propose numCases.
+///      The candidate then needs a complete interval proof or an SMT proof
+///      that no guarded input reaches an out-of-range index. Wider register
+///      views retain their free high bits. Timeout/UNKNOWN rejects the bound;
+///      width/masking alone is not evidence of the table length.
 ///
 /// Returns nullopt when the expression does not match the pattern.
 /// Returns a SwitchCandidate with numCases == 0 when the pattern is found

@@ -895,6 +895,10 @@ class SliceExpr:
     def enumerate_values(self, max_values=0, sorted=True):
         """Enumerate concrete 64-bit values this expression can take, via Z3.
 
+        The returned list may be partial at the limit or on solver UNKNOWN.
+        It must not be used as an exhaustive CFG target set. solve_unique()
+        requires a proof that there is only one possible value.
+
         Parameters
         ----------
         max_values : int

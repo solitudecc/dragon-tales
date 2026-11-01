@@ -12,19 +12,20 @@ namespace dragon::slice {
 struct EnumeratorConfig {
   std::size_t maxValues = 256; ///< Abort after this many solutions
   bool sorted = true; ///< Sort results before returning
+  bool requireComplete = false; ///< Return no values unless exhaustion is proved
 };
 
-/// Enumerate all concrete 64-bit values that `expr` can take given
+/// Collect concrete 64-bit values that `expr` can take given
 /// the extra `constraints` (already expressed as Z3 assertions)
 ///
 /// Each call to Z3 produces one model, then adds a blocking clause
 /// (expr != found_value) before asking for the next. The loop ends
 /// when the solver returns UNSAT or maxValues is reached.
+/// With requireComplete, reaching the limit or UNKNOWN returns an empty vector
+/// unless a final UNSAT check proves there are no remaining values.
 ///
-/// Returns an empty vector when the expression is unsatisfiable under
-/// the given constraints, or when the expression is fully concrete
-/// (Const node) -> in the latter case the single constant value
-/// is returned directly without calling Z3.
+/// Returns an empty vector when unsatisfiable, or when requireComplete cannot
+/// be established. A Const returns its one value directly without a solver.
 [[nodiscard]] std::vector<std::uint64_t>
 enumeratedValues(const Expr &expr, z3::context &ctx,
                  const std::vector<z3::expr> &constraints = {},
@@ -32,7 +33,7 @@ enumeratedValues(const Expr &expr, z3::context &ctx,
 
 /// Convenience: solve for a single concrete value.
 /// Returns nullopt if unsatisfiable or if the expression is not
-/// uniquely determined (i.e. more than one model exists).
+/// uniquely determined, including solver UNKNOWN.
 [[nodiscard]] std::optional<std::uint64_t>
 solveUnique(const Expr &expr, z3::context &ctx,
             const std::vector<z3::expr> &constraints = {});

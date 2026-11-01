@@ -40,6 +40,9 @@ dragon::slice::enumeratedValues(const Expr &expr, z3::context &ctx,
     solver.add(formula != ctx.bv_val(concrete, formula.get_sort().bv_size()));
   }
 
+  if (cfg.requireComplete && solver.check() != z3::unsat)
+    return {};
+
   if (cfg.sorted)
     std::sort(results.begin(), results.end());
 
@@ -49,6 +52,7 @@ std::optional<std::uint64_t>
 dragon::slice::solveUnique(const Expr &expr, z3::context &ctx,
                            const std::vector<z3::expr> &constraints) {
   EnumeratorConfig config{2};
+  config.requireComplete = true;
   if (auto result = enumeratedValues(expr, ctx, constraints, config);
       result.size() == 1)
     return result[0];

@@ -48,7 +48,7 @@ pyelftools, pefile, gcc, `i686-`/`x86_64-w64-mingw32-gcc`, `llc-21`.
 
 - Clone/build: `~/dragon-tales`, build dir `~/dragon-tales/build`
   (RelWithDebInfo, Ninja). `cmake --build build -j3` (more jobs can OOM).
-- Tests: `cd build && ctest -j3` (fast suite, ~360 tests);
+- Tests: `cd build && ctest -j3` (fast suite, ~380 tests with Z3/Unicorn);
   `./build/bin/dragon_tests "[semantic]"` (JIT round-trip vs Unicorn, slow);
   `"[expensive]"` exists too.
 - Real-world binaries for whole-program checks: `~/bench/lua32.exe`,
@@ -114,6 +114,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |
 | `loop_slice_diff.py` | Nested-join loop slices vs 128 Unicorn executions: invariants, differing writes, increments and cross-register copies. |
+| `guard_truth.py` | 27 CFGs vs 20,736 Unicorn executions: byte/word/dword guards, signedness, boolean holes, narrowing and masks. Also runs without Z3. |
 | `llvm_diff.py` | LLVM-lifted code (compiled with `llc-21`, run natively) vs SymbolicExecutor. |
 | `analyze_bin.py BIN OBJDUMP` | Whole-binary report: objdump agreement, function recovery, empty functions, IGNIL coverage + top unlifted, indirect jumps, LLVM lift success. `STRATEGY=0/1`, `LLVM=0/1`. |
 | `table_truth.py BIN OBJDUMP STRATEGY` | i386 absolute jump tables: resolved targets vs the table in the image. |
@@ -147,7 +148,7 @@ Numbers on the Lua builds (linear sweep unless noted):
 | objdump agreement | 100% | 100% | 100% |
 | functions without blocks | 0 | 2 | 0 |
 | unlifted instructions | 3.35% (x87 only) | 0.73% | 1.97% (FP only) |
-| jump tables verified / wrong | 43 of 50 / 0 (4 are guardless Lua dispatch, 3 unverifiable) | 33 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
+| jump tables verified / wrong | 43 of 50 / 0 (4 guardless dispatches + 1 ambiguous reload unresolved; 2 unverified) | 33 of 37 / 0 (linear and recursive) | 7 of 8 / 0 |
 | LLVM lift | all functions | all | all |
 
 The x86-64 relative-table script now follows the base register used by
@@ -162,7 +163,7 @@ table uses RBX. The slicer queries the upper bytes independently and retains
 paths are never equated. Explicit entry hints seed speculative reachability
 (plus direct callees); heuristic function starts after padded RETs can actually be cases
 and must not inject independent unknown register states into that proof.
-The Lua x86-64 linear analysis currently takes about 13 s versus 6 s before
+The Lua x86-64 linear analysis currently takes about 15 s versus 6 s before
 speculation on this VM; repeated slicing/revalidation is a profiling target.
 
 Slice values carry producing-op/program-point identity, including a bounded
@@ -171,6 +172,14 @@ memory snapshot and address. STORE/CALL/opaque instructions invalidate that
 snapshot; a join creates a new one. Debug strings are not semantic identities:
 conversion widths and origins matter. Graph-entry register inputs retain their
 public Z3 names; unresolved values at different internal points are distinct.
+
+Jump-table prefix enumeration only proposes a count. GuardProof proves it
+over all inputs using exact interval sets for supported predicates, otherwise
+SMT with byte-aliasing register inputs (50 ms per check). UNKNOWN rejects the
+bound. A reachable final case and a non-vacuous guard are required. Without
+Z3, unsupported predicates stay unknown. CFG target discovery on both x86
+and ARM requires exhaustive enumeration; a capped list is never a target set.
+`solveUnique` also requires a proof of exhaustion.
 
 ## 6. Backlog (suggested order)
 

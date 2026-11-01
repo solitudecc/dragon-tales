@@ -947,9 +947,10 @@ else
 | `SliceExprZ3(ctx)` | Construct with a Z3 context |
 | `lower(expr)` → `z3::expr` | Lower a SliceExpr tree to a bitvector formula |
 | `reset()` | Clear the symbol cache between solver sessions |
-| `enumeratedValues(expr, ctx, constraints, cfg)` → `vector<uint64_t>` | Enumerate all satisfying 64-bit values |
+| `enumeratedValues(expr, ctx, constraints, cfg)` → `vector<uint64_t>` | Enumerate satisfying values up to the configured limit |
 | `solveUnique(expr, ctx, constraints)` → `optional<uint64_t>` | Return value only when exactly one model exists |
 | `EnumeratorConfig::maxValues` | Maximum solutions to collect (default 256) |
+| `EnumeratorConfig::requireComplete` | Return no values unless exhaustion is proved (default false); CFG target recovery and `solveUnique` enable it |
 | `EnumeratorConfig::sorted` | Sort results ascending (default true) |
 
 ### SymbolicExecutor — running IGNIL over Z3
@@ -1209,12 +1210,14 @@ Recognition is two-phase:
    `targetBase`, `entryShift`, `entryBits` and `entrySigned` describing how an
    entry becomes a target; entries may be 1, 2, 4 or 8 bytes.
 2. **Bounds extraction** — the sole predecessor must end in a CJMP; then
-   slice its condition. Instead of matching a comparison shape (which differs
-   per lifter and per `ja`/`jae`/`b.hi`), the condition is evaluated with the
-   index set to 0, 1, 2, ...: `numCases` is the first index for which the
-   branch leaves the dispatch block, accepted only if every larger index
-   probed (including ones a signed compare would let through) leaves it too.
-   A condition that depends on anything but the index gives `numCases == 0`.
+   slice its condition. Evaluating an index prefix proposes `numCases`.
+   Acceptance requires a complete interval proof for supported comparisons
+   and boolean combinations, or a Z3 bitvector proof over all inputs. Register
+   views share physical bytes at the same program point, so a wider guard's
+   high bits remain free when the table index is truncated. A feasible last
+   case and a guard that excludes otherwise possible out-of-range indices
+   are required; width or masking alone is not a bound. Solver timeout or
+   UNKNOWN yields `numCases == 0`. Without Z3, unsupported formulas stay unknown.
    Additional predecessors and self-edges reject the bound because they can
    bypass the guard, as does a dispatch that is itself a function entry.
 

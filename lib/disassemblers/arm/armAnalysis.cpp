@@ -343,7 +343,9 @@ dragon::arm::ARMAnalysis::collectTargets(const slice::Expr &result,
 #ifdef DRAGON_WITH_Z3
   if (configuration_.useZ3ForPathDiscovery) {
     z3::context ctx;
-    auto targets = slice::enumeratedValues(result, ctx);
+    slice::EnumeratorConfig limits;
+    limits.requireComplete = true;
+    auto targets = slice::enumeratedValues(result, ctx, {}, limits);
     logger_.log(
             "Z3 enumerated {} candidate target(s) for indirect jump @ 0x{:x}",
             targets.size(), blockAddr);
