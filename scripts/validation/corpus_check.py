@@ -6,7 +6,8 @@ def objdump_for(path):
     with open(path, 'rb') as f:
         head = f.read(0x400)
     if head[:4] == b'\x7fELF':
-        return 'objdump'
+        machine = int.from_bytes(head[18:20], 'little')
+        return {0x3e: 'x86_64-linux-gnu-objdump', 0x03: 'x86_64-linux-gnu-objdump'}.get(machine, 'objdump')
     pe = int.from_bytes(head[0x3c:0x40], 'little')
     machine = int.from_bytes(head[pe + 4:pe + 6], 'little')
     return 'x86_64-w64-mingw32-objdump' if machine == 0x8664 else 'i686-w64-mingw32-objdump'
