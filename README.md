@@ -7,7 +7,7 @@ Features:
 - CFG and function recovery
 - **IGNIL** — a lightweight intermediate language for architecture-independent analysis
 - **IGNIL peephole simplifier** — block-local constant folding, algebraic identities, dead-Temp elimination
-- **Backward slicer** — propagates values through IGNIL CFGs without crossing join nodes
+- **Backward slicer** — propagates values through IGNIL CFGs, honouring sub-register aliasing; join nodes are merged when every path yields the same constant
 - **LLVMLifter** — lifts a recovered `Function`, or a single flattened IGNIL block (no CFG needed), to LLVM IR, with an optimization pipeline (mem2reg/instcombine/GVN/DCE) on top
 - **Z3 integration** — lower a sliced expression to a Z3 bitvector formula, enumerate the concrete values it can take, or solve for a unique one
 - **Symbolic execution** — run an IGNIL block over Z3 bitvectors with registers and memory seeded concretely or symbolically: solve for an input that makes a check pass, prove what an obfuscated expression really computes, and resolve a computed jump (jump table, VM dispatch) to the concrete addresses it can reach
