@@ -152,8 +152,24 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
             symCache_.emplace(key, sym);
             return sym;
           },
+          // Every unknown is its own variable, except references to the
+          // same producing op, which share one. (A single shared "undef"
+          // made unrelated unknowns equal, so SUB(undef, undef) of two
+          // different unlifted instructions solved uniquely to 0.)
           [&](const Undef &u) -> z3::expr {
-            return ctx_.bv_const("undef", u.width);
+            if (u.opIndex >= 0) {
+              const std::string key = std::format(
+                      "undef@{:x}#{}:i{}", u.blockAddress, u.opIndex, u.width);
+              auto it = symCache_.find(key);
+              if (it != symCache_.end())
+                return it->second;
+              z3::expr sym = ctx_.bv_const(key.c_str(), u.width);
+              symCache_.emplace(key, sym);
+              return sym;
+            }
+            const std::string name =
+                    std::format("undef!{}", anonymousUndefs_++);
+            return ctx_.bv_const(name.c_str(), u.width);
           }});
 }
 

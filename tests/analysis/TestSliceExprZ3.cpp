@@ -163,4 +163,69 @@ TEST_CASE("SliceExprZ3 - solveUnique finds the one constrained value",
     REQUIRE(*result == 0x5);
 }
 
+// ---------------------------------------------------------------------------
+// Undef: unrelated unknowns are independent, one unknown equals itself.
+//
+// Every Undef used to lower to the same Z3 constant "undef", so two unrelated
+// unknowns (two different unlifted instructions) were equal and
+// SUB(undef, undef) solved uniquely to 0 - an indirect jump through such a
+// value "resolved" to a constant.
+// ---------------------------------------------------------------------------
+
+static std::shared_ptr<Expr> sub(std::shared_ptr<Expr> a,
+                                 std::shared_ptr<Expr> b) {
+    return std::make_shared<Expr>(
+            BinOp{dragon::ignil::Opcode::SUB, std::move(a), std::move(b)});
+}
+
+TEST_CASE("SliceExprZ3 - unrelated Undefs are independent", "[z3][undef]") {
+    z3::context ctx;
+    // No known origin.
+    Expr anon = *sub(std::make_shared<Expr>(Undef{64}),
+                     std::make_shared<Expr>(Undef{64}));
+    CHECK_FALSE(solveUnique(anon, ctx).has_value());
+    // Two different producing ops.
+    Expr diff = *sub(std::make_shared<Expr>(Undef{64, 0x1000, 3}),
+                     std::make_shared<Expr>(Undef{64, 0x1000, 4}));
+    CHECK_FALSE(solveUnique(diff, ctx).has_value());
+}
+
+TEST_CASE("SliceExprZ3 - one producing op is one value", "[z3][undef]") {
+    z3::context ctx;
+    Expr same = *sub(std::make_shared<Expr>(Undef{64, 0x1000, 3}),
+                     std::make_shared<Expr>(Undef{64, 0x1000, 3}));
+    auto v = solveUnique(same, ctx);
+    REQUIRE(v.has_value());
+    CHECK(*v == 0);
+}
+
+#include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/Graph.hpp>
+
+TEST_CASE("SliceExprZ3 - sliced UNDEF ops keep their identity", "[z3][undef]") {
+    namespace ignil = dragon::ignil;
+    auto slice = [](bool sameSource) {
+        // RAX = UNDEF ; RCX = UNDEF or COPY(RAX) ; RAX = SUB(RAX, RCX)
+        ignil::Block b{0x1000};
+        b.append({ignil::Opcode::UNDEF, ignil::Value{x86::RAX}, {}, 0x1000});
+        if (sameSource)
+            b.append({ignil::Opcode::COPY, ignil::Value{x86::RCX},
+                      {ignil::Value{x86::RAX}}, 0x1004});
+        else
+            b.append({ignil::Opcode::UNDEF, ignil::Value{x86::RCX}, {}, 0x1004});
+        b.append({ignil::Opcode::SUB, ignil::Value{x86::RAX},
+                  {ignil::Value{x86::RAX}, ignil::Value{x86::RCX}}, 0x1008});
+        b.append({ignil::Opcode::RET, std::nullopt, {}, 0x100b});
+        dragon::Graph g{dragon::Architecture::X86_64, dragon::Configuration{}};
+        g.addIGNILBlock(std::move(b));
+        g.addBlock(0x1000);
+        return dragon::BackwardSlicer{}.slice(ignil::Value{x86::RAX}, 0x1000, g);
+    };
+    z3::context ctx;
+    CHECK_FALSE(solveUnique(slice(false), ctx).has_value()); // was 0
+    auto v = solveUnique(slice(true), ctx);
+    REQUIRE(v.has_value());
+    CHECK(*v == 0);
+}
+
 #endif // DRAGON_WITH_Z3

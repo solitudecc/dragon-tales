@@ -369,9 +369,12 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
     }
 
     // UNDEF and control-flow ops produce no useful expression.
+    // The value is still one value: tag it with the op that produced it, so
+    // two references to the same UNDEF (`sub rax, rax` after it) stay equal
+    // while unrelated ones stay independent.
     default: {
       ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : ignil::Width{64};
-      return slice::Expr{slice::Undef{w}};
+      return slice::Expr{slice::Undef{w, block.startAddress(), opIdx}};
     }
   }
 }

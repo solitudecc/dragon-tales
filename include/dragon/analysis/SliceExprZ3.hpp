@@ -37,6 +37,9 @@ class SliceExprZ3 {
 
   z3::context &ctx_;
   mutable std::unordered_map<std::string, z3::expr> symCache_;
+  // Names handed to Undefs of unknown origin: each gets a fresh variable.
+  // Never reset, so a name is not reused within the context.
+  mutable std::uint64_t anonymousUndefs_ = 0;
 };
 
 } // namespace dragon::slice

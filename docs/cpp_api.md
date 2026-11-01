@@ -668,7 +668,7 @@ print(expr);
 | `BinOp` | `op`, `left`, `right` | Binary operation |
 | `UnaryOp` | `op`, `operand` | Unary operation |
 | `Load` | `addr`, `width` | Memory read |
-| `Undef` | — | Unresolvable value |
+| `Undef` | `width`, `blockAddress`, `opIndex` | Unresolvable value. Undefs with the same producing op (`opIndex >= 0` in the block at `blockAddress`) are one value; any other two are independent, and SliceExprZ3 lowers each to its own variable |
 
 ---
 

@@ -49,8 +49,17 @@ struct Load {
 
 /// Slicer could not determine the value (UNDEF source, depth exceeded,
 /// or a join node was reached).
+///
+/// Two Undefs are the same unknown value only when they come from the same
+/// IGNIL op - `opIndex` within the block at `blockAddress`, as the slicer
+/// records for an op it cannot model (UNDEF, OPAQUE, ...). An Undef with
+/// `opIndex < 0` has no known origin and is independent of every other one.
+/// SliceExprZ3 lowers them accordingly, so SUB(undef_a, undef_b) of two
+/// unrelated unknowns is not solved to 0.
 struct Undef {
   ignil::Width width{64};
+  std::uint64_t blockAddress{0};
+  int opIndex{-1};
 };
 
 /// Neutral symbolic expression produced by backward slicing.
