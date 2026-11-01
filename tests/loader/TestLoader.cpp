@@ -3,6 +3,7 @@
 #include <dragon/loader/ImageDisassembler.hpp>
 #include <dragon/loader/Loader.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -298,4 +299,61 @@ TEST_CASE("Loader - an undefined symbol is never also exported", "[loader]") {
       CHECK_FALSE((s.imported && s.exported));
     }
   }
+}
+
+// -----------------------------------------------------------------------
+// Damaged / unusual import directories (found by fuzzing the loader).
+//
+// LLVM's ImportDirectoryEntryRef::imported_symbols() resolves the import
+// lookup table with cantFail(): an RVA outside the image crashed the loader
+// with a null dereference, and so did a lookup-table RVA of 0, which is a
+// valid PE that only has an IAT.
+// -----------------------------------------------------------------------
+
+namespace {
+std::uint32_t rd32(const std::vector<std::uint8_t> &b, std::size_t o) {
+  return b[o] | b[o + 1] << 8 | b[o + 2] << 16 | std::uint32_t{b[o + 3]} << 24;
+}
+void wr32(std::vector<std::uint8_t> &b, std::size_t o, std::uint32_t v) {
+  for (int i = 0; i < 4; ++i)
+    b[o + i] = static_cast<std::uint8_t>(v >> (8 * i));
+}
+// File offset of the first import descriptor of a PE32+ image.
+std::size_t firstImportDescriptor(const std::vector<std::uint8_t> &pe) {
+  const std::size_t nt = rd32(pe, 0x3c);
+  const std::size_t sections = pe[nt + 6] | pe[nt + 7] << 8;
+  const std::size_t optSize = pe[nt + 20] | pe[nt + 21] << 8;
+  const std::size_t opt = nt + 24;
+  const std::uint32_t importRva = rd32(pe, opt + 112 + 8); // data dir 1
+  for (std::size_t i = 0; i < sections; ++i) {
+    const std::size_t sh = opt + optSize + i * 40;
+    const std::uint32_t va = rd32(pe, sh + 12), raw = rd32(pe, sh + 20),
+                        size = std::max(rd32(pe, sh + 8), rd32(pe, sh + 16));
+    if (importRva >= va && importRva < va + size)
+      return raw + (importRva - va);
+  }
+  return 0;
+}
+} // namespace
+
+TEST_CASE("Loader - an import lookup table outside the image does not crash",
+          "[loader][pe][robustness]") {
+  auto pe = toVec(kImpExpPeX64, sizeof(kImpExpPeX64));
+  const std::size_t desc = firstImportDescriptor(pe);
+  REQUIRE(desc != 0);
+  wr32(pe, desc + 0, 0x7fff0000); // ImportLookupTableRVA
+  auto img = LoadedImage::loadBytes(pe);
+  REQUIRE(img.has_value()); // and no crash
+  CHECK(img->imports().empty());
+}
+
+TEST_CASE("Loader - imports are read from the IAT without a lookup table",
+          "[loader][pe][robustness]") {
+  auto pe = toVec(kImpExpPeX64, sizeof(kImpExpPeX64));
+  const std::size_t desc = firstImportDescriptor(pe);
+  REQUIRE(desc != 0);
+  wr32(pe, desc + 0, 0); // ImportLookupTableRVA = 0: IAT only
+  auto img = LoadedImage::loadBytes(pe);
+  REQUIRE(img.has_value());
+  CHECK(img->imports().size() == 2);
 }

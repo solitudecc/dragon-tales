@@ -1,7 +1,9 @@
 #include <dragon/loader/Loader.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -336,37 +338,67 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
     // Imports: one Symbol per Import Address Table slot. `address` is the
     // slot's virtual address - what `call [rip+X]` / `call [X]` reads - so an
     // indirect call through it can be named.
+    //
+    // The lookup table is walked here rather than with
+    // ImportDirectoryEntryRef::imported_symbols(): LLVM resolves the table's
+    // RVA with cantFail() (a "FIXME: Handle errors"), so an RVA outside the
+    // image - a damaged file, or a valid one whose lookup-table RVA is 0 and
+    // only has an IAT - dereferenced a null pointer, and it reads entries
+    // until a zero one without checking the end of the file.
+    const StringRef fileData = coff->getData();
+    const auto fileBegin = reinterpret_cast<std::uintptr_t>(fileData.begin());
+    const auto fileEnd = reinterpret_cast<std::uintptr_t>(fileData.end());
+    auto inFile = [&](std::uintptr_t p, std::uint64_t n) {
+      return p >= fileBegin && p <= fileEnd && n <= fileEnd - p;
+    };
+    auto rvaPtr = [&](std::uint32_t rva) -> std::optional<std::uintptr_t> {
+      std::uintptr_t p = 0;
+      if (Error e = coff->getRvaPtr(rva, p)) {
+        consumeError(std::move(e));
+        return std::nullopt;
+      }
+      return p;
+    };
+    constexpr std::uint64_t kMaxImportsPerDll = 1 << 16;
     for (const ImportDirectoryEntryRef &dir : coff->import_directories()) {
-      std::uint32_t iatRva = 0;
+      std::uint32_t iatRva = 0, iltRva = 0;
       if (Error e = dir.getImportAddressTableRVA(iatRva)) {
         consumeError(std::move(e));
         continue;
       }
-      std::uint64_t index = 0;
-      for (const ImportedSymbolRef &imp : dir.imported_symbols()) {
+      if (Error e = dir.getImportLookupTableRVA(iltRva)) {
+        consumeError(std::move(e));
+        iltRva = 0;
+      }
+      // Without a lookup table the IAT holds the same entries on disk.
+      const auto table = rvaPtr(iltRva ? iltRva : iatRva);
+      if (!table)
+        continue;
+      for (std::uint64_t index = 0; index < kMaxImportsPerDll; ++index) {
+        const std::uintptr_t entryPtr = *table + index * slot;
+        if (!inFile(entryPtr, slot))
+          break;
+        std::uint64_t entry = 0;
+        std::memcpy(&entry, reinterpret_cast<const void *>(entryPtr), slot);
+        if (entry == 0)
+          break; // end of this DLL's list
         Symbol out;
         out.kind = SymbolKind::Function;
         out.imported = true;
-        out.address = image.imageBase_ + iatRva + index++ * slot;
-        bool byOrdinal = false;
-        if (Error e = imp.isOrdinal(byOrdinal)) {
-          consumeError(std::move(e));
-          continue;
-        }
+        out.address = image.imageBase_ + iatRva + index * slot;
+        const bool byOrdinal = (entry >> (slot * 8 - 1)) & 1;
         if (byOrdinal) {
-          std::uint16_t ordinal = 0;
-          if (Error e = imp.getOrdinal(ordinal)) {
-            consumeError(std::move(e));
-            continue;
-          }
-          out.name = "#" + std::to_string(ordinal);
+          out.name = "#" + std::to_string(entry & 0xffff);
         } else {
-          StringRef name;
-          if (Error e = imp.getSymbolName(name)) {
-            consumeError(std::move(e));
+          // Hint/name entry: a 16-bit hint, then a NUL-terminated name.
+          const auto hint = rvaPtr(static_cast<std::uint32_t>(entry & 0x7fffffff));
+          if (!hint || !inFile(*hint, 2))
             continue;
-          }
-          out.name = name.str();
+          const char *name = reinterpret_cast<const char *>(*hint + 2);
+          const std::size_t room = fileEnd - (*hint + 2);
+          out.name.assign(name, strnlen(name, std::min<std::size_t>(room, 4096)));
+          if (out.name.empty())
+            continue;
         }
         image.symbols_.push_back(std::move(out));
       }
