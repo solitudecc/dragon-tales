@@ -1,7 +1,10 @@
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
 #include <dragon/analysis/ArgumentRecovery.hpp>
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
+#include <algorithm>
 #include <format>
 #include <utility>
 
@@ -101,20 +104,16 @@ void dragon::llvmlifter::LLVMLifter::collectRegsFromOps(
     }
   };
 
-  // x86-64: a write to a 32-bit general-purpose register clears the upper half
-  // of its 64-bit parent. mergeIntoParent() does that - but only into a parent
+  // x86-64 / AArch64: a write to a 32-bit general-purpose register (EAX, W0)
+  // clears the upper half of its 64-bit parent. mergeIntoParent() does that - but only into a parent
   // slot that exists, and slots are made for the widths the code mentions. A
   // function that only ever says `eax` would have no RAX slot, so nothing
   // would be zero-extended and only 32 bits would be written back on return:
   // the caller's upper half of RAX would survive `xor eax, eax`. Give every
   // such destination its parent.
-  constexpr std::uint32_t kX86GprSpaceEnd = 128; // RAX..R15, 8 bytes each
   auto collectParent = [&](const ignil::Value &v) {
-    if (arch_ != Architecture::X86_64)
-      return;
     const auto *reg = std::get_if<ignil::Reg>(&v);
-    if (reg && reg->width == 32 && reg->offset < kX86GprSpaceEnd &&
-        reg->offset % 8 == 0)
+    if (reg && reg->width == 32 && zeroExtendsToGpr(reg->offset))
       regFile[reg->offset].try_emplace(64, nullptr);
   };
 
@@ -272,6 +271,7 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       }
       builder.CreateStore(val, regs.at(r->offset).at(r->width));
       mergeIntoParent(r->offset, r->width, val, regs, builder);
+      syncOverlapping(r->offset, r->width, val, regs, builder);
     }
   };
 
@@ -552,8 +552,17 @@ void dragon::llvmlifter::LLVMLifter::emitReturn(RegFile &regs,
                                                 llvm::IRBuilder<> &builder) {
   // Write back the widest register at each offset so callers can observe
   // the final register state even after aggressive optimisation passes.
+  // A view inside a register already written back (AH within RAX) holds the
+  // same bytes - syncOverlapping() keeps them equal - so it is skipped.
+  std::uint32_t writtenUntil = 0;
+  bool any = false;
   for (auto &[offset, widthMap]: regs) {
     auto &[width, slot] = *widthMap.rbegin(); // widest at this offset
+    const std::uint32_t end = offset + (width + 7) / 8;
+    if (any && end <= writtenUntil)
+      continue;
+    writtenUntil = std::max(writtenUntil, end);
+    any = true;
     auto *ty  = llvm::IntegerType::get(*ctx_, width);
     auto *val = builder.CreateLoad(ty, slot);
     auto *ptr = builder.CreateGEP(builder.getInt8Ty(), regsPtr,
@@ -622,15 +631,17 @@ void dragon::llvmlifter::LLVMLifter::mergeIntoParent(
 
     auto *bigTy = llvm::IntegerType::get(*ctx_, bigWidth);
 
-    // x86-64: writing a 32-bit register implicitly zero-extends into the
-    // full 64-bit register (e.g. `mov ecx, 1` clears bits 32-63 of RCX) -
+    // x86-64 / AArch64: writing a 32-bit register implicitly zero-extends
+    // into the full 64-bit register (`mov ecx, 1` clears bits 32-63 of RCX,
+    // `mov w1, #1` those of X1 - the IGNIL convention SymbolicExecutor and
+    // dead-store elimination follow too) -
     // unlike 8/16-bit sub-register writes (AL, AX, ...), which leave the
     // rest of the register untouched. Every other width transition here
     // preserves the untouched high bits; this one specific transition must
     // not, or a register zeroed via its 32-bit name (a very common x86-64
     // idiom, e.g. `xor ecx, ecx`) would keep stale high bits when read back
     // through its 64-bit name.
-    if (arch_ == Architecture::X86_64 && width == 32 && bigWidth == 64) {
+    if (width == 32 && bigWidth == 64 && zeroExtendsToGpr(offset)) {
       builder.CreateStore(builder.CreateZExt(value, bigTy), slot);
       continue;
     }
@@ -641,6 +652,57 @@ void dragon::llvmlifter::LLVMLifter::mergeIntoParent(
     auto *cleared = builder.CreateAnd(parent, mask);
     auto *ext = builder.CreateZExt(value, bigTy);
     builder.CreateStore(builder.CreateOr(cleared, ext), slot);
+  }
+}
+
+bool dragon::llvmlifter::LLVMLifter::zeroExtendsToGpr(
+        std::uint32_t offset) const {
+  switch (arch_) {
+    case Architecture::X86_64:
+      return offset < x86::kOffRIP && offset % 8 == 0; // RAX..R15
+    case Architecture::ARM64:
+      return offset <= arm::kOffPC && offset % 8 == 0; // X0..X30, XZR, SP
+    default:
+      return false;
+  }
+}
+
+void dragon::llvmlifter::LLVMLifter::syncOverlapping(
+        std::uint32_t offset, ignil::Width width, llvm::Value *value,
+        RegFile &regs, llvm::IRBuilder<> &builder) {
+  // Slots are keyed by (offset, width), and mergeIntoParent() only reaches
+  // the ones at the same offset. A view at another offset that shares bytes
+  // with the write - AH (byte 1) against RAX/EAX/AX (byte 0) - must follow
+  // it too, or `mov ah, 1; mov rax, 0` leaves a stale AH that emitReturn()
+  // then writes over byte 1 of RAX, and `mov rax, x; mov bl, ah` reads the
+  // old AH.
+  const std::uint32_t ws = offset, we = offset + (width + 7) / 8;
+  for (auto &[off, widthMap]: regs) {
+    if (off == offset)
+      continue;
+    for (auto &[w, slot]: widthMap) {
+      const std::uint32_t ss = off, se = off + (w + 7) / 8;
+      if (se <= ws || we <= ss)
+        continue;
+      auto *slotTy = llvm::IntegerType::get(*ctx_, w);
+      if (ws <= ss && se <= we) {
+        // The slot lies inside the write (AH after a RAX/EAX/AX write).
+        llvm::Value *v = value;
+        if (ss > ws)
+          v = builder.CreateLShr(v, (ss - ws) * 8);
+        builder.CreateStore(builder.CreateTrunc(v, slotTy), slot);
+      } else if (ss <= ws && we <= se) {
+        // The write lies inside the slot (RAX/EAX/AX after an AH write).
+        const unsigned shift = (ws - ss) * 8;
+        auto *mask = llvm::ConstantInt::get(
+                slotTy, ~llvm::APInt::getBitsSet(w, shift, shift + width));
+        auto *old = builder.CreateLoad(slotTy, slot);
+        auto *ins = builder.CreateShl(builder.CreateZExt(value, slotTy), shift);
+        builder.CreateStore(builder.CreateOr(builder.CreateAnd(old, mask), ins),
+                            slot);
+      }
+      // Straddling views do not occur in the x86/AArch64 register files.
+    }
   }
 }
 

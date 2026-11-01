@@ -1464,3 +1464,74 @@ TEST_CASE("Semantic round-trip - i386 loop with 0x67 counts CX down",
   REQUIRE(getReg64(actual.regs, x86off::RCX) == 0x10000);
   requireStatesMatch(expected, actual, initialRegs, arch);
 }
+
+// -----------------------------------------------------------------------
+// Sub-registers at a different offset (AH is byte 1 of RAX).
+//
+// The LLVM lifter keeps one alloca per (offset, width) and used to sync only
+// the ones at the *same* offset, so AH and RAX drifted apart: a stale AH was
+// read back, and emitReturn() wrote it over byte 1 of RAX.
+// -----------------------------------------------------------------------
+
+TEST_CASE("Semantic round-trip - mov ah then a full RAX write",
+          "[semantic][x86_64]") {
+  const std::vector<std::uint8_t> code = {
+          0x55,                                     // push rbp
+          0x48, 0x89, 0xe5,                         // mov rbp, rsp
+          0xb4, 0x01,                               // mov ah, 1
+          0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00, 0x00, // mov rax, 0
+          0x5d,                                     // pop rbp
+          0xc3,                                     // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0); // was 0x100
+  requireStatesMatch(expected, actual, initialRegs);
+}
+
+TEST_CASE("Semantic round-trip - reading AH after a RAX write",
+          "[semantic][x86_64]") {
+  const std::vector<std::uint8_t> code = {
+          0x55,                                     // push rbp
+          0x48, 0x89, 0xe5,                         // mov rbp, rsp
+          0x48, 0xc7, 0xc0, 0x34, 0x12, 0x00, 0x00, // mov rax, 0x1234
+          0x88, 0xe3,                               // mov bl, ah
+          0xb4, 0x99,                               // mov ah, 0x99
+          0x5d,                                     // pop rbp
+          0xc3,                                     // ret
+  };
+  auto initialRegs = defaultInitialRegs();
+  std::vector<std::uint8_t> initialMem;
+  auto expected = runUnicorn(code, initialRegs, initialMem);
+  auto actual = runLifted(code, initialRegs, initialMem);
+  REQUIRE((getReg64(actual.regs, x86off::RBX) & 0xff) == 0x12); // was 0
+  REQUIRE(getReg64(actual.regs, x86off::RAX) == 0x9934);
+  requireStatesMatch(expected, actual, initialRegs);
+}
+
+// -----------------------------------------------------------------------
+// AArch64: a W write zeroes the upper half of X. The zero-extension was
+// applied for x86-64 only, so `mov w0, #5` over X0 = -1 gave
+// 0xffffffff00000005. (No Unicorn reference here: the fixture drives x86;
+// the expected values are the architectural ones.)
+// -----------------------------------------------------------------------
+
+TEST_CASE("Semantic round-trip - AArch64 W writes zero-extend into X",
+          "[semantic][arm64]") {
+  const std::vector<std::uint8_t> code = {
+          0x00, 0x00, 0x80, 0x92, // movn x0, #0        (x0 = -1)
+          0xa0, 0x00, 0x80, 0x52, // mov  w0, #5
+          0x41, 0x04, 0x00, 0x11, // add  w1, w2, #1    (x2 = -1)
+          0xc0, 0x03, 0x5f, 0xd6, // ret
+  };
+  RegBuf initialRegs{};
+  setReg64(initialRegs, 8, 0xdeadbeefdeadbeefull);  // X1
+  setReg64(initialRegs, 16, ~0ull);                 // X2
+  std::vector<std::uint8_t> initialMem;
+  auto actual = runLifted(code, initialRegs, initialMem, kCodeBase,
+                          dragon::Architecture::ARM64);
+  CHECK(getReg64(actual.regs, 0) == 5); // X0, was 0xffffffff00000005
+  CHECK(getReg64(actual.regs, 8) == 0); // X1, kept its old upper half
+}

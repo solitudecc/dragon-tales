@@ -136,6 +136,17 @@ class LLVMLifter {
                        llvm::Value *value, RegFile &regs,
                        llvm::IRBuilder<> &builder);
 
+  // After writing `value` to (offset, width), update every slot at a
+  // *different* offset that shares bytes with it (AH vs RAX/EAX/AX).
+  void syncOverlapping(std::uint32_t offset, ignil::Width width,
+                       llvm::Value *value, RegFile &regs,
+                       llvm::IRBuilder<> &builder);
+
+  // True when a 32-bit write at `offset` zero-extends into a 64-bit parent:
+  // the general-purpose registers of x86-64 (EAX -> RAX) and AArch64
+  // (W0 -> X0).
+  [[nodiscard]] bool zeroExtendsToGpr(std::uint32_t offset) const;
+
   // Prologue: load each register's initial value from %regs and store into
   // its alloca. Sub-register allocas are initialized by truncating the widest
   // value at the same offset.
