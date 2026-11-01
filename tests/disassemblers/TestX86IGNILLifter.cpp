@@ -2531,3 +2531,24 @@ TEST_CASE("X86 IGNIL lifting - imul r,r / r,r,imm set CF and OF",
   }
 }
 #endif
+
+TEST_CASE("IGNIL lifting - multi-byte nops are not unlifted",
+          "[ignil][x86_64]") {
+  // nop ; nop dword ptr [rax] ; nop word ptr cs:[rax + rax] ; xchg ax, ax ;
+  // nop dword ptr [rax + rax + 0]
+  // The memory-operand forms used to fall to the generic fallback, which
+  // flags anything with a memory operand as unlifted.
+  const std::vector<std::uint8_t> bytes = {
+          0x90,                                                       //
+          0x0f, 0x1f, 0x00,                                           //
+          0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, //
+          0x66, 0x90,                                                 //
+          0x0f, 0x1f, 0x44, 0x00, 0x00};
+  dragon::Configuration cfg;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  const auto insns = dis.disassemble(bytes, 0x1000);
+  REQUIRE(insns.size() == 5);
+  const auto block = dis.liftTrace(insns);
+  CHECK(block.unlifted().empty());
+  CHECK(block.ops().empty());
+}

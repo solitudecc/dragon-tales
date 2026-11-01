@@ -550,6 +550,12 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     const std::string_view name = instrInfo.getName(i);
     nameToOpc.emplace(name, i);
 
+    // nop in all its encodings: NOOP (90), NOOPW/NOOPL/NOOPQ - the multi-byte
+    // `nop word ptr cs:[rax + rax]` alignment padding - and their register
+    // forms. FNOP is the x87 one.
+    if (name.starts_with("NOOP") || name == "FNOP")
+      nopOpcodes_.insert(i);
+
     if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
     else if (auto zx = movzxByName.find(name); zx != movzxByName.end())
@@ -1140,7 +1146,12 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftMovLoad(*mc, addr, out, tempId);
   else if (opc == opMovsdStore_)
     liftMovStore(*mc, addr, out, tempId);
-  else {
+  else if (nopOpcodes_.contains(opc)) {
+    // No effect. A multi-byte nop has a memory operand it never accesses,
+    // so the generic fallback below reported every one of them unlifted
+    // (441 in an x86-64 mingw build of Lua - the most common "unlifted"
+    // instruction there).
+  } else {
     const auto &desc = instrInfo_->get(opc);
     if (desc.isConditionalBranch()) {
       liftJcc(*mc, addr, insn.size(), out, tempId);

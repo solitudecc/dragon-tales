@@ -13,6 +13,7 @@
 #include <span>
 #include <utility>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace dragon {
 
@@ -756,6 +757,8 @@ class X86IGNILLifter {
   unsigned opCvttsd2si32_{}, opCvttsd2si64_{};
   unsigned opAddsd_{}, opSubsd_{}, opMulsd_{}, opMulsdMem_{};
   unsigned opMovsdRR_{}, opMovsdLoad_{}, opMovsdStore_{};
+  // Every nop encoding (NOOP*, FNOP): lifted to nothing.
+  std::unordered_set<unsigned> nopOpcodes_;
 
   // LLVM register integer -> ignil::Reg mapping
   // Built once in constructor by scanning MCRegisterInfo +
