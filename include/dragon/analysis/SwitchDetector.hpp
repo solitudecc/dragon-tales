@@ -26,7 +26,9 @@ struct SwitchCandidate {
     /// found; readTableTargets will return an empty vector in that case.
     std::uint32_t numCases;
 
-    /// Register used as the table index, as identified in the slice expression.
+    /// Register used as the table index, as identified in the slice
+    /// expression (inside any ZEXT/SEXT/TRUNC). Width 0 when the index is
+    /// not a plain register, e.g. a value loaded from the stack.
     ignil::Reg indexReg;
 };
 
@@ -34,12 +36,20 @@ struct SwitchCandidate {
 /// indirect branch.
 ///
 /// Recognition is two-phase:
-///   1. Pattern-match the slice expression for
-///      LOAD( ADD(Const{base}, MUL(SymReg{idx}, Const{scale})) )
-///      in any operand order.  entrySize must be 4 or 8.
-///   2. Walk the predecessor blocks looking for a single CJMP whose sliced
-///      condition can be matched against a comparison of indexReg with a
-///      constant, giving the case count.
+///   1. Address match: the expression must be a LOAD whose address is a sum
+///      of constants (the table base) and exactly one scaled index - SHL(idx,
+///      k), how the x86 lifter writes a SIB scale, or MUL(idx, c) - with a
+///      scale of 4 or 8, nested in any order. So both ADD(base, MUL(idx, 8))
+///      and the lifter's ADD(ADD(0, SHL(idx, 3)), base) match. Width changes
+///      around the index (ZEXT(EDI) after `mov edi, edi`) are looked through.
+///      A second variable term (a base register, as in position-independent
+///      tables of relative offsets) is not matched.
+///   2. Bounds: the unique predecessor ending in a CJMP has its condition
+///      sliced and *evaluated* with the index set to 0, 1, 2, ... - the shape
+///      of the comparison differs per lifter and per ja/jae/b.hi, so it is
+///      not pattern-matched. numCases is the first index that leaves the
+///      dispatch block, accepted only if every larger index probed (including
+///      ones a signed compare would let through) leaves it as well.
 ///
 /// Returns nullopt when the expression does not match the pattern.
 /// Returns a SwitchCandidate with numCases == 0 when the pattern is found

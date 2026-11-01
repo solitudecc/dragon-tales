@@ -4,11 +4,13 @@
 #include <dragon/Configuration.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include <dragon/analysis/SwitchDetector.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/disassembler/Instruction.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <cstring>
+#include <set>
 
 // Namespace aliases to disambiguate slice::Const from ignil::Const.
 namespace slice = dragon::slice;
@@ -237,4 +239,154 @@ TEST_CASE("readTableTargets -- reads 4-byte entries correctly", "[switch]") {
   CHECK(targets[1] == 0x1010);
   CHECK(targets[2] == 0x1020);
   CHECK(targets[3] == 0x1030);
+}
+
+// ---------------------------------------------------------------------------
+// End to end on real lifter output.
+//
+// The cases above hand-build LOAD(ADD(base, MUL(idx, scale))), but no lifter
+// produces that: the x86 lifter writes a SIB scale as SHL inside a nested ADD,
+// the bounds check slices to AND(EQ(ULT(..),0), EQ(EQ(SUB(..),0),0)) rather
+// than UGE/UGT, and the i386 dispatch `jmp [eax*4 + table]` jumps through
+// memory, which resolveIndirectJumps used to skip. So on compiled code no
+// jump table was ever resolved. These run compiler-shaped dispatch sequences
+// through Disassembler::disassemble and check every case block is found.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr std::uint64_t kBase = 0x1000;
+constexpr std::uint64_t kDefault = 0x1200;
+constexpr std::uint64_t kTable = 0x1300;
+constexpr std::uint64_t kCase0 = 0x1100;
+
+void putLE(std::vector<std::uint8_t> &buf, std::size_t off, std::uint64_t v,
+           unsigned n) {
+  for (unsigned i = 0; i < n; ++i)
+    buf[off + i] = static_cast<std::uint8_t>(v >> (8 * i));
+}
+
+// `code` at kBase, a `ret` at each case and at kDefault, the table at kTable
+// with `cases` entries of `entry` bytes, then decoy entries a wrong bound
+// would read as further cases.
+std::vector<std::uint8_t> layout(std::vector<std::uint8_t> code,
+                                 unsigned cases, unsigned entry) {
+  std::vector<std::uint8_t> buf(kTable - kBase + (cases + 4) * entry, 0xcc);
+  std::copy(code.begin(), code.end(), buf.begin());
+  for (unsigned i = 0; i < cases; ++i) {
+    buf[kCase0 + 0x10 * i - kBase] = 0xc3;
+    putLE(buf, kTable - kBase + i * entry, kCase0 + 0x10 * i, entry);
+  }
+  buf[kDefault - kBase] = 0xc3;
+  for (unsigned i = cases; i < cases + 4; ++i) // decoys: inside the buffer
+    putLE(buf, kTable - kBase + i * entry, kCase0 + 0x10 * i + 8, entry);
+  return buf;
+}
+
+std::set<std::uint64_t> blockStarts(dragon::Architecture arch,
+                                    const std::vector<std::uint8_t> &bytes) {
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(arch, cfg);
+  dragon::Graph g{arch, cfg};
+  dis.disassemble(bytes, kBase, g);
+  std::set<std::uint64_t> out;
+  for (const auto &b: g.blocks())
+    out.insert(b.startAddress());
+  return out;
+}
+
+void requireExactlyCases(const std::set<std::uint64_t> &blocks,
+                         unsigned cases) {
+  for (unsigned i = 0; i < cases; ++i) {
+    INFO("case " << i);
+    CHECK(blocks.count(kCase0 + 0x10 * i));
+  }
+  for (unsigned i = cases; i < cases + 4; ++i) {
+    INFO("decoy " << i);
+    CHECK_FALSE(blocks.count(kCase0 + 0x10 * i + 8));
+  }
+  CHECK(blocks.count(kDefault));
+}
+
+} // namespace
+
+TEST_CASE("SwitchDetector - i386 gcc dispatch: jmp [eax*4 + table]",
+          "[switch][e2e]") {
+  // i686-w64-mingw32-gcc -O2, 7 cases:
+  //   mov eax, [esp+4] ; cmp eax, 6 ; ja default ; jmp [eax*4 + table]
+  std::vector<std::uint8_t> code = {0x8b, 0x44, 0x24, 0x04,             //
+                                    0x83, 0xf8, 0x06,                   //
+                                    0x0f, 0x87, 0, 0, 0, 0,             //
+                                    0xff, 0x24, 0x85, 0, 0, 0, 0};
+  putLE(code, 9, kDefault - 0x100d, 4);
+  putLE(code, 16, kTable, 4);
+  requireExactlyCases(
+          blockStarts(dragon::Architecture::X86_32, layout(code, 7, 4)), 7);
+}
+
+TEST_CASE("SwitchDetector - x86-64 gcc non-PIC dispatch: mov edi, edi ; "
+          "jmp [rdi*8 + table]",
+          "[switch][e2e]") {
+  //   cmp edi, 6 ; ja default ; mov edi, edi ; jmp [rdi*8 + table]
+  std::vector<std::uint8_t> code = {0x83, 0xff, 0x06,       //
+                                    0x0f, 0x87, 0, 0, 0, 0, //
+                                    0x89, 0xff,             //
+                                    0xff, 0x24, 0xfd, 0, 0, 0, 0};
+  putLE(code, 5, kDefault - 0x1009, 4);
+  putLE(code, 14, kTable, 4);
+  requireExactlyCases(
+          blockStarts(dragon::Architecture::X86_64, layout(code, 7, 8)), 7);
+}
+
+TEST_CASE("SwitchDetector - x86-64 register dispatch with a jae guard",
+          "[switch][e2e]") {
+  //   cmp edi, 5 ; jae default ; mov eax, edi ; mov rax, [rax*8 + table] ;
+  //   jmp rax
+  std::vector<std::uint8_t> code = {0x83, 0xff, 0x05,             //
+                                    0x0f, 0x83, 0, 0, 0, 0,       //
+                                    0x89, 0xf8,                   //
+                                    0x48, 0x8b, 0x04, 0xc5, 0, 0, 0, 0, //
+                                    0xff, 0xe0};
+  putLE(code, 5, kDefault - 0x1009, 4);
+  putLE(code, 15, kTable, 4);
+  requireExactlyCases(
+          blockStarts(dragon::Architecture::X86_64, layout(code, 5, 8)), 5);
+}
+
+TEST_CASE("SwitchDetector - a signed guard is not a table bound",
+          "[switch][e2e]") {
+  // cmp edi, 6 ; jg default - a negative index passes the guard, so nothing
+  // bounds the table and no entry is read.
+  std::vector<std::uint8_t> code = {0x83, 0xff, 0x06,       //
+                                    0x0f, 0x8f, 0, 0, 0, 0, //
+                                    0x89, 0xff,             //
+                                    0xff, 0x24, 0xfd, 0, 0, 0, 0};
+  putLE(code, 5, kDefault - 0x1009, 4);
+  putLE(code, 14, kTable, 4);
+  auto blocks = blockStarts(dragon::Architecture::X86_64, layout(code, 7, 8));
+  CHECK_FALSE(blocks.count(kCase0));
+}
+
+TEST_CASE("SwitchDetector - matches the x86 lifter's address shape",
+          "[switch]") {
+  // LOAD(ADD(ADD(0, SHL(ZEXT(EDI), 3)), table)) - `mov edi, edi` followed by
+  // `jmp [rdi*8 + table]`.
+  auto g = emptyGraph();
+  ignil::Reg edi{56, 32, "EDI"};
+  auto c = [](std::uint64_t v, ignil::Width w) {
+    return std::make_shared<Expr>(slice::Const{v, w});
+  };
+  auto zext = std::make_shared<Expr>(
+          UnaryOp{ignil::Opcode::ZEXT, std::make_shared<Expr>(SymReg{edi}), 64});
+  auto shl = std::make_shared<Expr>(BinOp{ignil::Opcode::SHL, zext, c(3, 8)});
+  auto inner = std::make_shared<Expr>(BinOp{ignil::Opcode::ADD, c(0, 64), shl});
+  auto addr = std::make_shared<Expr>(
+          BinOp{ignil::Opcode::ADD, inner, c(0x402000, 64)});
+  auto sw = detectPossibleSwitch(Expr{Load{addr, 64}}, 0x2000, g);
+  REQUIRE(sw.has_value());
+  CHECK(sw->tableBase == 0x402000);
+  CHECK(sw->entrySize == 8);
+  CHECK(sw->indexReg.offset == edi.offset);
+  CHECK(sw->indexReg.width == 32);
 }

@@ -1145,13 +1145,27 @@ backward-sliced expression and reads the table entries from the binary image.
 
 Recognition is two-phase:
 
-1. **Pattern match** — check whether the slice expression has the form
-   `LOAD( ADD(Const{base}, MUL(SymReg{idx}, Const{scale})) )` with
-   `scale` equal to 4 or 8. Both ADD and MUL are matched commutatively.
-2. **Bounds extraction** — walk the predecessor blocks of the switch block
-   looking for a unique CJMP whose sliced condition is a comparison of the
-   index register against a constant (`UGE`, `UGT`, or `NOT(ULT)`). The case
-   count is stored in `SwitchCandidate::numCases`.
+1. **Address match** — the slice expression must be a `LOAD` whose address
+   is a sum of constants (the table base) and exactly one scaled index:
+   `SHL(idx, k)` (how the x86 lifter writes a SIB scale) or `MUL(idx, c)`,
+   with a scale of 4 or 8. The sum may be nested in any order, so both
+   `ADD(Const{base}, MUL(idx, scale))` and the lifter's
+   `ADD(ADD(0, SHL(idx, 3)), base)` match. Width changes around the index
+   (`ZEXT(EDI)` after `mov edi, edi`) are looked through; `indexReg` is the
+   register inside them (width 0 if the index is not a plain register).
+   A second variable term (a base register, as in position-independent
+   tables of relative offsets) is not matched.
+2. **Bounds extraction** — find the unique predecessor ending in a CJMP and
+   slice its condition. Instead of matching a comparison shape (which differs
+   per lifter and per `ja`/`jae`/`b.hi`), the condition is evaluated with the
+   index set to 0, 1, 2, ...: `numCases` is the first index for which the
+   branch leaves the dispatch block, accepted only if every larger index
+   probed (including ones a signed compare would let through) leaves it too.
+   A condition that depends on anything but the index gives `numCases == 0`.
+
+The disassembler's indirect-jump resolution runs this on every `JMP` through
+a register (`jmp rax`, `br x0`) and through memory (`jmp [eax*4 + table]`,
+the usual i386 dispatch).
 
 ```cpp
 #include <dragon/analysis/SwitchDetector.hpp>

@@ -333,14 +333,21 @@ bool dragon::x86::X86Analysis::resolveIndirectJumps(
       continue;
 
     const auto &last = ignilBlock->ops().back();
+    // An indirect jump: through a register (`jmp rax`, `br x0`) or straight
+    // through memory (`jmp [eax*4 + table]`, lifted as t = LOAD(..); JMP t -
+    // the usual i386 jump-table dispatch). Either is sliced from its operand.
     if (last.opcode != ignil::Opcode::JMP || last.srcs.empty() ||
-        !std::holds_alternative<ignil::Reg>(last.srcs[0]))
+        std::holds_alternative<ignil::Const>(last.srcs[0]))
       continue;
 
-    const auto &reg = std::get<ignil::Reg>(last.srcs[0]);
     BackwardSlicer slicer{5};
     slice::Expr result =
-            slicer.slice(ignil::Value{reg}, ignilBlock->startAddress(), graph);
+            slicer.slice(last.srcs[0], ignilBlock->startAddress(), graph);
+    // A memory-indirect jump's target is a value loaded from memory the
+    // slicer cannot read, so only a recognised jump table resolves it -
+    // enumerating the free load (Z3 fallback) would yield arbitrary targets,
+    // e.g. for every `jmp [import_slot]` thunk.
+    const bool viaMemory = std::holds_alternative<ignil::Temp>(last.srcs[0]);
 
     std::vector<std::uint64_t> targets;
     if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
@@ -354,10 +361,12 @@ bool dragon::x86::X86Analysis::resolveIndirectJumps(
         logger_.log(
                 "Switch at 0x{:x}: table=0x{:x} (bounds unknown, falling back)",
                 block.startAddress(), sw->tableBase);
+        if (!viaMemory)
         targets = collectTargets(result, block.startAddress());
       }
     } else {
-      targets = collectTargets(result, block.startAddress());
+      if (!viaMemory)
+        targets = collectTargets(result, block.startAddress());
     }
 
     for (std::uint64_t target: targets) {

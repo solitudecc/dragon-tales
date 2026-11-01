@@ -1,69 +1,250 @@
 #include <dragon/analysis/BackwardSlicer.hpp>
-#include <dragon/analysis/SliceExprMatch.hpp>
 #include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Graph.hpp>
 
+#include <algorithm>
 #include <cstring>
+#include <string>
 
 namespace dragon::slice {
 
-using namespace match;
 
 // =============================================================================
 // Internal helpers
 // =============================================================================
 
-// Compare two IGNIL registers by identity (offset + width, ignoring name).
-static bool sameReg(const ignil::Reg &a, const ignil::Reg &b) {
-  return a.offset == b.offset && a.width == b.width;
+using Opc = ignil::Opcode;
+
+static std::uint64_t lowMask(unsigned bits) {
+  return bits >= 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << bits) - 1;
 }
 
-// Try to extract an upper case count from a sliced CJMP condition expression.
-//
-// The condition is the expression that, when non-zero, causes the branch to
-// jump to the out-of-bounds (default) target.  Common patterns:
-//
-//   UGE(idx, N)                       -- JAE:  idx >= N, numCases = N
-//   UGT(idx, N)                       -- JA:   idx > N,  numCases = N+1
-//   AND(NOT(ULT(idx,N)), NOT(EQ(idx,N))) -- JA expanded by the lifter
-//
-// Returns 0 when no matching pattern is found.
-static std::uint32_t extractBound(const Expr &cond,
-                                  const ignil::Reg &indexReg) {
-  ignil::Reg reg;
-  std::uint64_t N = 0;
+static std::optional<std::uint64_t> asConst(const Expr &e) {
+  if (const auto *c = std::get_if<Const>(&e.data))
+    return c->value & lowMask(c->width);
+  return std::nullopt;
+}
 
-  // UGE(idx, N) -- jump if idx >= N (JAE / JNBE)
-  if (match::match(cond,
-                   m_BinOp(ignil::Opcode::UGE, m_SymReg(reg), m_Const(N))) &&
-      sameReg(reg, indexReg))
-    return static_cast<std::uint32_t>(N);
+// Peel width changes (ZEXT/SEXT/TRUNC) off an index: `mov edi, edi` before
+// the dispatch makes the index ZEXT(EDI), `movsxd` makes it SEXT(EDI).
+static const Expr &stripResize(const Expr &e) {
+  if (const auto *u = std::get_if<UnaryOp>(&e.data))
+    if (u->op == Opc::ZEXT || u->op == Opc::SEXT || u->op == Opc::TRUNC)
+      return stripResize(*u->operand);
+  return e;
+}
 
-  // UGT(idx, N) -- jump if idx > N (JA / JNBE with N = max_case)
-  if (match::match(cond,
-                   m_BinOp(ignil::Opcode::UGT, m_SymReg(reg), m_Const(N))) &&
-      sameReg(reg, indexReg))
-    return static_cast<std::uint32_t>(N) + 1;
+// The terms of a (nested) ADD.
+static void flattenAdd(const Expr &e, std::vector<const Expr *> &out) {
+  if (const auto *b = std::get_if<BinOp>(&e.data))
+    if (b->op == Opc::ADD && b->left && b->right) {
+      flattenAdd(*b->left, out);
+      flattenAdd(*b->right, out);
+      return;
+    }
+  out.push_back(&e);
+}
 
-  // NOT(ULT(idx, N)) == UGE(idx, N): one branch of the JA AND-expansion
-  if (match::match(cond, m_Not(m_BinOp(ignil::Opcode::ULT, m_SymReg(reg),
-                                       m_Const(N)))) &&
-      sameReg(reg, indexReg))
-    return static_cast<std::uint32_t>(N);
-
-  // AND(cond_a, cond_b): JA expands to AND(NOT(CF), NOT(ZF)); recurse into
-  // each child and take the first successful extraction.
-  if (const auto *b = std::get_if<BinOp>(&cond.data)) {
-    if (b->op == ignil::Opcode::AND && b->left && b->right) {
-      if (auto r = extractBound(*b->left, indexReg))
-        return r;
-      if (auto r = extractBound(*b->right, indexReg))
-        return r;
+// `index * scale` in either of the forms the lifters produce: SHL(x, k) -
+// what the x86 lifter emits for a SIB scale - or MUL(x, c) in either order.
+static bool asScaledIndex(const Expr &t, const Expr *&index,
+                          std::uint64_t &scale) {
+  const auto *b = std::get_if<BinOp>(&t.data);
+  if (!b || !b->left || !b->right)
+    return false;
+  if (b->op == Opc::SHL) {
+    auto k = asConst(*b->right);
+    if (!k || *k > 3)
+      return false;
+    index = b->left.get();
+    scale = std::uint64_t{1} << *k;
+    return true;
+  }
+  if (b->op == Opc::MUL) {
+    if (auto c = asConst(*b->right)) {
+      index = b->left.get();
+      scale = *c;
+      return true;
+    }
+    if (auto c = asConst(*b->left)) {
+      index = b->right.get();
+      scale = *c;
+      return true;
     }
   }
+  return false;
+}
 
-  return 0;
+// -- concrete evaluation of a guard condition --------------------------------
+//
+// The guard in front of a jump table is a comparison of the index against the
+// table size, but its sliced shape depends on the lifter and the compare
+// (`cmp; ja` on x86 slices to AND(EQ(ULT(..),0), EQ(EQ(SUB(..),0),0)), AArch64
+// goes through NZCV). Rather than pattern-match every such shape, the
+// condition is evaluated with the index set to 0, 1, 2, ...: the case count is
+// the first index for which the branch leaves the dispatch block. Anything the
+// condition depends on besides the index (another register, memory) makes it
+// unevaluable, and no bound is reported.
+
+struct EvalValue {
+  std::uint64_t v;
+  unsigned width;
+};
+
+class GuardEvaluator {
+  public:
+  explicit GuardEvaluator(const Expr &index) {
+    if (const auto *r = std::get_if<SymReg>(&index.data))
+      indexReg_ = &r->reg;
+    else
+      indexText_ = toString(index);
+  }
+
+  std::optional<EvalValue> eval(const Expr &e, std::uint64_t idx) const {
+    idx_ = idx;
+    return go(e);
+  }
+
+  private:
+  // A reference to the index: for a register, any view of it at the same
+  // offset (the guard may compare EDI while the table is indexed by RDI).
+  std::optional<EvalValue> asIndex(const Expr &e) const {
+    if (indexReg_) {
+      if (const auto *r = std::get_if<SymReg>(&e.data))
+        if (r->reg.offset == indexReg_->offset)
+          return EvalValue{idx_ & lowMask(r->reg.width), r->reg.width};
+      return std::nullopt;
+    }
+    if (toString(e) != indexText_)
+      return std::nullopt;
+    unsigned w = 64;
+    if (const auto *l = std::get_if<Load>(&e.data))
+      w = l->width;
+    return EvalValue{idx_ & lowMask(w), w};
+  }
+
+  static std::int64_t sx(std::uint64_t v, unsigned w) {
+    if (w == 0 || w >= 64)
+      return static_cast<std::int64_t>(v);
+    const std::uint64_t sign = std::uint64_t{1} << (w - 1);
+    return static_cast<std::int64_t>((v ^ sign) - sign);
+  }
+
+  std::optional<EvalValue> go(const Expr &e) const {
+    if (auto v = asIndex(e))
+      return v;
+    if (const auto *c = std::get_if<Const>(&e.data))
+      return EvalValue{c->value & lowMask(c->width), c->width};
+
+    if (const auto *u = std::get_if<UnaryOp>(&e.data)) {
+      auto a = go(*u->operand);
+      if (!a)
+        return std::nullopt;
+      const unsigned to = u->resultWidth ? u->resultWidth : a->width;
+      switch (u->op) {
+        case Opc::NOT: return EvalValue{~a->v & lowMask(a->width), a->width};
+        case Opc::NEG: return EvalValue{(0 - a->v) & lowMask(a->width), a->width};
+        case Opc::ZEXT:
+        case Opc::TRUNC: return EvalValue{a->v & lowMask(to), to};
+        case Opc::SEXT:
+          return EvalValue{static_cast<std::uint64_t>(sx(a->v, a->width)) &
+                               lowMask(to),
+                       to};
+        default: return std::nullopt;
+      }
+    }
+
+    if (const auto *b = std::get_if<BinOp>(&e.data)) {
+      auto l = go(*b->left), r = go(*b->right);
+      if (!l || !r)
+        return std::nullopt;
+      // Same widening as SliceExprZ3: the narrower operand is zero-extended.
+      const unsigned w = std::max(l->width, r->width);
+      const std::uint64_t x = l->v, y = r->v, m = lowMask(w);
+      auto bit = [](bool c) { return EvalValue{c ? 1u : 0u, 1}; };
+      switch (b->op) {
+        case Opc::ADD: return EvalValue{(x + y) & m, w};
+        case Opc::SUB: return EvalValue{(x - y) & m, w};
+        case Opc::MUL: return EvalValue{(x * y) & m, w};
+        case Opc::AND: return EvalValue{x & y, w};
+        case Opc::OR:  return EvalValue{x | y, w};
+        case Opc::XOR: return EvalValue{x ^ y, w};
+        case Opc::SHL: return EvalValue{y >= w ? 0 : (x << y) & m, w};
+        case Opc::SHR: return EvalValue{y >= w ? 0 : x >> y, w};
+        case Opc::SAR: {
+          const std::int64_t s = sx(x, w);
+          return EvalValue{static_cast<std::uint64_t>(y >= w ? (s < 0 ? -1 : 0)
+                                                         : s >> y) & m,
+                       w};
+        }
+        case Opc::EQ:  return bit(x == y);
+        case Opc::NEQ: return bit(x != y);
+        case Opc::ULT: return bit(x < y);
+        case Opc::ULE: return bit(x <= y);
+        case Opc::UGT: return bit(x > y);
+        case Opc::UGE: return bit(x >= y);
+        case Opc::SLT: return bit(sx(x, w) < sx(y, w));
+        case Opc::SLE: return bit(sx(x, w) <= sx(y, w));
+        case Opc::SGT: return bit(sx(x, w) > sx(y, w));
+        case Opc::SGE: return bit(sx(x, w) >= sx(y, w));
+        default: return std::nullopt;
+      }
+    }
+    return std::nullopt; // another register, memory, undef
+  }
+
+  const ignil::Reg *indexReg_ = nullptr;
+  std::string indexText_;
+  mutable std::uint64_t idx_ = 0;
+};
+
+// Largest table the guard search accepts.
+constexpr std::uint32_t kMaxCases = 4096;
+
+// The number of index values 0, 1, ..., N-1 for which the guard CJMP falls
+// into `dispatch`, provided every larger index tried leaves it. 0 if the
+// guard is not such a bound.
+static std::uint32_t boundFromGuard(const Expr &cond, const ignil::Op &cjmp,
+                                    std::uint64_t dispatch,
+                                    const Expr &index) {
+  if (cjmp.srcs.size() < 3)
+    return 0;
+  const auto *t = std::get_if<ignil::Const>(&cjmp.srcs[1]);
+  const auto *f = std::get_if<ignil::Const>(&cjmp.srcs[2]);
+  if (!t || !f || (t->value == dispatch) == (f->value == dispatch))
+    return 0;
+  const bool dispatchWhenTrue = t->value == dispatch;
+
+  GuardEvaluator ev(index);
+  auto inBounds = [&](std::uint64_t idx) -> std::optional<bool> {
+    auto v = ev.eval(cond, idx);
+    if (!v)
+      return std::nullopt;
+    return ((v->v & 1) != 0) == dispatchWhenTrue;
+  };
+
+  std::uint32_t n = 0;
+  for (; n < kMaxCases; ++n) {
+    auto in = inBounds(n);
+    if (!in)
+      return 0;
+    if (!*in)
+      break;
+  }
+  if (n == 0 || n == kMaxCases)
+    return 0;
+  // A real bound keeps every larger index out, including the ones a signed
+  // compare would let through.
+  const std::uint64_t probes[] = {n + 1ull,   n + 2ull,    n + 15ull,
+                                  0x7fffffff, 0x80000000,  0xffffffff,
+                                  ~0ull >> 1, ~0ull};
+  for (std::uint64_t p: probes) {
+    auto in = inBounds(p);
+    if (!in || *in)
+      return 0;
+  }
+  return n;
 }
 
 // Search the graph for the unique predecessor block of blockAddr whose IGNIL
@@ -101,39 +282,50 @@ static const ignil::Block *findCJMPPredecessor(std::uint64_t blockAddr,
 std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
                                                     std::uint64_t blockAddr,
                                                     const Graph &graph) {
-  std::uint64_t tableBase = 0, scale = 0;
-  ignil::Reg indexReg;
+  // Phase 1: the target is LOAD(base + index * scale [+ more constants]).
+  // The address is matched as a sum of terms rather than one tree shape, so
+  // both a hand-built ADD(base, MUL(idx, scale)) and the x86 lifter's
+  // ADD(ADD(0, SHL(idx, 3)), base) are recognised.
+  const auto *load = std::get_if<Load>(&jumpTarget.data);
+  if (!load || !load->addr)
+    return std::nullopt;
 
-  // Phase 1: structural match on the slice expression.
-  // Recognize: LOAD( ADD(Const{base}, MUL(SymReg{idx}, Const{scale})) )
-  // m_AddAnyOrder / m_MulAnyOrder handle either operand ordering.
-  // The matchers will retrieve the values in the code, as well as the register.
-  if (!match::match(jumpTarget,
-                    m_Load(m_AddAnyOrder(m_Const(tableBase),
-                                         m_MulAnyOrder(m_SymReg(indexReg),
-                                                       m_Const(scale))))))
+  std::vector<const Expr *> terms;
+  flattenAdd(*load->addr, terms);
+  std::uint64_t tableBase = 0, scale = 0;
+  const Expr *index = nullptr;
+  for (const Expr *t: terms) {
+    if (auto c = asConst(*t)) {
+      tableBase += *c;
+      continue;
+    }
+    const Expr *idx = nullptr;
+    std::uint64_t sc = 0;
+    if (index || !asScaledIndex(*t, idx, sc))
+      return std::nullopt; // a second variable term: a base register, etc.
+    index = idx;
+    scale = sc;
+  }
+  if (!index || tableBase == 0)
     return std::nullopt;
 
   // Only 4-byte and 8-byte pointer tables are supported.
   if (scale != 4 && scale != 8)
     return std::nullopt;
 
-  // Structure with possible candidates for the switch statement
-  SwitchCandidate sw{tableBase, static_cast<std::uint32_t>(scale),
-                     0, // numCases unknown until phase 2
-                     indexReg};
+  const Expr &core = stripResize(*index);
+  SwitchCandidate sw{tableBase, static_cast<std::uint32_t>(scale), 0,
+                     ignil::Reg{0, 0, ""}};
+  if (const auto *r = std::get_if<SymReg>(&core.data))
+    sw.indexReg = r->reg;
 
-  // Phase 2: extract case count from a predecessor bounds-check CJMP.
+  // Phase 2: the case count, from the bounds check that guards the block.
   if (const ignil::Block *predBlock = findCJMPPredecessor(blockAddr, graph)) {
     const ignil::Op &cjmp = predBlock->ops().back();
-
-    // srcs[0] is the condition Value -- slice it backwards to get the
-    // comparison expression.
     BackwardSlicer slicer{3};
     Expr condExpr =
             slicer.slice(cjmp.srcs[0], predBlock->startAddress(), graph);
-
-    sw.numCases = extractBound(condExpr, indexReg);
+    sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core);
   }
 
   return sw;
