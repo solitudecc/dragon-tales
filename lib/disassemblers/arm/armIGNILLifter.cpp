@@ -1402,6 +1402,22 @@ void dragon::arm::ARMIGNILLifter::liftAddSub(const llvm::MCInst &mc,
                   : ignil::Value{*rhsReg};
   }
 
+  // The flags below read the operands after Rd has been written; when Rd
+  // is also Rn or Rm (`subs w20, w20, #1`, the usual loop counter) they
+  // must see the old value, not the result. Take copies first.
+  if (setFlags) {
+    if (std::holds_alternative<ignil::Reg>(lhs)) {
+      auto t = newTemp(tmp, dst->width);
+      out.append({ignil::Opcode::COPY, t, {lhs}, addr});
+      lhs = t;
+    }
+    if (std::holds_alternative<ignil::Reg>(rhs)) {
+      auto t = newTemp(tmp, dst->width);
+      out.append({ignil::Opcode::COPY, t, {rhs}, addr});
+      rhs = t;
+    }
+  }
+
   auto result = newTemp(tmp, dst->width);
   out.append({isSub ? ignil::Opcode::SUB : ignil::Opcode::ADD,
               result,

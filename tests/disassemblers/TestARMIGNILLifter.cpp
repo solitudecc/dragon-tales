@@ -498,3 +498,41 @@ TEST_CASE("ARM IGNIL lifting - integer data processing", "[ignil][arm64]") {
   }
 }
 #endif
+
+#ifdef DRAGON_WITH_Z3
+// `subs w20, w20, #1` (a loop counter) / `adds x1, x1, x1`: Rd is also an
+// operand. C and V were computed from the operand read after Rd had been
+// written, i.e. from the result. Found by the real-block Unicorn difftest.
+TEST_CASE("ARM IGNIL lifting - adds/subs with Rd == Rn", "[ignil][arm64]") {
+  struct Case {
+    std::uint32_t word;
+    std::uint64_t x1;
+    unsigned nzcv;
+  };
+  const Case cases[] = {
+          {0xf1000421, 0x0, 0x8},                // subs x1, x1, #1   (0-1)
+          {0xab010021, 0x8000000000000000, 0x7}, // adds x1, x1, x1   (2^63*2)
+          {0x71000421, 0x1, 0x6},                // subs w1, w1, #1   (1-1)
+  };
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+  for (const auto &c: cases) {
+    const std::vector<std::uint8_t> bytes = {
+            static_cast<std::uint8_t>(c.word), static_cast<std::uint8_t>(c.word >> 8),
+            static_cast<std::uint8_t>(c.word >> 16),
+            static_cast<std::uint8_t>(c.word >> 24)};
+    auto insns = dis.disassemble(bytes, 0x1000);
+    REQUIRE(insns.size() == 1);
+    INFO(insns[0].disassembly());
+    const auto block = dis.liftTrace(insns);
+    dragon::ignil::SymbolicExecutor ex;
+    ex.setRegister(arm::X1, c.x1);
+    REQUIRE(ex.run(block).ok());
+    const unsigned nzcv =
+            (*ex.evaluate(ex.readRegister(arm::NF)) << 3) |
+            (*ex.evaluate(ex.readRegister(arm::ZF)) << 2) |
+            (*ex.evaluate(ex.readRegister(arm::CF)) << 1) |
+            *ex.evaluate(ex.readRegister(arm::VF));
+    CHECK(nzcv == c.nzcv);
+  }
+}
+#endif
