@@ -16,6 +16,7 @@
 
 // C++ headers
 #include <algorithm>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -422,6 +423,19 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
                       DisassemblyStrategy::LINEAR_SWEEP;
   bool changed = false;
 
+  // The predecessor map every slice needs is rebuilt only after this pass
+  // changed the graph: block starts and IGNIL stay as they are until the
+  // next commit, so only a new branch on a jump or newly decoded code can
+  // alter it. Most indirect jumps (PLT stubs, tail calls) resolve to nothing
+  // and change nothing; rebuilding for each made an aarch64 sqlite analysis
+  // spend most of its time in BackwardSlicer::predecessors.
+  std::optional<BackwardSlicer::Predecessors> preds;
+  auto currentPreds = [&]() -> const BackwardSlicer::Predecessors & {
+    if (!preds)
+      preds = BackwardSlicer::predecessors(graph);
+    return *preds;
+  };
+
   for (const auto &block: graph.blocks()) {
     const auto *ignilBlock = graph.getIGNILBlock(block.startAddress());
     if (!ignilBlock || ignilBlock->ops().empty())
@@ -438,8 +452,8 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
     // The guard is sliced one block shorter (see detectPossibleSwitch).
     constexpr int kSliceDepth = 5;
     BackwardSlicer slicer{kSliceDepth};
-    slice::Expr result =
-            slicer.slice(last.srcs[0], ignilBlock->startAddress(), graph);
+    slice::Expr result = slicer.slice(last.srcs[0], ignilBlock->startAddress(),
+                                      graph, &currentPreds());
     // A memory-indirect jump's target is a value loaded from memory the
     // slicer cannot read, so only a recognised jump table resolves it -
     // enumerating the free load (Z3 fallback) would yield arbitrary targets,
@@ -450,7 +464,8 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
 
     std::vector<std::uint64_t> targets;
     if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
-                                              graph, kSliceDepth)) {
+                                              graph, kSliceDepth,
+                                              &currentPreds())) {
       if (sw->numCases > 0) {
         logger_.log("Switch at 0x{:x}: table=0x{:x} entries={} entrySize={}",
                     block.startAddress(), sw->tableBase, sw->numCases,
@@ -497,14 +512,17 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
         jump->addBranch(target);
         jump->setEdges(jump->branches().size());
         changed = true;
+        preds.reset();
       }
 
       if (blockStarts.insert(target).second)
         changed = true;
 
       if (integrateNewBlock(target, bytes, baseAddr, graph, blockStarts,
-                            fnStarts))
+                            fnStarts)) {
         changed = true;
+        preds.reset();
+      }
     }
   }
 
