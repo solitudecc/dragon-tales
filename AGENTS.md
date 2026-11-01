@@ -108,7 +108,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 
 | Script | What it checks |
 |---|---|
-| `difftest_x64.py` | ~530 single-instruction x86-64 templates vs Unicorn (regs, flags, memory). Expected: 0 unlifted, 2 known harness false positives (16-bit `shld/shrd` with count > 16 — architecturally undefined). |
+| `difftest_x64.py` | ~810 single-instruction x86-64 templates vs Unicorn (regs, flags, memory), incl. memory-operand forms, every cc, high-byte registers, SP operands. Expected: 0 diff; the ~135 unlifted are memory-operand shifts/rotates/mul/bt*/shld (coverage, see backlog). `ONLY=text` filters. |
 | `difftest_a64.py` | ~530 AArch64 templates vs Unicorn. Expected: 3 diffs = CALL/RET abstraction. |
 | `difftest_sse.py` | 35 SSE templates vs Unicorn incl. NaN/±0/inf; NaN results counted as "unknown", not wrong. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
@@ -122,7 +122,10 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `fstarts.py BIN` | Classifies function starts: symbol / inside a symbol body (false) / other. |
 | `unlifted.py BIN [N]` | Census of unlifted instruction *forms* (mnemonic + operand shape). |
 | `corpus_check.py DIR` | Every binary of a directory, one subprocess each: objdump agreement, empty symbol functions, blocks without IGNIL, edges to undecoded addresses, LLVM lift + `opt -passes=verify`, time. Corpus on the VM: `~/bench/corpus` (sqlite/zlib/Lua × gcc aarch64 -O0/2/3/s, mingw i686/x64 -O0/2/s, stripped, system bash/libz; `~/bench/build_corpus.sh`). |
-| `realblock_diff.py BIN [BLOCKS] [TRIALS]` | Real basic blocks of a binary vs Unicorn from random states (x86-64/i386/AArch64). Expected: only the deliberate x86 OF difference after multi-bit shifts (see `emitGatedShiftFlags`). Unicorn truncates addresses >= 2^47; the script keeps values below that and compares only writes into known regions. |
+| `realblock_diff.py BIN [BLOCKS] [TRIALS]` | Real basic blocks of a binary vs Unicorn from random states (x86-64/i386/AArch64). Expected: only the deliberate x86 OF difference after multi-bit shifts (see `emitGatedShiftFlags`). Unicorn truncates addresses >= 2^47; the script keeps values below that and compares only writes into known regions. `REALBLOCK_OPT=1` runs `simplify()` + `dead_store_eliminate()` first. |
+| `realblock_llvm.py BIN [BLOCKS]` | Real blocks lifted to LLVM IR, compiled with llc-21, run natively on the AArch64 VM vs Unicorn. Needs `sysctl vm.mmap_min_addr=4096` (shared objects are based at 0). Skips trials that load a 64-bit value >= 2^47 (Unicorn truncates). `REALBLOCK_ONLY=0xADDR` runs one block and keeps its work dir. |
+| `asm_roundtrip.py BIN [N]` | Every distinct instruction: text -> Assembler -> Disassembler must give the same text (110k+ instructions, all same). |
+| `fuzz_loader.py OUT N SEED...` | Damaged ELF/PE inputs through load/disassemble/LLVM in a child process: crashes, hangs, unexpected exceptions. |
 
 The `[join-width]` C++ tests cover partial join knowledge on x86-64/AArch64,
 guarded dispatch and 240 Unicorn loop executions. A narrow guard alone never
@@ -173,6 +176,16 @@ samples are x86 sqlite (x86-64 -O2 ~36-40 s, i686 -O2 ~18-22 s): the
 speculative x86 resolver copies the graph twice per round
 (copyGraph/reachableGraph) - the next profiling target.
 
+Second corpus `~/bench/corpus2` (`~/bench/build_corpus2.sh`, 35 samples):
+clang aarch64/x86-64 ELF, gcc x86-64 ELF, C++ (tinyxml2) for gcc/clang/mingw,
+system libc/libstdc++/libcrypto/python3. Clean after: AArch64 `+all`
+features by default, blocks that run into the end of the code, incremental
+lifting in the x86/ARM resolvers (sqlite x64 36 s -> 11 s, python3 570 s ->
+32 s), BSR/BSF of zero, `push rsp`/`pop rsp`, STLR and other side-effect
+stores (were silently dropped), ELF non-SHF_ALLOC sections answering
+address lookups at 0 (`Section::mapped`), PE imports without/with a bad ILT, non-UTF-8
+names in Python.
+
 `corpus_check.py ~/bench/corpus` is clean on all 34 samples except a known
 false alarm on the x86-64 Lua builds: 2 "blocks without IGNIL" and 2
 "objdump-only" addresses are constants embedded in .text before x87 code.
@@ -216,7 +229,9 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
    AArch64 FP (`fmov`, `fcmp/fcmpe`, `scvtf`, `fcvtzs`, `frintm`, `ldr/str`
    of D/Q registers — note a 64-bit write to a V register must zero its upper
    half, which the current 32-bit-only zero-extension rule does not do),
-   `clz`, `rbit`. Validate each with the difftests and add templates.
+   `clz`, `rbit`. x86 memory-operand shifts/rotates, `mul/imul/bt*/shld/
+   shrd/bsf/xadd` with a memory operand (difftest_x64 lists them as
+   unlifted). Validate each with the difftests and add templates.
 4. Expose `AnalysisHints` and `callingConvention` through the C shim and
    Python (today only C++ and `disassembleImage` use them).
 5. Extend the speculative resolver to ARM when useful. Failed hypotheses remain
@@ -229,6 +244,9 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 - Analyses: `lib/analysis/` (BackwardSlicer, SwitchDetector, SliceExprZ3,
   ArgumentRecovery, ValueEnumerator).
+- AArch64 `writesMemory()` names the side-effect instructions that write
+  nothing (HINT/barriers/PRF/CLREX/TME); LLVM's side-effect flag is also on
+  real stores (STLR, ST64B, ...), so never use it alone.
 - Lifters: `lib/disassemblers/x86/X86IGNILLifter.cpp` (table-driven generic
   paths: `memOperandOps_`/`liftMemOperandForm`, `sseOps_`/`liftSse`),
   `lib/disassemblers/arm/armIGNILLifter.cpp` (`memForms_`, `extAddSub_`,
