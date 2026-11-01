@@ -1,4 +1,5 @@
 #include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Graph.hpp>
 
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
@@ -7,6 +8,9 @@
 #include "utils/Utils.hpp"
 
 #include <algorithm>
+#include <type_traits>
+#include <string>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -105,6 +109,31 @@ slice::Expr resize(slice::Expr e, ignil::Width from, ignil::Width to) {
           std::make_shared<slice::Expr>(std::move(e)), to}};
 }
 
+// Marker for "this path looped back to the join being resolved": an Undef
+// tagged with the join's address and this op index, which no real Undef has.
+constexpr int kLoopBack = -2;
+
+bool isLoopBack(const slice::Expr &e, std::uint64_t join) {
+  const auto *u = std::get_if<slice::Undef>(&e.data);
+  return u && u->opIndex == kLoopBack && u->blockAddress == join;
+}
+
+// Made of constants and operations on them only: the same on every path.
+bool isConstantOnly(const slice::Expr &e) {
+  return e.visit([](const auto &n) -> bool {
+    using T = std::decay_t<decltype(n)>;
+    if constexpr (std::is_same_v<T, slice::Const>)
+      return true;
+    else if constexpr (std::is_same_v<T, slice::BinOp>)
+      return n.left && n.right && isConstantOnly(*n.left) &&
+             isConstantOnly(*n.right);
+    else if constexpr (std::is_same_v<T, slice::UnaryOp>)
+      return n.operand && isConstantOnly(*n.operand);
+    else
+      return false;
+  });
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -113,33 +142,29 @@ slice::Expr resize(slice::Expr e, ignil::Width from, ignil::Width to) {
 
 BackwardSlicer::BackwardSlicer(int maxBlocks) : maxBlocks_(maxBlocks) {}
 
-// Build a map from block_addr → unique_predecessor_addr.
-// Blocks with 0 or ≥2 predecessors are absent (entry / join nodes).
+// Every predecessor of every valid block: from the IGNIL terminators (what
+// hand-built IGNIL graphs have) and from the BasicBlock successors (which
+// also carry resolved indirect-jump targets and fall-throughs).
 BackwardSlicer::PredMap
 BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
-  // predecessor count: addr → list of predecessor addresses
-  std::unordered_map<std::uint64_t, std::vector<std::uint64_t>> incoming;
-  for (std::uint64_t addr: graph.validBlockAddresses()) {
-    // Initialize the incoming maps with all the blocks
-    incoming.emplace(addr, std::vector<std::uint64_t>{});
-  }
-  for (std::uint64_t addr: graph.validBlockAddresses()) {
-    // retrieve the ignil block from address
-    const ignil::Block *blk = graph.getIGNILBlock(addr);
-    if (!blk)
-      continue;
-    // look for the list of successors using the IGNIL instructions
-    // this will make the search, architecture-agnostic.
-    for (std::uint64_t succ: successorsOf(*blk).known) {
-      if (auto it = incoming.find(succ); it != incoming.end())
-        it->second.push_back(addr);
-    }
-  }
-  // Keep only single-predecessor entries
   PredMap result;
-  for (auto &[addr, preds]: incoming) {
-    if (preds.size() == 1)
-      result[addr] = preds[0];
+  auto &incoming = result.preds;
+  for (std::uint64_t addr: graph.validBlockAddresses())
+    incoming.emplace(addr, std::vector<std::uint64_t>{});
+  auto addEdge = [&](std::uint64_t from, std::uint64_t to) {
+    auto it = incoming.find(to);
+    if (it != incoming.end() &&
+        std::find(it->second.begin(), it->second.end(), from) ==
+                it->second.end())
+      it->second.push_back(from);
+  };
+  for (std::uint64_t addr: graph.validBlockAddresses()) {
+    if (const ignil::Block *blk = graph.getIGNILBlock(addr))
+      for (std::uint64_t succ: successorsOf(*blk).known)
+        addEdge(addr, succ);
+    if (const BasicBlock bb{&graph, addr}; bb.isValid())
+      for (std::uint64_t succ: bb.successors())
+        addEdge(addr, succ);
   }
   return result;
 }
@@ -151,7 +176,7 @@ BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
 slice::Expr BackwardSlicer::slice(const ignil::Value &root,
                                   std::uint64_t blockAddr,
                                   const Graph &graph) const {
-  const PredMap preds = buildPredecessorMap(graph);
+  PredMap preds = buildPredecessorMap(graph);
   const ignil::Block *blk = graph.getIGNILBlock(blockAddr);
   if (!blk)
     return slice::Expr{slice::Undef{ignil::widthOf(root)}};
@@ -165,7 +190,7 @@ slice::Expr BackwardSlicer::slice(const ignil::Value &root,
 
 slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                                        const ignil::Block &block, int beforeIdx,
-                                       const Graph &graph, const PredMap &preds,
+                                       const Graph &graph, PredMap &preds,
                                        int depth) const {
   return std::visit(
           utils::overloaded{
@@ -223,7 +248,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
 
 slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
                                      const ignil::Block &block, int beforeIdx,
-                                     const Graph &graph, const PredMap &preds,
+                                     const Graph &graph, PredMap &preds,
                                      int depth) const {
   using Opc = ignil::Opcode;
   const auto regFile = registerFileFor(graph.architecture());
@@ -280,17 +305,61 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
                  std::move(part));
   }
 
-  // Not defined in this block - try the unique predecessor.
+  // Not defined in this block - try the predecessors.
   if (depth <= 0)
     return slice::Expr{slice::SymReg{r}};
-  auto predIt = preds.find(block.startAddress());
-  if (predIt == preds.end())
-    return slice::Expr{slice::SymReg{r}}; // join or entry
-  const ignil::Block *predBlk = graph.getIGNILBlock(predIt->second);
-  if (!predBlk)
-    return slice::Expr{slice::SymReg{r}};
-  return sliceReg(r, *predBlk, static_cast<int>(predBlk->ops().size()), graph,
-                  preds, depth - 1);
+  auto predIt = preds.preds.find(block.startAddress());
+  if (predIt == preds.preds.end() || predIt->second.empty())
+    return slice::Expr{slice::SymReg{r}}; // entry
+  const std::vector<std::uint64_t> &from = predIt->second;
+
+  auto sliceIn = [&](std::uint64_t p) -> std::optional<slice::Expr> {
+    const ignil::Block *predBlk = graph.getIGNILBlock(p);
+    if (!predBlk || --preds.budget < 0)
+      return std::nullopt;
+    return sliceReg(r, *predBlk, static_cast<int>(predBlk->ops().size()),
+                    graph, preds, depth - 1);
+  };
+
+  if (from.size() == 1) {
+    auto e = sliceIn(from.front());
+    return e ? std::move(*e) : slice::Expr{slice::SymReg{r}};
+  }
+
+  // A join. Back at a join already being resolved for this register: this
+  // path came round a loop without redefining it, so it adds nothing - the
+  // caller skips it.
+  const auto key = std::make_tuple(block.startAddress(), r.offset,
+                                   static_cast<std::uint32_t>(r.width));
+  if (preds.joinsInProgress.contains(key))
+    return slice::Expr{slice::Undef{r.width, block.startAddress(), kLoopBack}};
+
+  preds.joinsInProgress.insert(key);
+  std::optional<slice::Expr> merged;
+  std::string mergedText;
+  bool agree = true;
+  for (std::uint64_t p: from) {
+    auto e = sliceIn(p);
+    if (!e) {
+      agree = false;
+      break;
+    }
+    if (isLoopBack(*e, block.startAddress()))
+      continue; // round the loop, unchanged
+    const std::string text = slice::toString(*e);
+    if (!isConstantOnly(*e) || (merged && text != mergedText)) {
+      agree = false;
+      break;
+    }
+    if (!merged) {
+      merged = std::move(*e);
+      mergedText = text;
+    }
+  }
+  preds.joinsInProgress.erase(key);
+  if (agree && merged)
+    return std::move(*merged);
+  return slice::Expr{slice::SymReg{r}};
 }
 
 // ---------------------------------------------------------------------------
@@ -300,7 +369,7 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
 slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
                                         const ignil::Block &block, int opIdx,
                                         const Graph &graph,
-                                        const PredMap &preds, int depth) const {
+                                        PredMap &preds, int depth) const {
   using Opc = ignil::Opcode;
 
   auto src = [&](int i) -> slice::Expr {

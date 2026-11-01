@@ -73,9 +73,14 @@ struct SwitchCandidate {
 /// Returns nullopt when the expression does not match the pattern.
 /// Returns a SwitchCandidate with numCases == 0 when the pattern is found
 /// but bounds could not be extracted from a predecessor guard.
+///
+/// `sliceDepth` is the BackwardSlicer depth `jumpTarget` was sliced with; the
+/// guard is sliced with one less (it sits one block earlier) so that the
+/// index reads the same in both.
 std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
                                                     std::uint64_t blockAddr,
-                                                    const Graph &graph);
+                                                    const Graph &graph,
+                                                    int sliceDepth = 5);
 
 /// Read numCases pointer-sized entries from the jump table encoded in bytes.
 ///

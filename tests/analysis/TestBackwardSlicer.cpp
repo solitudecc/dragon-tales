@@ -8,6 +8,7 @@
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
 
+#include <memory>
 #include <optional>
 
 #include <iostream>
@@ -329,4 +330,84 @@ TEST_CASE("BackwardSlicer - AArch64 W write zero-extends into X",
   auto v = evalConst(e);
   REQUIRE(v.has_value());
   CHECK(*v == 5);
+}
+
+// ---------------------------------------------------------------------------
+// Join nodes: merged when every path gives the same constant.
+// ---------------------------------------------------------------------------
+
+namespace {
+namespace ig = dragon::ignil;
+ig::Op copyOp(const ig::Reg &r, ig::Value v, std::uint64_t at) {
+  return {ig::Opcode::COPY, ig::Value{r}, {std::move(v)}, at};
+}
+ig::Op jmpOp(std::uint64_t to, std::uint64_t at) {
+  return {ig::Opcode::JMP, std::nullopt, {ig::Value{ig::Const{to, 64}}}, at};
+}
+ig::Op cjmpOp(std::uint64_t taken, std::uint64_t fall, std::uint64_t at) {
+  return {ig::Opcode::CJMP,
+          std::nullopt,
+          {ig::Value{x86::ZF}, ig::Value{ig::Const{taken, 64}},
+           ig::Value{ig::Const{fall, 64}}},
+          at};
+}
+ig::Op retOp(std::uint64_t at) { return {ig::Opcode::RET, std::nullopt, {}, at}; }
+} // namespace
+
+TEST_CASE("BackwardSlicer - a join where every path sets the same constant",
+          "[slicer][ignil][join]") {
+  // A: cjmp B, C ; B: rax = 5 ; jmp D ; C: rax = 5 ; jmp D ; D: ret
+  ig::Block a{0x4000}, b{0x4010}, c{0x4020}, d{0x4030};
+  a.append(cjmpOp(0x4010, 0x4020, 0x4000));
+  b.append(copyOp(x86::RAX, ig::Const{5, 64}, 0x4010));
+  b.append(jmpOp(0x4030, 0x4017));
+  c.append(copyOp(x86::RAX, ig::Const{5, 64}, 0x4020));
+  c.append(jmpOp(0x4030, 0x4027));
+  d.append(retOp(0x4030));
+  dragon::Graph g{dragon::Architecture::X86_64, dragon::Configuration{}};
+  for (auto *blk: {&a, &b, &c, &d})
+    addValidBlock(g, std::move(*blk));
+  auto e = dragon::BackwardSlicer{5}.slice(ig::Value{x86::RAX}, 0x4030, g);
+  INFO(dragon::slice::toString(e));
+  REQUIRE(std::holds_alternative<dragon::slice::Const>(e.data));
+  CHECK(std::get<dragon::slice::Const>(e.data).value == 5);
+}
+
+TEST_CASE("BackwardSlicer - a value set before a loop is seen inside it",
+          "[slicer][ignil][join]") {
+  // P: rdx = 0x9000 ; jmp H
+  // H: rax = rax + 1 (or rdx = rdx + 8) ; cjmp H, E
+  // E: ret                  - slice rdx at E
+  auto build = [](bool loopWritesRdx) {
+    ig::Block p{0x5000}, h{0x5010}, e{0x5020};
+    p.append(copyOp(x86::RDX, ig::Const{0x9000, 64}, 0x5000));
+    p.append(jmpOp(0x5010, 0x5007));
+    const ig::Reg &w = loopWritesRdx ? x86::RDX : x86::RAX;
+    h.append({ig::Opcode::ADD, ig::Value{w},
+              {ig::Value{w}, ig::Value{ig::Const{8, 64}}}, 0x5010});
+    h.append(cjmpOp(0x5010, 0x5020, 0x5014));
+    e.append(retOp(0x5020));
+    auto g = std::make_unique<dragon::Graph>(dragon::Architecture::X86_64,
+                                             dragon::Configuration{});
+    for (auto *blk: {&p, &h, &e})
+      addValidBlock(*g, std::move(*blk));
+    return g;
+  };
+  {
+    auto g = build(false);
+    auto e = dragon::BackwardSlicer{5}.slice(ig::Value{x86::RDX}, 0x5020, *g);
+    INFO(dragon::slice::toString(e));
+    REQUIRE(std::holds_alternative<dragon::slice::Const>(e.data));
+    CHECK(std::get<dragon::slice::Const>(e.data).value == 0x9000);
+  }
+  {
+    // The loop changes rdx each time round: no single value - the slice is
+    // ADD(RDX at the loop head, 8), the head's value left unknown.
+    auto g = build(true);
+    auto e = dragon::BackwardSlicer{5}.slice(ig::Value{x86::RDX}, 0x5020, *g);
+    const std::string text = dragon::slice::toString(e);
+    INFO(text);
+    CHECK_FALSE(std::holds_alternative<dragon::slice::Const>(e.data));
+    CHECK(text.find("0x9000") == std::string::npos);
+  }
 }

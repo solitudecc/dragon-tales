@@ -427,7 +427,8 @@ static const Load *matchRelativeTarget(const Expr &jumpTarget,
 
 std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
                                                     std::uint64_t blockAddr,
-                                                    const Graph &graph) {
+                                                    const Graph &graph,
+                                                    int sliceDepth) {
   // Phase 1: the target is LOAD(table) - a table of pointers - or
   // targetBase + (ext(LOAD(table)) << shift) - a table of offsets.
   SwitchCandidate sw{0, 0, 0, ignil::Reg{0, 0, ""}};
@@ -461,11 +462,11 @@ std::optional<SwitchCandidate> detectPossibleSwitch(const Expr &jumpTarget,
 
   // Phase 2: the case count, from the bounds check that guards the block.
   // The guard block is the dispatch block's predecessor, so its condition is
-  // sliced with one block less than the jump target was (callers use 5, as
-  // the disassembler does): the index then reads the same in both slices.
+  // sliced with one block less than the jump target was (sliceDepth): the
+  // index then reads the same in both slices.
   if (const ignil::Block *predBlock = findCJMPPredecessor(blockAddr, graph)) {
     const ignil::Op &cjmp = predBlock->ops().back();
-    BackwardSlicer slicer{4};
+    BackwardSlicer slicer{std::max(sliceDepth - 1, 0)};
     Expr condExpr =
             slicer.slice(cjmp.srcs[0], predBlock->startAddress(), graph);
     sw.numCases = boundFromGuard(condExpr, cjmp, blockAddr, core, indexBits);

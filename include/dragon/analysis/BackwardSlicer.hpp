@@ -4,7 +4,10 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <cstdint>
+#include <set>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 namespace dragon {
 
@@ -16,9 +19,15 @@ class Graph;
 /// The slicer walks backwards through IGNIL ops.  Within a block,
 /// Temp definitions are single-assignment so tracing is trivial.
 /// When a Reg value is not defined in the current block the slicer
-/// follows the unique predecessor (if one exists).  Blocks with more
-/// than one predecessor - join nodes - are not crossed: the Reg is
-/// returned as SymReg (unknown).
+/// follows the unique predecessor (if one exists).  At a join node - more
+/// than one predecessor - the register is sliced along each (within a per-call budget); if
+/// every path yields the same expression made of constants only, that is
+/// the value, otherwise the Reg is returned as SymReg (unknown). A path that
+/// loops back to the same join without touching the register is skipped, so
+/// a loop-invariant value set before the loop (a jump-table base hoisted
+/// out of it) is found. Only constant results are merged: a SymReg or a load
+/// stands for a value at the point the walk stopped, which differs between
+/// paths.
 ///
 /// Registers alias by byte, as in the IGNIL register space: the definition of
 /// RAX is the latest write to RAX, EAX, AX, AL or AH. A 32-bit write zeroes
@@ -38,9 +47,16 @@ class BackwardSlicer {
                                   const Graph &graph) const;
 
   private:
-  // Maps a block address to its unique predecessor.
-  // Blocks with zero or multiple predecessors are absent (join nodes / entry).
-  using PredMap = std::unordered_map<std::uint64_t, std::uint64_t>;
+  // Every predecessor of each block, and the join-node queries in progress
+  // (block, register offset, width) used to recognise a loop back to one.
+  struct PredMap {
+    std::unordered_map<std::uint64_t, std::vector<std::uint64_t>> preds;
+    std::set<std::tuple<std::uint64_t, std::uint32_t, std::uint32_t>>
+            joinsInProgress;
+    // Predecessor blocks still allowed to be entered by this slice() call:
+    // following every path through joins is exponential in the worst case.
+    int budget = 4096;
+  };
 
   [[nodiscard]] PredMap buildPredecessorMap(const Graph &graph) const;
 
@@ -48,14 +64,14 @@ class BackwardSlicer {
   // `block`.  Crosses into predecessor blocks when `depth` > 0.
   [[nodiscard]] slice::Expr sliceValue(const ignil::Value &v,
                                        const ignil::Block &block, int beforeIdx,
-                                       const Graph &graph, const PredMap &preds,
+                                       const Graph &graph, PredMap &preds,
                                        int depth) const;
 
   // Resolve register `r` before ops[beforeIdx], honouring sub-register
   // aliasing (a write to EAX/AL/AH is a definition of RAX too).
   [[nodiscard]] slice::Expr sliceReg(const ignil::Reg &r,
                                      const ignil::Block &block, int beforeIdx,
-                                     const Graph &graph, const PredMap &preds,
+                                     const Graph &graph, PredMap &preds,
                                      int depth) const;
 
   // Turn the op that defines a value into a SliceExpr by recursively slicing
@@ -63,7 +79,7 @@ class BackwardSlicer {
   [[nodiscard]] slice::Expr buildFromOp(const ignil::Op &op,
                                         const ignil::Block &block, int opIdx,
                                         const Graph &graph,
-                                        const PredMap &preds, int depth) const;
+                                        PredMap &preds, int depth) const;
   // To keep the maximum number to go backward
   // this is selected by user with the configuration.
   int maxBlocks_;

@@ -433,7 +433,9 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
         std::holds_alternative<ignil::Const>(last.srcs[0]))
       continue;
 
-    BackwardSlicer slicer{5};
+    // The guard is sliced one block shorter (see detectPossibleSwitch).
+    constexpr int kSliceDepth = 5;
+    BackwardSlicer slicer{kSliceDepth};
     slice::Expr result =
             slicer.slice(last.srcs[0], ignilBlock->startAddress(), graph);
     // A memory-indirect jump's target is a value loaded from memory the
@@ -446,7 +448,7 @@ bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
 
     std::vector<std::uint64_t> targets;
     if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
-                                              graph)) {
+                                              graph, kSliceDepth)) {
       if (sw->numCases > 0) {
         logger_.log("Switch at 0x{:x}: table=0x{:x} entries={} entrySize={}",
                     block.startAddress(), sw->tableBase, sw->numCases,
