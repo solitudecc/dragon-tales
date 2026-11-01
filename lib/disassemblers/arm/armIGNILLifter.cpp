@@ -192,6 +192,25 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
           {"TBNZX", &ARMIGNILLifter::opTBNZX_},
   };
 
+  // Every name above is an AArch64 opcode. Looking them up in the A32 table
+  // finds the ones the two ISAs happen to share - BL and Bcc - and A32
+  // instructions would then be lifted with AArch64 operand layouts (wrong
+  // targets, wrong condition). A32 has no lifter; liftInstruction handles it
+  // on its own and never consults these fields.
+  if (architecture_ == Architecture::ARM32) {
+    regMap_.clear();
+    return;
+  }
+
+  // NZCV is an implicit def of every flag-setting AArch64 instruction; the
+  // unlifted-instruction fallback needs it to clobber the flags.
+  for (unsigned i = 0; i < regInfo.getNumRegs(); ++i) {
+    if (regInfo.getName(i) == std::string_view{"NZCV"}) {
+      llvmNZCV_ = i;
+      break;
+    }
+  }
+
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
     if (auto it = kOpcodeFields.find(instrInfo.getName(i));
         it != kOpcodeFields.end())
@@ -274,6 +293,11 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
   const auto *mc = insn.mcInst();
   if (!mc)
     return;
+
+  if (architecture_ == Architecture::ARM32) {
+    liftA32(insn, out, tempId);
+    return;
+  }
 
   unsigned opc = mc->getOpcode();
   std::uint64_t addr = insn.address();
@@ -362,7 +386,132 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
       liftCall(*mc, addr, out, tempId);
     else if (desc.isBranch())
       liftBranch(*mc, addr, out, tempId);
+    else
+      liftUnknown(*mc, addr, out);
   }
+}
+
+void dragon::arm::ARMIGNILLifter::liftUnknown(const llvm::MCInst &mc,
+                                              std::uint64_t addr,
+                                              ignil::Block &out) const {
+  // No semantics for this instruction. Dropping it silently would leave every
+  // register it writes holding its old value - `mov x0,#3; mul x0,x0,x1`
+  // would read back as X0 = 3. Same policy as X86IGNILLifter: clobber what it
+  // defines, and record it so a consumer can tell the block is incomplete.
+  const auto &desc = instrInfo_->get(mc.getOpcode());
+  for (unsigned i = 0; i < desc.getNumDefs() && i < mc.getNumOperands(); ++i) {
+    const auto &defOp = mc.getOperand(i);
+    if (!defOp.isReg())
+      continue;
+    if (auto dst = toReg(defOp.getReg()); dst && !isZeroReg(*dst))
+      emitUndef(*dst, addr, out);
+  }
+  bool definesFlags = false;
+  for (const llvm::MCPhysReg implicitDef: desc.implicit_defs()) {
+    if (llvmNZCV_ != 0 && implicitDef == llvmNZCV_)
+      definesFlags = true;
+    else if (auto dst = toReg(implicitDef))
+      emitUndef(*dst, addr, out);
+  }
+  if (definesFlags) {
+    for (const auto &flag: {regNF_, regZF_, regCF_, regVF_})
+      if (flag.width != 0)
+        emitUndef(flag, addr, out);
+  }
+
+  // A nop, hint or barrier defines nothing and writes no memory: not a gap.
+  if (desc.getNumDefs() != 0 || !desc.implicit_defs().empty() ||
+      writesMemory(desc))
+    out.noteUnlifted(addr);
+}
+
+bool dragon::arm::ARMIGNILLifter::writesMemory(const llvm::MCInstrDesc &desc) {
+  // LLVM also sets mayStore on everything with unmodeled side effects - HINT
+  // (nop/yield), DMB/DSB/ISB, SVC - which would make every nop look like an
+  // unlifted store. A real store (STR*roX, STLR, ...) has no such flag.
+  return desc.mayStore() && !desc.hasUnmodeledSideEffects();
+}
+
+void dragon::arm::ARMIGNILLifter::liftA32(const Instruction &insn,
+                                          ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  // There is no A32 lifter (docs/manual/05-lifting-to-ignil.md). What is kept
+  // is the control flow the disassembler already decoded, so a Graph built
+  // from A32 code still has well-formed blocks whose terminators agree with
+  // its CFG. Everything that computes a value is recorded as unlifted - the
+  // block is a skeleton, and says so.
+  const auto *mc = insn.mcInst();
+  const std::uint64_t addr = insn.address();
+  const auto &desc = instrInfo_->get(mc->getOpcode());
+
+  // A32 predicate (condition) of the instruction; AL = 14 means always.
+  constexpr std::int64_t kCondAL = 14;
+  std::int64_t cond = kCondAL;
+  if (const int p = desc.findFirstPredOperandIdx();
+      p >= 0 && mc->getOperand(p).isImm())
+    cond = mc->getOperand(p).getImm();
+  const bool predicated = cond != kCondAL;
+
+  // An unknown target or condition: a fresh UNDEF temp, never a register -
+  // A32 registers have no IGNIL mapping.
+  auto undefTemp = [&](ignil::Width w) {
+    auto t = newTemp(tmp, w);
+    out.append({ignil::Opcode::UNDEF, t, {}, addr});
+    return t;
+  };
+
+  if (desc.isReturn()) {
+    // A conditional return falls through when not taken; there is no IGNIL
+    // op for "return if", so leave the block open and say so.
+    if (predicated)
+      out.noteUnlifted(addr);
+    else
+      out.append({ignil::Opcode::RET, std::nullopt, {}, addr});
+    // `pop {..., pc}` / `ldm sp!, {..., pc}` also load other registers.
+    if (desc.getNumDefs() != 0 || desc.mayLoad())
+      out.noteUnlifted(addr);
+    return;
+  }
+
+  if (desc.isCall()) {
+    ignil::Value target = insn.callees().empty()
+                                  ? ignil::Value{undefTemp(32)}
+                                  : ignil::Value{ignil::Const{
+                                            *insn.callees().begin(), 32}};
+    out.append({ignil::Opcode::CALL, std::nullopt, {target}, addr});
+    // The call clobbers registers this lifter cannot name, and a predicated
+    // call may not happen at all.
+    out.noteUnlifted(addr);
+    return;
+  }
+
+  if (desc.isBranch()) {
+    const auto &targets = insn.branches();
+    ignil::Value taken = targets.empty()
+                                 ? ignil::Value{undefTemp(32)}
+                                 : ignil::Value{ignil::Const{
+                                           *targets.begin(), 32}};
+    if (insn.isConditional()) {
+      // The NZCV flags are never computed for A32 (nothing that sets them is
+      // lifted), so the condition is honestly unknown - but both edges are.
+      auto c = undefTemp(1);
+      out.append({ignil::Opcode::CJMP,
+                  std::nullopt,
+                  {c, taken, ignil::Const{addr + insn.size(), 32}},
+                  addr});
+    } else {
+      out.append({ignil::Opcode::JMP, std::nullopt, {taken}, addr});
+    }
+    if (targets.empty())
+      out.noteUnlifted(addr);
+    return;
+  }
+
+  // Not control flow. A nop or a barrier defines nothing and stores nothing;
+  // anything else carries semantics this lifter does not have.
+  if (desc.getNumDefs() != 0 || !desc.implicit_defs().empty() ||
+      writesMemory(desc) || predicated)
+    out.noteUnlifted(addr);
 }
 
 void dragon::arm::ARMIGNILLifter::liftMovz(const llvm::MCInst &mc,

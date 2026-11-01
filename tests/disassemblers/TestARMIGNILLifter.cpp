@@ -5,6 +5,8 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 
+#include <algorithm>
+#include <set>
 #include <vector>
 
 namespace arm = dragon::arm;
@@ -194,4 +196,139 @@ TEST_CASE("ARM IGNIL lifting - fall-through block gets an explicit JMP",
   const dragon::ignil::Op &terminator = fallThroughBlock->ops().back();
   REQUIRE(terminator.opcode == dragon::ignil::Opcode::JMP);
   REQUIRE(std::get<dragon::ignil::Const>(terminator.srcs[0]).value == 0x100c);
+}
+
+// -----------------------------------------------------------------------
+// A32 (ARM32) has no semantic lifter. Regression: it used to be run through
+// the AArch64 lifter, whose opcode table is looked up *by name* - so A32's
+// BL and Bcc (names shared with AArch64) were lifted with AArch64 operand
+// layouts: `bl #-4` @0x1008 became CALL(0xff8), `b #8` became a conditional
+// jump to 0x103c. Now only the decoded control flow is kept and every other
+// instruction is reported through Block::unlifted().
+// -----------------------------------------------------------------------
+
+static dragon::Disassembler makeA32Disassembler() {
+  dragon::Configuration cfg;
+  cfg.cpu = "arm926ej-s"; // ARMv5TEJ: has BX
+  return dragon::Disassembler(dragon::Architecture::ARM32, cfg);
+}
+
+static bool contains(const std::vector<std::uint64_t> &v, std::uint64_t x) {
+  return std::find(v.begin(), v.end(), x) != v.end();
+}
+
+TEST_CASE("ARM IGNIL lifting - A32 call target and unlifted skeleton",
+          "[ignil][arm32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x05, 0x00, 0xa0, 0xe3, // mov r0, #5     @ 0x1000
+          0x01, 0x00, 0x80, 0xe2, // add r0, r0, #1 @ 0x1004
+          0xff, 0xff, 0xff, 0xeb, // bl  0x100c     @ 0x1008
+          0x1e, 0xff, 0x2f, 0xe1, // bx  lr         @ 0x100c
+  };
+  auto dis = makeA32Disassembler();
+  auto g = makeGraph(dragon::Architecture::ARM32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  REQUIRE(g.validFunctionAddresses() == std::set<std::uint64_t>{0x1000, 0x100c});
+
+  const dragon::ignil::Block *entry = g.getIGNILBlock(0x1000);
+  REQUIRE(entry != nullptr);
+
+  bool sawCall = false;
+  for (const auto &op: *entry) {
+    // No A32 register has an IGNIL mapping: nothing may be written to one
+    // (the old path wrote AArch64 registers for A32 code).
+    REQUIRE_FALSE((op.dst && std::holds_alternative<dragon::ignil::Reg>(*op.dst)));
+    if (op.opcode == dragon::ignil::Opcode::CALL) {
+      sawCall = true;
+      REQUIRE(std::get<dragon::ignil::Const>(op.srcs[0]).value == 0x100c);
+    }
+  }
+  REQUIRE(sawCall);
+
+  CHECK(contains(entry->unlifted(), 0x1000));
+  CHECK(contains(entry->unlifted(), 0x1004));
+}
+
+TEST_CASE("ARM IGNIL lifting - A32 b / beq terminators match the CFG",
+          "[ignil][arm32]") {
+  const std::vector<std::uint8_t> bytes = {
+          0x02, 0x00, 0x00, 0x0a, // beq 0x1010     @ 0x1000
+          0x02, 0x00, 0x00, 0xea, // b   0x1014     @ 0x1004
+          0x00, 0x00, 0xa0, 0xe1, // mov r0, r0     @ 0x1008
+          0x00, 0x00, 0xa0, 0xe1, // mov r0, r0     @ 0x100c
+          0x00, 0x00, 0xa0, 0xe1, // mov r0, r0     @ 0x1010
+          0x1e, 0xff, 0x2f, 0xe1, // bx  lr         @ 0x1014
+  };
+  auto dis = makeA32Disassembler();
+  auto g = makeGraph(dragon::Architecture::ARM32);
+  dis.disassemble(bytes, 0x1000, g);
+
+  const dragon::ignil::Block *beq = g.getIGNILBlock(0x1000);
+  REQUIRE(beq != nullptr);
+  const auto &cj = beq->ops().back();
+  REQUIRE(cj.opcode == dragon::ignil::Opcode::CJMP);
+  // Flags are never computed for A32, so the condition is UNDEF - the edges
+  // are what matters.
+  REQUIRE(std::holds_alternative<dragon::ignil::Temp>(cj.srcs[0]));
+  CHECK(std::get<dragon::ignil::Const>(cj.srcs[1]).value == 0x1010);
+  CHECK(std::get<dragon::ignil::Const>(cj.srcs[2]).value == 0x1004);
+
+  const dragon::ignil::Block *b = g.getIGNILBlock(0x1004);
+  REQUIRE(b != nullptr);
+  const auto &j = b->ops().back();
+  REQUIRE(j.opcode == dragon::ignil::Opcode::JMP);
+  CHECK(std::get<dragon::ignil::Const>(j.srcs[0]).value == 0x1014);
+
+  // `b` is unconditional: no fall-through block after it.
+  CHECK_FALSE(g.isValidBlock(0x1008));
+}
+
+// -----------------------------------------------------------------------
+// AArch64 instruction with no lifter. Regression: it was dropped with no
+// trace, so `mov x0,#3; mul x0,x0,x1; ret` read back as X0 = 3.
+// -----------------------------------------------------------------------
+
+TEST_CASE("ARM IGNIL lifting - unlifted AArch64 instruction clobbers its defs",
+          "[ignil][arm64]") {
+  auto dis = makeDisassembler(dragon::Architecture::ARM64);
+
+  SECTION("mul: X0 becomes UNDEF and the address is reported") {
+    const std::vector<std::uint8_t> bytes = {
+            0x60, 0x00, 0x80, 0xd2, // mov x0, #3      @ 0x1000
+            0x00, 0x7c, 0x01, 0x9b, // mul x0, x0, x1  @ 0x1004
+            0xc0, 0x03, 0x5f, 0xd6, // ret             @ 0x1008
+    };
+    auto g = makeGraph(dragon::Architecture::ARM64);
+    dis.disassemble(bytes, 0x1000, g);
+    const dragon::ignil::Block *blk = g.getIGNILBlock(0x1000);
+    REQUIRE(blk != nullptr);
+
+    const dragon::ignil::Op *lastX0 = nullptr;
+    for (const auto &op: *blk)
+      if (op.dst && std::holds_alternative<dragon::ignil::Reg>(*op.dst) &&
+          std::get<dragon::ignil::Reg>(*op.dst).offset == arm::X0.offset)
+        lastX0 = &op;
+    REQUIRE(lastX0 != nullptr);
+    CHECK(lastX0->opcode == dragon::ignil::Opcode::UNDEF);
+    CHECK(lastX0->address == 0x1004);
+    CHECK(blk->unlifted() == std::vector<std::uint64_t>{0x1004});
+  }
+
+  SECTION("adcs clobbers NZCV; nop is not a gap") {
+    const std::vector<std::uint8_t> bytes = {
+            0x20, 0x00, 0x02, 0xba, // adcs x0, x1, x2 @ 0x1000
+            0x1f, 0x20, 0x03, 0xd5, // nop             @ 0x1004
+            0xc0, 0x03, 0x5f, 0xd6, // ret             @ 0x1008
+    };
+    auto g = makeGraph(dragon::Architecture::ARM64);
+    dis.disassemble(bytes, 0x1000, g);
+    const dragon::ignil::Block *blk = g.getIGNILBlock(0x1000);
+    REQUIRE(blk != nullptr);
+    CHECK(blockDefines(*blk, arm::NF));
+    CHECK(blockDefines(*blk, arm::ZF));
+    CHECK(blockDefines(*blk, arm::CF));
+    CHECK(blockDefines(*blk, arm::VF));
+    CHECK(blk->unlifted() == std::vector<std::uint64_t>{0x1000});
+  }
 }

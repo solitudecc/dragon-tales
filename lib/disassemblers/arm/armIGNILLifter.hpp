@@ -119,6 +119,20 @@ class ARMIGNILLifter {
   void liftRet(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
 
+  // AArch64 instruction with no lifter: UNDEF everything it defines (NZCV
+  // included) and record it in Block::unlifted().
+  void liftUnknown(const llvm::MCInst &mc, std::uint64_t addr,
+                   ignil::Block &out) const;
+
+  // A32 (ARM32): no semantic lifter exists. Emits only the control flow the
+  // disassembler decoded (RET/CALL/JMP/CJMP with an UNDEF condition) and
+  // records every other value-producing instruction as unlifted.
+  void liftA32(const Instruction &insn, ignil::Block &out,
+               std::uint32_t &tmp) const;
+
+  // mayStore, minus LLVM's "unmodeled side effects => mayStore" (nop, dmb).
+  [[nodiscard]] static bool writesMemory(const llvm::MCInstrDesc &desc);
+
   // Helpers
   // Translate an LLVM register integer to an ignil::Reg.
   // Returns nullopt for unknown registers (caller emits UNDEF).
@@ -263,6 +277,7 @@ class ARMIGNILLifter {
   ignil::Reg regNF_{}, regZF_{}, regCF_{}, regVF_{};
   ignil::Reg regSP_{}; // needed for LDP/STP pre/post-index and address math
   ignil::Reg regXZR_{}; // the zero register - used by isZeroReg()
+  unsigned llvmNZCV_{}; // LLVM register number of NZCV (0 if not found)
 };
 
 } // namespace arm
