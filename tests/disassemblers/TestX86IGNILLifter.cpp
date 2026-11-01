@@ -13,6 +13,9 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <cmath>
+#include <cstring>
+
 #include <algorithm>
 #include <iostream>
 #include <set>
@@ -2604,6 +2607,52 @@ TEST_CASE("X86 IGNIL lifting - integer memory-operand forms",
     if (c.flagsDefined) {
       CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == c.zf);
       CHECK(ex.evaluate(ex.readRegister(x86r::SF)) == c.sf);
+    }
+  }
+}
+#endif // DRAGON_WITH_Z3
+
+#ifdef DRAGON_WITH_Z3
+// COMISD/UCOMISD were unlifted (the most common SSE instruction in an x86-64
+// Lua build): IGNIL had no float compare. FLT/FEQ/FUNO give ZF/PF/CF -
+// unordered 111, greater 000, less 001, equal 100 - as the SDM specifies.
+TEST_CASE("X86 IGNIL lifting - comisd sets ZF/PF/CF from an IEEE compare",
+          "[ignil][x86][x86_64][sse]") {
+  auto bits = [](double d) {
+    std::uint64_t u;
+    std::memcpy(&u, &d, sizeof u);
+    return u;
+  };
+  const dragon::ignil::Reg xmm0{dragon::x86::kOffXMM0, 64, "XMM0"};
+  const dragon::ignil::Reg xmm1{dragon::x86::kOffXMM0 + 8, 64, "XMM1"};
+  struct Case {
+    double a, b;
+    int zf, pf, cf;
+  };
+  const Case cases[] = {{1.0, 2.0, 0, 0, 1},
+                        {2.0, 1.0, 0, 0, 0},
+                        {-0.0, 0.0, 1, 0, 0}, // +0 == -0
+                        {std::nan(""), 1.0, 1, 1, 1}};
+  for (const std::vector<std::uint8_t> &insn:
+       {std::vector<std::uint8_t>{0x66, 0x0f, 0x2f, 0xc1},    // comisd xmm0, xmm1
+        std::vector<std::uint8_t>{0x66, 0x0f, 0x2e, 0xc1}}) { // ucomisd xmm0, xmm1
+    for (const auto &c: cases) {
+      INFO(c.a << " vs " << c.b);
+      dragon::ignil::SymbolicExecutor ex;
+      std::uint64_t target = 0;
+      runOne(insn,
+             [&](dragon::ignil::SymbolicExecutor &e) {
+               e.setRegister(xmm0, bits(c.a));
+               e.setRegister(xmm1, bits(c.b));
+               e.setRegister(x86r::OF, 1);
+               e.setRegister(x86r::SF, 1);
+             },
+             ex, target);
+      CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == c.zf);
+      CHECK(ex.evaluate(ex.readRegister(x86r::PF)) == c.pf);
+      CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == c.cf);
+      CHECK(ex.evaluate(ex.readRegister(x86r::OF)) == 0);
+      CHECK(ex.evaluate(ex.readRegister(x86r::SF)) == 0);
     }
   }
 }

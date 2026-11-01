@@ -696,6 +696,23 @@ z3::expr SymbolicExecutor::binary(Opcode op, const z3::expr &lhs,
       op == Opcode::FDIV)
     return zeroCoerce(floatBinary(op, lhs, rhs), dstWidth);
 
+  if (op == Opcode::FLT || op == Opcode::FEQ || op == Opcode::FUNO) {
+    const z3::sort f64 = float64Sort(*ctx_);
+    const z3::expr a = zeroCoerce(lhs, 64).mk_from_ieee_bv(f64);
+    const z3::expr b = zeroCoerce(rhs, 64).mk_from_ieee_bv(f64);
+    // IEEE predicates, not SMT-LIB `=` (under which NaN == NaN and
+    // +0 != -0).
+    const z3::expr pred =
+            op == Opcode::FLT
+                    ? z3::to_expr(*ctx_, Z3_mk_fpa_lt(*ctx_, a, b))
+            : op == Opcode::FEQ
+                    ? z3::to_expr(*ctx_, Z3_mk_fpa_eq(*ctx_, a, b))
+                    : z3::to_expr(*ctx_, Z3_mk_fpa_is_nan(*ctx_, a)) ||
+                              z3::to_expr(*ctx_, Z3_mk_fpa_is_nan(*ctx_, b));
+    return zeroCoerce(z3::ite(pred, bvVal(*ctx_, 1, 1), bvVal(*ctx_, 0, 1)),
+                      dstWidth);
+  }
+
   // Widen both operands to a common width before computing, matching how
   // IGNILSimplify folds the same op on constants. For well-formed IGNIL every
   // width here is already equal and this is a no-op.
@@ -1270,7 +1287,10 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::FADD:
     case Opcode::FSUB:
     case Opcode::FMUL:
-    case Opcode::FDIV: {
+    case Opcode::FDIV:
+    case Opcode::FLT:
+    case Opcode::FEQ:
+    case Opcode::FUNO: {
       if (op.srcs.size() != 2)
         return ExecStatus::MalformedOp;
       const z3::expr lhs = eval(op.srcs[0]);

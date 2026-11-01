@@ -122,3 +122,24 @@ TEST_CASE("LLVMLifter - an indirect call is through a pointer",
   REQUIRE(llvml.lift(*fn, g));
   REQUIRE_FALSE(llvm::verifyModule(llvml.module(), &llvm::errs()));
 }
+
+TEST_CASE("LLVMLifter - IEEE double compares become fcmp",
+          "[llvm][lifter][sse]") {
+  // push rbp; mov rbp, rsp; comisd xmm0, xmm1; setb al; pop rbp; ret
+  const std::vector<std::uint8_t> bytes = {0x55, 0x48, 0x89, 0xe5, 0x66, 0x0f,
+                                           0x2f, 0xc1, 0x0f, 0x92, 0xc0, 0x5d,
+                                           0xc3};
+  dragon::Configuration cfg;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g(dragon::Architecture::X86_64, cfg);
+  dis.disassemble(bytes, 0x1000, g);
+  const dragon::Function fn{&g, 0x1000};
+  REQUIRE(fn.isValid());
+  dragon::llvmlifter::LLVMLifter llvml{dragon::Architecture::X86_64};
+  REQUIRE(llvml.lift(fn, g));
+  REQUIRE_FALSE(llvm::verifyModule(llvml.module(), &llvm::errs()));
+  const std::string ir = llvml.ir();
+  CHECK(ir.find("fcmp olt double") != std::string::npos);
+  CHECK(ir.find("fcmp uno double") != std::string::npos);
+  CHECK(ir.find("fcmp oeq double") != std::string::npos);
+}

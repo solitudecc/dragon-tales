@@ -640,6 +640,8 @@ class IGNILOpcode:
     # determinate value (CPUID, RDTSC): see Op::aux for the kind and which
     # of the instruction's results the op defines.
     OPAQUE = 42
+    # IEEE754 double comparisons (1-bit): ordered <, ordered ==, unordered.
+    FLT = 43; FEQ = 44; FUNO = 45
 
     @staticmethod
     def name(opcode_int):

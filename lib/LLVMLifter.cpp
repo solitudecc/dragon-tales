@@ -373,6 +373,15 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     case ignil::Opcode::FDIV:
       emit(builder.CreateFDiv(asDouble(r0()), asDouble(r1())));
       break;
+    case ignil::Opcode::FLT:
+      emit(builder.CreateFCmpOLT(asDouble(r0()), asDouble(r1())));
+      break;
+    case ignil::Opcode::FEQ:
+      emit(builder.CreateFCmpOEQ(asDouble(r0()), asDouble(r1())));
+      break;
+    case ignil::Opcode::FUNO:
+      emit(builder.CreateFCmpUNO(asDouble(r0()), asDouble(r1())));
+      break;
 
     // --- Bitwise ---
     case ignil::Opcode::AND:

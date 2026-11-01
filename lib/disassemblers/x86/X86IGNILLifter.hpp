@@ -97,6 +97,27 @@ class X86IGNILLifter {
     ignil::Width width; // operand width in bits
   };
   std::unordered_map<unsigned, MemOperandOp> memOperandOps_;
+
+  // SSE instructions expressible on the modelled low 64 bits of an XMM
+  // register (liftSse). 128-bit stores are not among them: they write 16
+  // bytes, of which only 8 are modelled.
+  enum class SseKind : std::uint8_t {
+    Comisd,      // comisd/ucomisd: ZF/PF/CF from an IEEE compare
+    And, Andn, Or, Xor, // andpd/andnpd/orpd/xorpd and the ps forms
+    Move,        // movapd/movupd/movaps/movups/movdqa/movdqu reg/load
+    Movq,        // movq xmm<->r64/xmm/m64
+    MovdTo,      // movd xmm, r32/m32 (zero-extend)
+    MovdFrom,    // movd r32/m32, xmm (low 32 bits)
+    Addsd, Subsd, Divsd, // memory forms and divsd reg
+    Cvtsi2sd,    // cvtsi2sd xmm, m32/m64
+  };
+  struct SseOp {
+    SseKind kind;
+    bool memSrc = false;   // second operand is memory (5 operands)
+    bool memDst = false;   // destination is memory (store)
+    ignil::Width memWidth = 64;
+  };
+  std::unordered_map<unsigned, SseOp> sseOps_;
   static std::optional<MemOperandOp> classifyMemOperandOp(std::string_view name);
 
   // How one MOVZX/MOVSX spelling extends: the width in bits of the value
@@ -132,6 +153,9 @@ class X86IGNILLifter {
   void liftMemOperandForm(const llvm::MCInst &mc, const MemOperandOp &op,
                           std::uint64_t addr, ignil::Block &out,
                           std::uint32_t &tmp) const;
+
+  void liftSse(const llvm::MCInst &mc, const SseOp &op, std::uint64_t addr,
+               ignil::Block &out, std::uint32_t &tmp) const;
 
   void liftMov(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;

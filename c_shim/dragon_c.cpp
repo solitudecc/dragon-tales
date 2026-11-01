@@ -737,6 +737,9 @@ static_assert(static_cast<int>(dragon::ignil::Opcode::FMUL)   == DRAGON_IGNIL_FM
 static_assert(static_cast<int>(dragon::ignil::Opcode::FDIV)   == DRAGON_IGNIL_FDIV);
 static_assert(static_cast<int>(dragon::ignil::Opcode::SITOFP) == DRAGON_IGNIL_SITOFP);
 static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOSI) == DRAGON_IGNIL_FPTOSI);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FLT)    == DRAGON_IGNIL_FLT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FEQ)    == DRAGON_IGNIL_FEQ);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FUNO)   == DRAGON_IGNIL_FUNO);
 
 const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
   return dragon::ignil::opcodeName(

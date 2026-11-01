@@ -171,6 +171,14 @@ enum class Opcode : std::uint8_t {
   // since an Op has one dst and these instructions define several registers:
   // CPUID becomes four OPAQUE ops sharing srcs and differing only in aux.
   OPAQUE,
+
+  // IEEE754 double comparisons, 1-bit result; operands are 64-bit slots
+  // reinterpreted as doubles like FADD's. Ordered: false if either operand
+  // is NaN. FUNO is the unordered test (either is NaN). x86 COMISD/UCOMISD
+  // set ZF = FUNO|FEQ, PF = FUNO, CF = FUNO|FLT.
+  FLT,  // srcs[0] <  srcs[1], ordered
+  FEQ,  // srcs[0] == srcs[1], ordered (+0 == -0)
+  FUNO, // srcs[0] or srcs[1] is NaN
 };
 
 /// The instructions OPAQUE models. Appended to, never reordered - the value

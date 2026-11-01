@@ -550,6 +550,44 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CMP8rr_REV", "CMP8rr"},   {"CMP16rr_REV", "CMP16rr"},
   };
 
+  using S = SseKind;
+  static const std::unordered_map<std::string_view, SseOp> kSseOps = {
+          {"COMISDrr", {S::Comisd}},           {"COMISDrr_Int", {S::Comisd}},
+          {"UCOMISDrr", {S::Comisd}},          {"UCOMISDrr_Int", {S::Comisd}},
+          {"COMISDrm", {S::Comisd, true}},     {"COMISDrm_Int", {S::Comisd, true}},
+          {"UCOMISDrm", {S::Comisd, true}},    {"UCOMISDrm_Int", {S::Comisd, true}},
+          {"ANDPDrr", {S::And}},   {"ANDPSrr", {S::And}},   {"PANDrr", {S::And}},
+          {"ANDNPDrr", {S::Andn}}, {"ANDNPSrr", {S::Andn}}, {"PANDNrr", {S::Andn}},
+          {"ORPDrr", {S::Or}},     {"ORPSrr", {S::Or}},     {"PORrr", {S::Or}},
+          {"XORPDrr", {S::Xor}},   {"XORPSrr", {S::Xor}},   {"PXORrr", {S::Xor}},
+          {"ANDPDrm", {S::And, true}},   {"ANDPSrm", {S::And, true}},
+          {"ANDNPDrm", {S::Andn, true}}, {"ANDNPSrm", {S::Andn, true}},
+          {"ORPDrm", {S::Or, true}},     {"ORPSrm", {S::Or, true}},
+          {"XORPDrm", {S::Xor, true}},   {"XORPSrm", {S::Xor, true}},
+          {"MOVAPDrr", {S::Move}},  {"MOVUPDrr", {S::Move}},  {"MOVAPSrr", {S::Move}},
+          {"MOVUPSrr", {S::Move}},  {"MOVDQArr", {S::Move}},  {"MOVDQUrr", {S::Move}},
+          {"MOVAPDrr_REV", {S::Move}}, {"MOVUPDrr_REV", {S::Move}},
+          {"MOVAPSrr_REV", {S::Move}}, {"MOVUPSrr_REV", {S::Move}},
+          {"MOVDQArr_REV", {S::Move}}, {"MOVDQUrr_REV", {S::Move}},
+          {"MOVAPDrm", {S::Move, true}}, {"MOVUPDrm", {S::Move, true}},
+          {"MOVAPSrm", {S::Move, true}}, {"MOVUPSrm", {S::Move, true}},
+          {"MOVDQArm", {S::Move, true}}, {"MOVDQUrm", {S::Move, true}},
+          {"MOV64toPQIrr", {S::Movq}}, {"MOVPQIto64rr", {S::Movq}},
+          {"MOVZPQILo2PQIrr", {S::Movq}}, {"MOVQI2PQIrm", {S::Movq, true}},
+          {"MOVPQI2QImr", {S::Movq, false, true}},
+          {"MOVDI2PDIrr", {S::MovdTo}}, {"MOVDI2PDIrm", {S::MovdTo, true, false, 32}},
+          {"MOVPDI2DIrr", {S::MovdFrom}},
+          {"MOVPDI2DImr", {S::MovdFrom, false, true, 32}},
+          {"ADDSDrm_Int", {S::Addsd, true}}, {"ADDSDrm", {S::Addsd, true}},
+          {"SUBSDrm_Int", {S::Subsd, true}}, {"SUBSDrm", {S::Subsd, true}},
+          {"DIVSDrr_Int", {S::Divsd}},       {"DIVSDrr", {S::Divsd}},
+          {"DIVSDrm_Int", {S::Divsd, true}}, {"DIVSDrm", {S::Divsd, true}},
+          {"CVTSI2SDrm_Int", {S::Cvtsi2sd, true, false, 32}},
+          {"CVTSI2SDrm", {S::Cvtsi2sd, true, false, 32}},
+          {"CVTSI642SDrm_Int", {S::Cvtsi2sd, true, false, 64}},
+          {"CVTSI642SDrm", {S::Cvtsi2sd, true, false, 64}},
+  };
+
   std::unordered_map<std::string_view, unsigned> nameToOpc;
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
     const std::string_view name = instrInfo.getName(i);
@@ -562,6 +600,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
       nopOpcodes_.insert(i);
     if (auto op = classifyMemOperandOp(name))
       memOperandOps_.emplace(i, *op);
+    if (auto it = kSseOps.find(name); it != kSseOps.end())
+      sseOps_.emplace(i, it->second);
 
     if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
@@ -1154,6 +1194,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftMovLoad(*mc, addr, out, tempId);
   else if (opc == opMovsdStore_)
     liftMovStore(*mc, addr, out, tempId);
+  else if (auto so = sseOps_.find(opc); so != sseOps_.end())
+    liftSse(*mc, so->second, addr, out, tempId);
   else if (auto mo = memOperandOps_.find(opc); mo != memOperandOps_.end())
     liftMemOperandForm(*mc, mo->second, addr, out, tempId);
   else if (nopOpcodes_.contains(opc)) {
@@ -1565,6 +1607,134 @@ void dragon::x86::X86IGNILLifter::liftMemOperandForm(const llvm::MCInst &mc,
     }
     default:
       return fail("unexpected kind");
+  }
+}
+
+void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
+                                          const SseOp &op, std::uint64_t addr,
+                                          ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  using S = SseKind;
+  using Opc = ignil::Opcode;
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  auto fail = [&](const char *why) {
+    logger_.log("Error liftSse in addr {:#x}: {}", addr, why);
+    out.noteUnlifted(addr);
+  };
+  auto emit = [&](Opc o, std::vector<ignil::Value> srcs, ignil::Width w) {
+    auto t = newTemp(tmp, w);
+    out.append({o, t, std::move(srcs), addr});
+    return t;
+  };
+
+  // A memory destination: op[0..4] = mem, op[5] = xmm.
+  if (op.memDst) {
+    auto src = toReg(mc.getOperand(5).getReg());
+    if (!src)
+      return fail("no source");
+    auto ea = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+    ignil::Value v = *src;
+    if (op.memWidth < src->width)
+      v = emit(Opc::TRUNC, {v}, op.memWidth);
+    out.append({Opc::STORE, std::nullopt, {ea, v}, addr});
+    return;
+  }
+
+  // Register destination. Two-operand SSE arithmetic ties dst to the first
+  // source (op[1]); moves and COMISD do not.
+  const bool tied = op.kind == S::And || op.kind == S::Andn ||
+                    op.kind == S::Or || op.kind == S::Xor ||
+                    op.kind == S::Addsd || op.kind == S::Subsd ||
+                    op.kind == S::Divsd || op.kind == S::Cvtsi2sd;
+  const unsigned srcIdx = tied ? 2 : 1;
+  auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst)
+    return fail("no destination");
+
+  // The source operand: memory (low memWidth bits) or a register.
+  ignil::Value src;
+  if (op.memSrc) {
+    auto ea = emitAddress(mc, srcIdx, ptrWidth, addr, out, tmp);
+    const ignil::Width w =
+            op.kind == S::Cvtsi2sd || op.kind == S::MovdTo ? op.memWidth : 64;
+    src = emit(Opc::LOAD, {ea}, w);
+  } else {
+    auto r = toReg(mc.getOperand(srcIdx).getReg());
+    if (!r)
+      return fail("no source");
+    src = *r;
+  }
+
+  switch (op.kind) {
+    case S::Comisd: {
+      // dst is the first compared operand here, not a destination.
+      auto a = emit(Opc::COPY, {*dst}, 64);
+      auto b = emit(Opc::COPY, {src}, 64);
+      auto un = emit(Opc::FUNO, {a, b}, 1);
+      auto lt = emit(Opc::FLT, {a, b}, 1);
+      auto eq = emit(Opc::FEQ, {a, b}, 1);
+      // Unordered 111, greater 000, less 001, equal 100 (ZF, PF, CF); OF,
+      // SF and AF are cleared.
+      out.append({Opc::COPY, regZF_, {emit(Opc::OR, {un, eq}, 1)}, addr});
+      out.append({Opc::COPY, regPF_, {un}, addr});
+      out.append({Opc::COPY, regCF_, {emit(Opc::OR, {un, lt}, 1)}, addr});
+      out.append({Opc::COPY, regOF_, {ignil::Const{0, 1}}, addr});
+      out.append({Opc::COPY, regSF_, {ignil::Const{0, 1}}, addr});
+      out.append({Opc::COPY, regAF_, {ignil::Const{0, 1}}, addr});
+      return;
+    }
+    case S::And:
+    case S::Or:
+    case S::Xor: {
+      const Opc o = op.kind == S::And ? Opc::AND
+                    : op.kind == S::Or ? Opc::OR
+                                       : Opc::XOR;
+      auto r = emit(o, {*dst, src}, dst->width);
+      out.append({Opc::COPY, *dst, {r}, addr});
+      return;
+    }
+    case S::Andn: {
+      auto r = emit(Opc::AND, {emit(Opc::NOT, {*dst}, dst->width), src},
+                    dst->width);
+      out.append({Opc::COPY, *dst, {r}, addr});
+      return;
+    }
+    case S::Move:
+    case S::Movq: {
+      // Low 64 bits; between a GPR and an XMM register the widths match.
+      ignil::Value v = src;
+      const ignil::Width sw = ignil::widthOf(v);
+      if (sw < dst->width)
+        v = emit(Opc::ZEXT, {v}, dst->width);
+      else if (sw > dst->width)
+        v = emit(Opc::TRUNC, {v}, dst->width);
+      out.append({Opc::COPY, *dst, {v}, addr});
+      return;
+    }
+    case S::MovdTo:
+    case S::MovdFrom: {
+      ignil::Value v = src;
+      const ignil::Width sw = ignil::widthOf(v);
+      if (op.kind == S::MovdFrom && sw > 32)
+        v = emit(Opc::TRUNC, {v}, 32);
+      if (ignil::widthOf(v) < dst->width)
+        v = emit(Opc::ZEXT, {v}, dst->width);
+      out.append({Opc::COPY, *dst, {v}, addr});
+      return;
+    }
+    case S::Addsd:
+    case S::Subsd:
+    case S::Divsd: {
+      const Opc o = op.kind == S::Addsd   ? Opc::FADD
+                    : op.kind == S::Subsd ? Opc::FSUB
+                                          : Opc::FDIV;
+      out.append({o, *dst, {*dst, src}, addr});
+      return;
+    }
+    case S::Cvtsi2sd:
+      out.append({Opc::SITOFP, *dst, {src}, addr});
+      return;
   }
 }
 

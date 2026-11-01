@@ -316,6 +316,9 @@
       DRAGON_IGNIL_SITOFP = 40,
       DRAGON_IGNIL_FPTOSI = 41,
       DRAGON_IGNIL_OPAQUE = 42,
+      DRAGON_IGNIL_FLT    = 43, // IEEE double <, ordered
+      DRAGON_IGNIL_FEQ    = 44, // IEEE double ==, ordered
+      DRAGON_IGNIL_FUNO   = 45, // either operand NaN
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").
