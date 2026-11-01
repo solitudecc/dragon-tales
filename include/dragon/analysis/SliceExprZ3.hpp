@@ -5,6 +5,8 @@
 
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace dragon::slice {
 
@@ -15,9 +17,8 @@ namespace dragon::slice {
 /// lowerer instance, so constraints can be shared across multiple lower()
 /// calls in a single solver query.
 ///
-/// Load nodes become unconstrained symbols keyed by their address
-/// expression string - two loads from the same address expression get the
-/// same symbol (read-once semantics within one query).
+/// Load nodes share a symbol only for the same producing operation or a
+/// proven unchanged memory snapshot and address. Unidentified reads are fresh.
 ///
 /// Call reset() between independent solver queries to clear the cache.
 class SliceExprZ3 {
@@ -37,6 +38,7 @@ class SliceExprZ3 {
 
   z3::context &ctx_;
   mutable std::unordered_map<std::string, z3::expr> symCache_;
+  mutable std::vector<std::pair<Load, z3::expr>> loadCache_;
   // Names handed to Undefs of unknown origin: each gets a fresh variable.
   // Never reset, so a name is not reused within the context.
   mutable std::uint64_t anonymousUndefs_ = 0;

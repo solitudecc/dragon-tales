@@ -820,3 +820,15 @@ TEST_CASE("SwitchDetector - 32-bit index writes remain bounded across joins",
     }
   }
 }
+
+TEST_CASE("SwitchDetector - a reloaded index after a write is not the guarded value",
+          "[switch][e2e][load-identity]") {
+  std::vector<std::uint8_t> code = {
+      0x8b, 0x06, 0x83, 0xf8, 0x02, 0x0f, 0x87, 0, 0, 0, 0, // load; cmp; ja
+      0xc7, 0x06, 0xff, 0, 0, 0, 0x8b, 0x06, // store 255; load again
+      0xff, 0x24, 0xc5, 0, 0, 0, 0};
+  putLE(code, 7, kDefault - 0x100b, 4);
+  putLE(code, 22, kTable, 4);
+  CHECK(jumpSuccessors(dragon::Architecture::X86_64,
+                        layout(code, 3, 8), 0x100b).empty());
+}

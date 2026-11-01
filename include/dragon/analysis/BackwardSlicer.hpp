@@ -71,6 +71,10 @@ class BackwardSlicer {
 
   [[nodiscard]] PredMap buildPredecessorMap(const Graph &graph) const;
 
+  [[nodiscard]] std::optional<slice::ValueOrigin> memoryState(
+          const ignil::Block &block, int beforeIdx, const Graph &graph,
+          const PredMap &preds, int context) const;
+
   // Resolve `v` starting the backward scan at `beforeIdx` (exclusive) inside
   // `block`.  Crosses into predecessor blocks when `depth` > 0.
   [[nodiscard]] slice::Expr sliceValue(const ignil::Value &v,

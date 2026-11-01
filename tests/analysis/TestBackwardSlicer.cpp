@@ -508,3 +508,25 @@ TEST_CASE("BackwardSlicer - joins retain proven upper zeroes of 32-bit writes",
     }
   }
 }
+
+TEST_CASE("BackwardSlicer - conversion widths participate in join identity",
+          "[slicer][join][load-identity]") {
+  ig::Block a{0x8000}, b{0x8010}, join{0x8020};
+  for (auto *block: {&a, &b}) {
+    const ig::Temp temp{0, static_cast<ig::Width>(block == &a ? 8 : 16)};
+    block->append({ig::Opcode::TRUNC, ig::Value{temp},
+                   {ig::Value{ig::Const{0x100, 64}}}, block->startAddress()});
+    block->append({ig::Opcode::ZEXT, ig::Value{x86::RAX},
+                   {ig::Value{temp}}, block->startAddress() + 1});
+    block->append(jmpOp(0x8020, block->startAddress() + 2));
+  }
+  join.append(retOp(0x8020));
+  dragon::Graph g{dragon::Architecture::X86_64, dragon::Configuration{}};
+  for (auto *block: {&a, &b, &join})
+    addValidBlock(g, std::move(*block));
+  const auto result = dragon::BackwardSlicer{5}.slice(x86::RAX, 0x8020, g);
+  INFO(dragon::slice::toString(result));
+  // One incoming value is 0, the other 256. Their debug strings used to be
+  // identical because toString does not print UnaryOp::resultWidth.
+  CHECK_FALSE(evalConst(result).has_value());
+}

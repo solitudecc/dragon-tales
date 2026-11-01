@@ -9,9 +9,22 @@ namespace dragon::slice {
 
 SliceExprZ3::SliceExprZ3(z3::context &ctx) : ctx_(ctx) {}
 
-void SliceExprZ3::reset() const { symCache_.clear(); }
+void SliceExprZ3::reset() const {
+  symCache_.clear();
+  loadCache_.clear();
+}
 
 z3::expr SliceExprZ3::symFor(const SymReg &r) const {
+  if (r.origin) {
+    const auto &p = *r.origin;
+    const auto key = std::format("reg@{:x}#{}:{}[{}]:i{}", p.blockAddress,
+                                  p.opIndex, p.context, r.reg.offset, r.reg.width);
+    if (auto it = symCache_.find(key); it != symCache_.end())
+      return it->second;
+    auto value = z3::expr{ctx_, Z3_mk_fresh_const(ctx_, "reg", ctx_.bv_sort(r.reg.width))};
+    symCache_.emplace(key, value);
+    return value;
+  }
   std::string key =
           r.reg.name.empty()
                   ? std::format("reg_{}:i{}", r.reg.offset, r.reg.width)
@@ -139,18 +152,16 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
             }
           },
           [&](const Load &l) -> z3::expr {
-            // Model memory as an uninterpreted symbol keyed by address
-            // expression. Two loads from the same symbolic address get the same
-            // symbol.
-            z3::expr addrExpr = lower(*l.addr);
-            std::string key =
-                    std::format("mem[{}]:i{}", addrExpr.to_string(), l.width);
-            auto it = symCache_.find(key);
-            if (it != symCache_.end())
-              return it->second;
-            z3::expr sym = ctx_.bv_const(key.c_str(), l.width);
-            symCache_.emplace(key, sym);
-            return sym;
+            auto fresh = [&] {
+              return z3::expr{ctx_, Z3_mk_fresh_const(ctx_, "load", ctx_.bv_sort(l.width))};
+            };
+            for (const auto &[load, value]: loadCache_)
+              if (sameValue(Expr{l}, Expr{load}))
+                return value;
+            auto value = fresh();
+            if (l.opIndex >= 0 || l.memoryState)
+              loadCache_.emplace_back(l, value);
+            return value;
           },
           // Every unknown is its own variable, except references to the
           // same producing op, which share one. (A single shared "undef"

@@ -160,6 +160,35 @@ BackwardSlicer::buildPredecessorMap(const Graph &graph) const {
   return result;
 }
 
+std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
+        const ignil::Block &start, int beforeIdx, const Graph &graph,
+        const PredMap &preds, int context) const {
+  const ignil::Block *block = &start;
+  std::set<std::uint64_t> seen;
+  int budget = 4096;
+  for (int step = 0; step < 64; ++step, --context) {
+    if (!seen.insert(block->startAddress()).second)
+      return std::nullopt;
+    if (!block->unlifted().empty())
+      return std::nullopt; // an opaque instruction may write memory
+    for (int i = beforeIdx - 1; i >= 0; --i) {
+      if (--budget < 0)
+        return std::nullopt;
+      const auto opcode = block->ops()[i].opcode;
+      if (opcode == ignil::Opcode::STORE || opcode == ignil::Opcode::CALL)
+        return slice::ValueOrigin{block->startAddress(), i, context};
+    }
+    auto it = preds.preds.find(block->startAddress());
+    if (it == preds.preds.end() || it->second.size() != 1)
+      return slice::ValueOrigin{block->startAddress(), -1, context};
+    block = graph.getIGNILBlock(it->second.front());
+    if (!block)
+      return std::nullopt;
+    beforeIdx = static_cast<int>(block->ops().size());
+  }
+  return std::nullopt;
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -242,6 +271,13 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
                                      const Graph &graph, PredMap &preds,
                                      int depth) const {
   using Opc = ignil::Opcode;
+  auto unknown = [&] {
+    const auto it = preds.preds.find(block.startAddress());
+    if (it == preds.preds.end() || it->second.empty())
+      return slice::Expr{slice::SymReg{r}}; // graph inputs keep their public names
+    return slice::Expr{slice::SymReg{
+            r, slice::ValueOrigin{block.startAddress(), -1, depth}}};
+  };
   const auto regFile = registerFileFor(graph.architecture());
   const std::uint32_t rs = r.offset, re = r.offset + byteCount(r.width);
 
@@ -304,10 +340,10 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
 
   // Not defined in this block - try the predecessors.
   if (depth <= 0)
-    return slice::Expr{slice::SymReg{r}};
+    return unknown();
   auto predIt = preds.preds.find(block.startAddress());
   if (predIt == preds.preds.end() || predIt->second.empty())
-    return slice::Expr{slice::SymReg{r}}; // entry
+    return unknown(); // entry
   const std::vector<std::uint64_t> &from = predIt->second;
 
   auto sliceIn = [&](std::uint64_t p) -> std::optional<slice::Expr> {
@@ -320,7 +356,7 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
 
   if (from.size() == 1) {
     auto e = sliceIn(from.front());
-    return e ? std::move(*e) : slice::Expr{slice::SymReg{r}};
+    return e ? std::move(*e) : unknown();
   }
 
   // A join. Back at a join already being resolved for this register: this
@@ -337,7 +373,6 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
   preds.joinsInProgress.insert(key);
   std::optional<slice::Expr> merged;
   std::optional<slice::Expr> outerLoop;
-  std::string mergedText;
   bool agree = true;
   for (std::uint64_t p: from) {
     auto e = sliceIn(p);
@@ -359,14 +394,12 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
         continue;
       }
     }
-    const std::string text = slice::toString(*e);
-    if (!isConstantOnly(*e) || (merged && text != mergedText)) {
+    if (!isConstantOnly(*e) || (merged && !slice::sameValue(*e, *merged))) {
       agree = false;
       break;
     }
     if (!merged) {
       merged = std::move(*e);
-      mergedText = text;
     }
   }
   preds.joinsInProgress.erase(key);
@@ -385,9 +418,9 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
     preds.probingUpper = false;
     if (const auto *c = std::get_if<slice::Const>(&high.data);
         c && c->value == 0)
-      return resize(resize(slice::Expr{slice::SymReg{r}}, 64, 32), 32, 64);
+      return resize(resize(unknown(), 64, 32), 32, 64);
   }
-  return slice::Expr{slice::SymReg{r}};
+  return unknown();
 }
 
 // ---------------------------------------------------------------------------
@@ -418,7 +451,9 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
       auto addrExpr = src(0);
       ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : 64;
       return slice::Expr{slice::Load{
-              std::make_shared<slice::Expr>(std::move(addrExpr)), w}};
+              std::make_shared<slice::Expr>(std::move(addrExpr)), w,
+              block.startAddress(), opIdx, depth,
+              memoryState(block, opIdx, graph, preds, depth)}};
     }
 
     // Binary arithmetic / bitwise / comparison ops.

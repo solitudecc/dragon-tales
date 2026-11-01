@@ -152,7 +152,9 @@ Numbers on the Lua builds (linear sweep unless noted):
 
 The x86-64 relative-table script now follows the base register used by
 `movsxd`, including a hoisted LEA outside its old 12-instruction window. This
-finds 37 tables: 33 verified, 4 without a script-visible bound and 0 unresolved.
+finds 37 tables: 33 verified, 2 without a script-visible bound and 2 unresolved.
+The two additional unresolved forms compare memory then reload it after a
+possible write; they are kept unknown until non-aliasing can be proved.
 `str_pack` (jump at `0x140021b50`) needed the slicer to preserve the zero upper
 half of RBX across joins after an EBX write: its guard compares EBX while its
 table uses RBX. The slicer queries the upper bytes independently and retains
@@ -162,6 +164,13 @@ paths are never equated. Explicit entry hints seed speculative reachability
 and must not inject independent unknown register states into that proof.
 The Lua x86-64 linear analysis currently takes about 13 s versus 6 s before
 speculation on this VM; repeated slicing/revalidation is a profiling target.
+
+Slice values carry producing-op/program-point identity, including a bounded
+loop context. LOADs share values only for the same event or a proven equal
+memory snapshot and address. STORE/CALL/opaque instructions invalidate that
+snapshot; a join creates a new one. Debug strings are not semantic identities:
+conversion widths and origins matter. Graph-entry register inputs retain their
+public Z3 names; unresolved values at different internal points are distinct.
 
 ## 6. Backlog (suggested order)
 

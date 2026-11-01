@@ -699,10 +699,10 @@ print(expr);
 | Variant | Key fields | Meaning |
 |---|---|---|
 | `Const` | `value`, `width` | Folded constant |
-| `SymReg` | `reg` (offset, width, name) | Unresolved register |
+| `SymReg` | `reg` (offset, width, name), `origin` | Unresolved register at a sliced program point |
 | `BinOp` | `op`, `left`, `right` | Binary operation |
 | `UnaryOp` | `op`, `operand` | Unary operation |
-| `Load` | `addr`, `width` | Memory read |
+| `Load` | `addr`, `width`, producing-op identity, `memoryState` | Memory read; separate reads agree only with a proven shared memory snapshot and address |
 | `Undef` | `width`, `blockAddress`, `opIndex` | Unresolvable value. Undefs with the same producing op (`opIndex >= 0` in the block at `blockAddress`) are one value; any other two are independent, and SliceExprZ3 lowers each to its own variable |
 
 ---
@@ -881,7 +881,11 @@ Available when the library is built with `-DDRAGON_USE_Z3=ON`. The macro
 
 `SliceExprZ3` translates a `SliceExpr` tree into a Z3 bitvector expression.
 `SymReg` nodes become free bitvector constants; `Load` nodes become
-unconstrained symbols keyed by their address expression. Reusing the same
+unconstrained symbols keyed by their producing LOAD operation. Copies of one
+loaded value agree. Different reads agree only when their memory snapshot
+and address are proven equal. STORE, CALL, opaque instructions and ambiguous
+incoming memory states prevent assuming an unchanged snapshot. Originless
+loads are fresh on each use. Reusing the same
 `SliceExprZ3` instance across multiple `lower()` calls within one solver
 session shares symbols, so constraints written against one call remain
 consistent with the next.

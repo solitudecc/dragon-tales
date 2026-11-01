@@ -13,6 +13,39 @@
 using namespace dragon::test;
 
 #ifdef DRAGON_WITH_Z3
+TEST_CASE("Slicer - memory writes between loads agree with Unicorn",
+          "[semantic][slicer][load-identity]") {
+  for (bool copy: {false, true}) {
+    INFO("copy " << copy);
+    // mov eax,[rdi]; mov dword ptr [rdi],1; sub eax,[rdi] / mov ecx,eax; sub eax,ecx
+    std::vector<std::uint8_t> code = {0x8b, 0x07, 0xc7, 0x07, 1, 0, 0, 0};
+    if (copy)
+      code.insert(code.end(), {0x89, 0xc1, 0x29, 0xc8});
+    else
+      code.insert(code.end(), {0x2b, 0x07});
+    code.push_back(0xc3);
+    dragon::Configuration cfg;
+    dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+    dragon::Graph graph{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(code, kCodeBase, graph);
+    const auto sliced = dragon::BackwardSlicer{}.slice(dragon::x86::RAX,
+                                                       kCodeBase, graph);
+    z3::context ctx;
+    const auto value = dragon::slice::SliceExprZ3{ctx}.lower(sliced);
+    for (std::uint32_t input: {0u, 1u, 7u, 0xffffffffu}) {
+      auto regs = defaultInitialRegs();
+      setReg64(regs, x86off::RDI, kMemBase);
+      std::vector<std::uint8_t> memory(kMemSize, 0);
+      std::memcpy(memory.data(), &input, sizeof(input));
+      const auto expected = getReg64(runUnicorn(code, regs, memory).regs,
+                                      x86off::RAX);
+      z3::solver solver{ctx};
+      solver.add(value == ctx.bv_val(expected, 64));
+      CHECK(solver.check() == z3::sat);
+    }
+  }
+}
+
 TEST_CASE("Slicer - joined upper bits agree with Unicorn loop executions",
           "[semantic][slicer][join-width]") {
   // H -> A/B -> J -> H/exit. Only some variants clear the upper half on

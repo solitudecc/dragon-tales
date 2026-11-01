@@ -228,4 +228,61 @@ TEST_CASE("SliceExprZ3 - sliced UNDEF ops keep their identity", "[z3][undef]") {
     CHECK(*v == 0);
 }
 
+TEST_CASE("SliceExprZ3 - originless loads do not assert a shared memory state",
+          "[z3][load-identity]") {
+    auto address = sym(x86::RDI);
+    Expr e = *sub(std::make_shared<Expr>(Load{address, 32}),
+                  std::make_shared<Expr>(Load{address, 32}));
+    z3::context ctx;
+    CHECK_FALSE(solveUnique(e, ctx).has_value());
+}
+
+TEST_CASE("SliceExprZ3 - load values keep producing-op identity across stores",
+          "[z3][slicer][load-identity]") {
+    namespace ig = dragon::ignil;
+    for (bool copy: {false, true}) {
+        for (bool crossBlock: {false, true}) {
+          for (unsigned effect = 0; effect < 3; ++effect) {
+            INFO("copy " << copy << " crossBlock " << crossBlock << " effect " << effect);
+            ig::Block first{0x1000}, second{0x1100};
+            first.append({ig::Opcode::LOAD, ig::Value{x86::RAX},
+                          {ig::Value{x86::RDI}}, 0x1000});
+            if (effect == 1)
+              first.append({ig::Opcode::STORE, std::nullopt,
+                          {ig::Value{x86::RDI}, ig::Value{ig::Const{1, 64}}},
+                          0x1004});
+            if (effect == 2)
+              first.append({ig::Opcode::CALL, std::nullopt,
+                            {ig::Value{ig::Const{0x9000, 64}}}, 0x1004});
+            auto &tail = crossBlock ? second : first;
+            if (crossBlock)
+                first.append({ig::Opcode::JMP, std::nullopt,
+                              {ig::Value{ig::Const{0x1100, 64}}}, 0x1008});
+            tail.append({copy ? ig::Opcode::COPY : ig::Opcode::LOAD,
+                         ig::Value{x86::RCX},
+                         {ig::Value{copy ? x86::RAX : x86::RDI}}, 0x1100});
+            tail.append({ig::Opcode::SUB, ig::Value{x86::RAX},
+                         {ig::Value{x86::RAX}, ig::Value{x86::RCX}}, 0x1104});
+            tail.append({ig::Opcode::RET, std::nullopt, {}, 0x1108});
+            dragon::Graph g{dragon::Architecture::X86_64, dragon::Configuration{}};
+            for (auto *block: {&first, &second}) {
+                if (block->empty()) continue;
+                g.addBlock(block->startAddress());
+                g.addIGNILBlock(std::move(*block));
+            }
+            auto e = dragon::BackwardSlicer{5}.slice(x86::RAX,
+                                                     crossBlock ? 0x1100 : 0x1000, g);
+            z3::context ctx;
+            auto value = solveUnique(e, ctx);
+            if (copy || effect == 0) {
+                REQUIRE(value.has_value());
+                CHECK(*value == 0);
+            } else {
+                CHECK_FALSE(value.has_value());
+            }
+          }
+        }
+    }
+}
+
 #endif // DRAGON_WITH_Z3

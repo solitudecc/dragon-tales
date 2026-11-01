@@ -130,9 +130,9 @@ class GuardEvaluator {
   public:
   explicit GuardEvaluator(const Expr &index) {
     if (const auto *r = std::get_if<SymReg>(&index.data))
-      indexReg_ = &r->reg;
+      indexReg_ = r;
     else
-      indexText_ = toString(index);
+      indexExpr_ = &index;
   }
 
   std::optional<EvalValue> eval(const Expr &e, std::uint64_t idx) const {
@@ -146,11 +146,11 @@ class GuardEvaluator {
   std::optional<EvalValue> asIndex(const Expr &e) const {
     if (indexReg_) {
       if (const auto *r = std::get_if<SymReg>(&e.data))
-        if (r->reg.offset == indexReg_->offset)
+        if (r->reg.offset == indexReg_->reg.offset && r->origin == indexReg_->origin)
           return EvalValue{idx_ & lowMask(r->reg.width), r->reg.width};
       return std::nullopt;
     }
-    if (toString(e) != indexText_)
+    if (!sameValue(e, *indexExpr_))
       return std::nullopt;
     const unsigned w = exprWidth(e);
     return EvalValue{idx_ & lowMask(w), w};
@@ -226,8 +226,8 @@ class GuardEvaluator {
     return std::nullopt; // another register, memory, undef
   }
 
-  const ignil::Reg *indexReg_ = nullptr;
-  std::string indexText_;
+  const SymReg *indexReg_ = nullptr;
+  const Expr *indexExpr_ = nullptr;
   mutable std::uint64_t idx_ = 0;
 };
 
