@@ -15,6 +15,7 @@
 #endif
 
 // C++ headers
+#include <algorithm>
 #include <unordered_set>
 #include <vector>
 
@@ -364,10 +365,39 @@ bool dragon::arm::ARMAnalysis::integrateNewBlock(
   if (graph.get(target))
     return false;
 
-  // Try to retrieve new blocks with the disassembler
-  auto newInstrs = disassembler_.disassembleBlock(bytes, baseAddr, target);
+  // Decode the code reachable from `target` that the graph does not hold
+  // yet: not just the first block - its branch targets, the fall-through of
+  // a conditional branch and its callees are code too. Decoding only one
+  // block registered those as block starts with no instruction behind them
+  // (250 empty blocks in a recursive i686 Lua analysis once its jump tables
+  // resolved). Known code stops the walk.
+  constexpr std::size_t kMaxNewInstructions = 1 << 20;
+  std::vector<Instruction> newInstrs;
+  std::unordered_set<std::uint64_t> seen;
+  std::vector<std::uint64_t> work{target};
+  while (!work.empty() && newInstrs.size() < kMaxNewInstructions) {
+    const std::uint64_t at = work.back();
+    work.pop_back();
+    if (graph.get(at) || seen.contains(at))
+      continue;
+    for (auto &insn: disassembler_.disassembleBlock(bytes, baseAddr, at)) {
+      if (graph.get(insn.address()) || seen.contains(insn.address()))
+        break; // ran into code already decoded
+      seen.insert(insn.address());
+      for (std::uint64_t t: insn.branches())
+        work.push_back(t);
+      for (std::uint64_t c: insn.callees())
+        work.push_back(c);
+      if (insn.isJump() && insn.isConditional())
+        work.push_back(insn.address() + insn.size());
+      newInstrs.push_back(std::move(insn));
+    }
+  }
   if (newInstrs.empty())
     return false;
+  std::ranges::sort(newInstrs, [](const Instruction &a, const Instruction &b) {
+    return a.address() < b.address();
+  });
 
   // This will lead to new blocks, but could be that it takes to new
   // functions start too.

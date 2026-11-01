@@ -479,3 +479,30 @@ TEST_CASE("SwitchDetector - a table outside the code bytes is read through "
   REQUIRE(jumpBlock.isValid());
   CHECK(jumpBlock.successors().size() == 7);
 }
+
+TEST_CASE("SwitchDetector - code reachable from a case is decoded too",
+          "[switch][e2e][cfg]") {
+  // Case 0 branches on: 0x1100 test edi, edi ; je 0x1180 ; ret / 0x1180 ret.
+  // Resolution decoded only the first block of each target, so 0x1180 (and
+  // the je fall-through) became block starts with no instructions.
+  auto bytes = nonPicDispatch();
+  const std::vector<std::uint8_t> case0 = {0x85, 0xff, 0x74, 0x7c, 0xc3};
+  std::copy(case0.begin(), case0.end(), bytes.begin() + (kCase0 - kBase));
+  bytes[0x1180 - kBase] = 0xc3;
+
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  dragon::Graph g{dragon::Architecture::X86_64, cfg};
+  dis.disassemble(bytes, kBase, g);
+
+  for (std::uint64_t a: {std::uint64_t{0x1104}, std::uint64_t{0x1180}}) {
+    INFO("block 0x" << std::hex << a);
+    CHECK(g.get(a) != nullptr);
+    CHECK(g.getIGNILBlock(a) != nullptr);
+  }
+  for (std::uint64_t b: g.validBlockAddresses()) {
+    INFO("empty block 0x" << std::hex << b);
+    CHECK(g.get(b) != nullptr);
+  }
+}

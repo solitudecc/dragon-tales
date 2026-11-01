@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 #include <span>
 #include <vector>
 
@@ -85,18 +86,27 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
     analyse(*s, start, std::move(entries));
   }
 
-  // Each section is analysed on its own, so a call into another section
-  // (`bl` from .text to a .plt stub) registers a function start there that
-  // nothing decoded - under recursive traversal, the stub stays empty. Feed
-  // such starts back as entry points of their section until none is left.
+  // Each section is analysed on its own, so a call or a jump into another
+  // section (`bl` from .text to a .plt stub, or the tail call `b stub`)
+  // registers a function or block start there that nothing decoded - under
+  // recursive traversal, the stub stays empty. Feed such addresses back as
+  // entry points of their section (a cross-section jump is a tail call)
+  // until none is left.
   for (int round = 0; round < 8; ++round) {
     bool any = false;
     for (const Section *s : sections) {
       std::vector<std::uint64_t> missing;
-      for (std::uint64_t a : graph.validFunctionAddresses())
-        if (s->contains(a) && a - s->address < s->bytes.size() &&
-            !graph.get(a))
-          missing.push_back(a);
+      auto collect = [&](const std::set<std::uint64_t> &addrs) {
+        for (std::uint64_t a : addrs)
+          if (s->contains(a) && a - s->address < s->bytes.size() &&
+              !graph.get(a))
+            missing.push_back(a);
+      };
+      collect(graph.validFunctionAddresses());
+      collect(graph.validBlockAddresses());
+      std::sort(missing.begin(), missing.end());
+      missing.erase(std::unique(missing.begin(), missing.end()),
+                    missing.end());
       if (missing.empty())
         continue;
       any = true;
