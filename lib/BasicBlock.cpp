@@ -23,8 +23,19 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
 
   while (true) {
     const Instruction *insn = graph_->get(cur);
-    if (!insn)
-      return; // no instruction at the address this path actually needs
+    if (!insn) {
+      // The instruction stream ends here: the end of a section, or bytes
+      // that do not decode (data after a call to a noreturn function, e.g.
+      // `call __stack_chk_fail` as the last instruction of .text). The block
+      // is what was decoded up to that point; it used to be dropped as
+      // invalid, taking the error path out of its function.
+      if (!prevInsn)
+        return; // nothing at the start address itself
+      terminatorAddress_ = prevInsn->address();
+      endsAtStreamEnd_ = true;
+      valid_ = true;
+      return;
+    }
 
     // Next block starts here (not the entry) - previous insn is the terminator.
     //
@@ -111,8 +122,14 @@ computeSuccessors(const dragon::Instruction *term) {
 }
 
 const std::set<std::uint64_t> &dragon::BasicBlock::successors() const {
-  if (!successors_)
+  if (!successors_) {
     successors_ = computeSuccessors(terminator());
+    // A block cut short by the end of the decoded stream has no instruction
+    // to fall through to.
+    if (endsAtStreamEnd_)
+      if (const Instruction *t = terminator())
+        successors_->erase(t->address() + t->size());
+  }
   return *successors_;
 }
 

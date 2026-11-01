@@ -60,6 +60,9 @@ class BasicBlock {
   std::uint64_t startAddress_;
   std::uint64_t terminatorAddress_;
   bool valid_;
+  // Ended because no instruction follows (not at a terminator or the next
+  // block): no fall-through successor.
+  bool endsAtStreamEnd_{false};
 
   mutable std::optional<std::set<std::uint64_t>> successors_;
   mutable std::optional<std::set<std::uint64_t>> predecessors_;

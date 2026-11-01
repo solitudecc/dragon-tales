@@ -577,3 +577,27 @@ TEST_CASE("X86Analysis - entry points become functions with blocks",
     CHECK(g.getIGNILBlock(0x1001));
   }
 }
+
+TEST_CASE("X86Analysis - a block that runs into the end of the code is kept",
+          "[x86][analysis]") {
+  // 0x1000 test edi, edi ; je 0x1005 ; ret
+  // 0x1005 call 0x100a        <- last instruction of the bytes: a call to a
+  //                              noreturn function at the end of .text
+  // The block at 0x1005 was dropped as invalid (its fall-through has no
+  // instruction), and with it the error path of the function.
+  const std::vector<std::uint8_t> bytes = {0x85, 0xff, 0x74, 0x01, 0xc3,
+                                           0xe8, 0x00, 0x00, 0x00, 0x00};
+  for (auto strategy: {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                       dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    auto g = analyse(bytes, strategy, {0x1000});
+    const dragon::BasicBlock bb{&g, 0x1005};
+    REQUIRE(bb.isValid());
+    CHECK(bb.terminatorAddress() == 0x1005);
+    CHECK(bb.successors().empty());
+    CHECK(g.getIGNILBlock(0x1005) != nullptr);
+    const dragon::Function fn{&g, 0x1000};
+    REQUIRE(fn.isValid());
+    CHECK(fn.block(0x1005) != nullptr);
+  }
+}
