@@ -93,14 +93,14 @@ def run_case(text, rng, setup):
         return 'unlifted', None
 
     regs = [rand64(rng) for _ in range(16)]
-    if re.match(r'sh[lr]d ax, bx, cl', text):
-        regs[1] = rng.randrange(0, 17)   # count > 16: result undefined
     regs[3] = BASE + rng.randrange(-0x100, 0x100, 8)      # rbx: memory base
     regs[4] = BASE + 0x400 + rng.randrange(-0x80, 0x80, 8)  # rsp
     regs[5] = BASE + 0x200 + rng.randrange(-0x80, 0x80, 8)  # rbp
     regs[6] = rng.randrange(0, 0x40)                        # rsi: small index
     for k, v in setup.items():
         regs[NAMES.index(k)] = v(rng) if callable(v) else v
+    if re.match(r'sh[lr]d (ax|word ptr \[rbx \+ 8\]), \w+, cl', text):
+        regs[1] = rng.randrange(0, 17)   # count > 16: result undefined
     eflags = 0x2 | sum(rng.getrandbits(1) << b for _, b in FLAGS)
     page = bytes(rng.getrandbits(8) for _ in range(DATA_SIZE))
 
@@ -232,6 +232,42 @@ T += [(f'{op} {r}, {r}', {}) for op in ('add', 'sub', 'adc', 'sbb', 'and', 'or',
       for r in ('rax', 'eax', 'ax', 'al', 'ah')]
 T += [('imul rax, rax', {}), ('imul ax, ax', {}), ('xadd rax, rax', {}), ('xchg rax, rax', {}), ('shld rax, rax, 3', {}), ('cmovs rax, rax', {}),
       ('neg rax', {}), ('bswap rax', {}), ('mul rax', {}), ('imul rax', {})]
+
+# rarer forms: memory-operand shifts/bit ops/multiplies, every condition,
+# high-byte registers, stack-pointer operands
+CC = ('o', 'no', 'b', 'ae', 'e', 'ne', 'be', 'a', 's', 'ns', 'p', 'np', 'l', 'ge', 'le', 'g')
+T += [(f'cmov{c} eax, ebx', {}) for c in CC] + [(f'set{c} al', {}) for c in CC]
+for w, (a, b, d, p) in W.items():
+    for op in ('shl', 'shr', 'sar', 'rol', 'ror', 'rcl', 'rcr'):
+        T += [(f'{op} {p} ptr [rbx + 8], 1', {}), (f'{op} {p} ptr [rbx + 8], 3', {}),
+              (f'{op} {p} ptr [rbx + 8], cl', small_cl)]
+    T += [(f'xadd {p} ptr [rbx + 8], {a}', {}), (f'xchg {p} ptr [rbx + 8], {a}', {}),
+          (f'test {p} ptr [rbx + 8], {a}', {}), (f'mul {p} ptr [rbx + 8]', {}),
+          (f'imul {p} ptr [rbx + 8]', {})]
+    if w > 8:
+        small_bit = {'RAX': lambda r: r.randrange(-200, 200) & 0xffffffffffffffff}
+        T += [(f'bt {p} ptr [rbx + 8], {a}', small_bit), (f'bts {p} ptr [rbx + 8], {a}', small_bit),
+              (f'btr {p} ptr [rbx + 8], {a}', small_bit), (f'btc {p} ptr [rbx + 8], {a}', small_bit),
+              (f'bt {p} ptr [rbx + 8], 3', {}), (f'bts {p} ptr [rbx + 8], {w - 1}', {}),
+              (f'imul {a}, {p} ptr [rbx + 8]', {}), (f'imul {a}, {p} ptr [rbx + 8], 100', {}),
+              (f'shld {p} ptr [rbx + 8], {a}, 3', {}), (f'shrd {p} ptr [rbx + 8], {a}, cl', small_cl),
+              (f'cmovb {a}, {p} ptr [rbx + 8]', {}), (f'bsf {a}, {p} ptr [rbx + 8]', {}),
+              (f'movzx {a}, byte ptr [rbx + 8]', {}), (f'movsx {a}, byte ptr [rbx + 8]', {}),
+              (f'movzx {a}, bl', {}), (f'movsx {a}, bh' if w < 64 else 'nop', {}),
+              (f'push {a}' if w in (64, 16) else 'nop', {}), (f'pop {a}' if w in (64, 16) else 'nop', {})]
+T += [('inc ah', {}), ('dec bh', {}), ('neg ch', {}), ('not dh', {}), ('shl ah, 1', {}),
+      ('shr bh, cl', small_cl), ('rcl ah, 3', {}), ('add bh, byte ptr [rbx + 8]', {}),
+      ('mov byte ptr [rbx + 8], ah', {}), ('xchg ah, bl', {}), ('xchg ah, al', {}),
+      ('adc ah, bh', {}), ('sbb dh, ah', {}), ('cmp ah, 0x80', {}), ('imul bh', {}), ('mul ah', {}),
+      ('div bh', {'RAX': lambda r: r.getrandbits(7), 'RBX': lambda r: (r.getrandbits(7) | 1) << 8}),
+      ('test ah, bh', {}), ('xadd ah, bl', {}), ('movzx ebx, ah', {}), ('movsx ecx, bh', {}),
+      ('bt rax, rax', {}), ('bts eax, eax', {}), ('btc rbx, rbx', {}), ('xadd ebx, ebx', {}),
+      ('push rsp', {}), ('pop rsp', {}), ('push qword ptr [rsp + 8]', {}), ('pop qword ptr [rsp + 8]', {}),
+      ('push word ptr [rbx + 8]', {}), ('pop word ptr [rbx + 8]', {}), ('push sp', {}),
+      ('lea ax, [rbx + rsi*2 + 3]', {}), ('lea rax, [ebx + esi*8 - 4]', {}), ('xchg eax, eax', {}),
+      ('xchg ax, bx', {}), ('mov eax, eax', {}), ('mov ax, ax', {}), ('movsxd rax, dword ptr [rbx + 8]', {}),
+      ('cmpxchg_skip nop', {})]
+T = [t for t in T if not t[0].startswith(('nop', 'cmpxchg_skip'))]
 
 rng = random.Random(4321)
 summary = defaultdict(list)
