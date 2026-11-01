@@ -218,20 +218,50 @@ void dragon::arm::ARMAnalysis::discoverFunctionStarts(
 void dragon::arm::ARMAnalysis::commitPending(
         Graph &graph, const std::unordered_set<std::uint64_t> &blockStarts,
         const std::unordered_set<std::uint64_t> &fnStarts) const {
-  for (std::uint64_t addr: blockStarts)
+  // Keep the per-instruction flags in step with the Graph's sets: call
+  // targets and resolved indirect-jump targets reach the sets without the
+  // instruction already at that address being flagged, and the flags are
+  // what Instruction::isBlockStart()/isFunctionStart() report through the
+  // C and Python APIs.
+  for (std::uint64_t addr: blockStarts) {
     graph.addBlock(addr);
-  for (std::uint64_t addr: fnStarts)
+    if (Instruction *insn = graph.get(addr))
+      insn->setBlockStart(true);
+  }
+  for (std::uint64_t addr: fnStarts) {
     graph.addFunction(addr);
+    if (Instruction *insn = graph.get(addr))
+      insn->setFunctionStart(true);
+  }
 }
+
+namespace {
+// True when an IGNIL block lifted earlier holds ops past the block's current
+// terminator: the block was split since (a later fixpoint round found a new
+// block start inside it - typically a resolved indirect-jump target), so the
+// lift is stale and describes code that now belongs to the next block.
+bool coversMoreThan(const dragon::ignil::Block &ib,
+                    const dragon::BasicBlock &block) {
+  for (const auto &op: ib)
+    if (op.address > block.terminatorAddress())
+      return true;
+  return false;
+}
+} // namespace
 
 void dragon::arm::ARMAnalysis::liftPendingBlocks(Graph &graph) const {
   for (BasicBlock &block: graph.blocks()) {
-    if (graph.getIGNILBlock(block.startAddress()))
+    ignil::Block *existing = graph.getIGNILBlock(block.startAddress());
+    if (existing && !coversMoreThan(*existing, block))
       continue;
     auto ib = armIgnilLifter_->liftBlock(block, graph);
-    logger_.log("Lifted block @ 0x{:x} -> {} IGNIL ops", block.startAddress(),
-                ib.size());
-    graph.addIGNILBlock(std::move(ib));
+    logger_.log("{} block @ 0x{:x} -> {} IGNIL ops",
+                existing ? "Re-lifted (split)" : "Lifted",
+                block.startAddress(), ib.size());
+    if (existing)
+      *existing = std::move(ib); // in place: borrowed pointers stay valid
+    else
+      graph.addIGNILBlock(std::move(ib));
   }
 }
 

@@ -2,8 +2,10 @@
 
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <algorithm>
+#include <set>
 #include <vector>
 
 // -----------------------------------------------------------------------
@@ -417,4 +419,94 @@ TEST_CASE("X86Analysis x86_64 - two adjacent prologues produce two distinct "
     REQUIRE(fns[1].startAddress() == 0x1005);
     REQUIRE(fns[1].isValid());
   }
+}
+
+// -----------------------------------------------------------------------
+// Block boundaries at call targets and resolved indirect-jump targets.
+//
+// Regression: BasicBlock decided where a block ends from the instruction's
+// isBlockStart flag only, but call targets and resolved indirect-jump targets
+// were registered with Graph::addBlock() without flagging the instruction
+// already at that address. A block then ran straight through the start of the
+// next one, so two blocks (and their IGNIL) held the same instructions.
+// -----------------------------------------------------------------------
+
+static std::vector<std::uint64_t> addressesOf(const dragon::BasicBlock &bb) {
+  std::vector<std::uint64_t> out;
+  for (const auto *insn: bb.instructions())
+    out.push_back(insn->address());
+  return out;
+}
+
+static bool ignilTouches(const dragon::ignil::Block &ib, std::uint64_t addr) {
+  return std::any_of(ib.begin(), ib.end(), [addr](const dragon::ignil::Op &op) {
+    return op.address == addr;
+  });
+}
+
+TEST_CASE("X86Analysis x86_64 - block ends where a call target begins",
+          "[x86][analysis][blocks]") {
+  // 0x1000: mov eax, 5     b8 05 00 00 00
+  // 0x1005: call 0x100a    e8 00 00 00 00
+  // 0x100a: ret            c3              <- call target: its own block
+  const std::vector<std::uint8_t> bytes = {0xb8, 0x05, 0x00, 0x00, 0x00, 0xe8,
+                                           0x00, 0x00, 0x00, 0x00, 0xc3};
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  dragon::BasicBlock caller{&g, 0x1000};
+  REQUIRE(caller.isValid());
+  CHECK(addressesOf(caller) == std::vector<std::uint64_t>{0x1000, 0x1005});
+  CHECK(caller.successors() == std::set<std::uint64_t>{0x100a});
+
+  const auto *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  CHECK_FALSE(ignilTouches(*ib, 0x100a)); // the callee's RET is not ours
+  CHECK(ib->ops().back().opcode == dragon::ignil::Opcode::JMP);
+
+  // Flags agree with the Graph's sets.
+  CHECK(g.get(0x100a)->isBlockStart());
+  CHECK(g.get(0x100a)->isFunctionStart());
+}
+
+TEST_CASE("X86Analysis x86_64 - indirect-jump target splits a lifted block "
+          "and its IGNIL is re-lifted",
+          "[x86][analysis][blocks]") {
+  // Round 1 (recursive traversal) lifts the block at 0x1010 as nop x4 + ret.
+  // Round 2 resolves `jmp rax` to 0x1014, inside that block: the block must
+  // be split and its stale IGNIL (which still holds the RET) replaced.
+  //
+  // 0x1000: je  0x1010            74 0e
+  // 0x1002: mov rax, 0x1014       48 c7 c0 14 10 00 00
+  // 0x1009: jmp rax               ff e0
+  // 0x100b: int3 x5               cc cc cc cc cc   (never reached)
+  // 0x1010: nop x4                90 90 90 90
+  // 0x1014: ret                   c3
+  const std::vector<std::uint8_t> bytes = {
+          0x74, 0x0e, 0x48, 0xc7, 0xc0, 0x14, 0x10, 0x00, 0x00, 0xff, 0xe0,
+          0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0x90, 0x90, 0x90, 0x90, 0xc3};
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  REQUIRE(g.isValidBlock(0x1014)); // the jump was resolved
+
+  dragon::BasicBlock nops{&g, 0x1010};
+  REQUIRE(nops.isValid());
+  CHECK(nops.terminatorAddress() == 0x1013);
+
+  const auto *ib = g.getIGNILBlock(0x1010);
+  REQUIRE(ib != nullptr);
+  CHECK_FALSE(ignilTouches(*ib, 0x1014));
+  REQUIRE_FALSE(ib->empty());
+  const auto &last = ib->ops().back();
+  REQUIRE(last.opcode == dragon::ignil::Opcode::JMP);
+  CHECK(std::get<dragon::ignil::Const>(last.srcs[0]).value == 0x1014);
+
+  const auto *retBlock = g.getIGNILBlock(0x1014);
+  REQUIRE(retBlock != nullptr);
+  CHECK(retBlock->ops().back().opcode == dragon::ignil::Opcode::RET);
 }

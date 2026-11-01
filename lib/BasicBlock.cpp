@@ -26,8 +26,16 @@ dragon::BasicBlock::BasicBlock(const Graph *graph, std::uint64_t startAddress) :
     if (!insn)
       return; // no instruction at the address this path actually needs
 
-    // Next block starts here (not the entry) - previous insn is the terminator
-    if (cur != startAddress_ && insn->isBlockStart()) {
+    // Next block starts here (not the entry) - previous insn is the terminator.
+    //
+    // The Graph's block set is the authority, not just the instruction's
+    // isBlockStart flag: the analyses register call targets and resolved
+    // indirect-jump targets with Graph::addBlock() without flagging the
+    // instruction already sitting there. Checking the flag alone let a block
+    // run straight through the start of the next one - `call f` followed by
+    // f's own body gave two blocks containing the same instructions.
+    if (cur != startAddress_ &&
+        (insn->isBlockStart() || graph_->isValidBlock(cur))) {
       if (!prevInsn)
         return;
       terminatorAddress_ = prevInsn->address();

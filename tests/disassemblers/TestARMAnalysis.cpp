@@ -2,6 +2,7 @@
 
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <algorithm>
 #include <vector>
@@ -276,4 +277,33 @@ TEST_CASE("ARMAnalysis arm64 - if/else function structure",
     auto fns = g.functions();
     REQUIRE(fns[0].numInstructions() == 10);
   }
+}
+
+// -----------------------------------------------------------------------
+// Regression: a block ran through the start of a BL target (see the x86
+// equivalent in TestX86Analysis.cpp).
+// -----------------------------------------------------------------------
+
+TEST_CASE("ARMAnalysis ARM64 - block ends where a bl target begins",
+          "[arm64][analysis][blocks]") {
+  // 0x1000: mov x0, #5   a0 00 80 d2
+  // 0x1004: bl  0x1008   01 00 00 94
+  // 0x1008: ret          c0 03 5f d6   <- bl target: its own block
+  const std::vector<std::uint8_t> bytes = {0xa0, 0x00, 0x80, 0xd2,
+                                           0x01, 0x00, 0x00, 0x94,
+                                           0xc0, 0x03, 0x5f, 0xd6};
+  auto dis = makeAnalyzer(dragon::Architecture::ARM64);
+  auto g = makeGraph(dragon::Architecture::ARM64);
+  dis.disassemble(bytes, 0x1000, g);
+
+  dragon::BasicBlock caller{&g, 0x1000};
+  REQUIRE(caller.isValid());
+  CHECK(caller.terminatorAddress() == 0x1004);
+
+  const auto *ib = g.getIGNILBlock(0x1000);
+  REQUIRE(ib != nullptr);
+  for (const auto &op: *ib)
+    CHECK(op.address != 0x1008);
+  CHECK(ib->ops().back().opcode == dragon::ignil::Opcode::JMP);
+  CHECK(g.get(0x1008)->isFunctionStart());
 }

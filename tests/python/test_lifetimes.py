@@ -20,9 +20,11 @@ import weakref
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'python'))
 import dragon  # noqa: E402
 
-# 0x1000 mov eax, 5 ; 0x1005 call 0x100a ; 0x100a ret
-CODE = bytes.fromhex('b805000000' 'e800000000' 'c3')
-EXPECTED = ['mov eax, 5', 'call 0', 'ret']
+# caller: 0x1000 mov eax, 5 ; 0x1005 call 0x100b ; 0x100a ret
+# callee: 0x100b ret
+CODE = bytes.fromhex('b805000000' 'e801000000' 'c3' 'c3')
+CALLER = ['mov eax, 5', 'call 1', 'ret']       # block / function at 0x1000
+EXPECTED = CALLER + ['ret']                     # the whole listing
 
 failures = []
 
@@ -71,11 +73,12 @@ def t_chained_instructions():
 def t_instruction():
     insn, ref = collected(lambda g: g.get_instruction(0x1005))
     assert ref() is not None, 'Graph collected while an Instruction is alive'
-    assert insn.disassembly == 'call 0' and insn.callees == [0x100a]
+    assert insn.disassembly == 'call 1' and insn.callees == [0x100b], \
+        (insn.disassembly, insn.callees)
 
 
 def t_ignil_block():
-    blk, ref = collected(lambda g: g.get_ignil_block(0x100a))
+    blk, ref = collected(lambda g: g.get_ignil_block(0x100b))
     assert ref() is not None, 'Graph collected while an IGNILBlock is alive'
     assert 'RET' in blk.to_string()
 
@@ -83,19 +86,22 @@ def t_ignil_block():
 def t_basic_block():
     bb, ref = collected(lambda g: g.get_block(0x1000))
     assert ref() is not None, 'Graph collected while a BasicBlock is alive'
-    assert [i.disassembly for i in bb.instructions()] == EXPECTED
+    got = [i.disassembly for i in bb.instructions()]
+    assert got == CALLER, got
 
 
 def t_function():
     fn, ref = collected(lambda g: g.get_function(0x1000))
     assert ref() is not None, 'Graph collected while a Function is alive'
-    assert fn.num_instructions == 3 and fn.block_addresses() == [0x1000]
+    assert (fn.num_instructions, fn.block_addresses()) == (3, [0x1000]), \
+        (fn.num_instructions, fn.block_addresses())
 
 
 def t_block_instructions_outlive_block():
     insns, ref = collected(lambda g: g.get_block(0x1000).instructions())
     assert ref() is not None, 'Graph collected while its Instructions are alive'
-    assert [i.disassembly for i in insns] == EXPECTED
+    got = [i.disassembly for i in insns]
+    assert got == CALLER, got
 
 
 def t_lift_trace_after_graph_dropped():
