@@ -15,6 +15,8 @@ architecturally undefined; dragon models it like a 1-bit shift (see
 emitGatedShiftFlags - VMProtect folds RFLAGS into its state), Unicorn
 clears it.
 
+REALBLOCK_OPT=1 runs simplify() + dead_store_eliminate() on each block first.
+
 Usage: realblock_diff.py BINARY [BLOCKS] [TRIALS]
 """
 import os as _os, sys as _sys
@@ -64,11 +66,12 @@ STACK = 0x20000000 if width == 32 else 0x7ff000000000
 
 sections = [(s.address, s.virtual_size, s.data) for s in img.sections()]
 def page_content(base):
-    # Each qword below 2^46: pointers loaded from here stay in the range
-    # Unicorn addresses faithfully (see reg_value).
+    # Every 4-byte word below 2^15: any 4-aligned 8-byte load assembled from
+    # this memory stays below 2^47, the range Unicorn addresses faithfully
+    # (above it, it truncates where hardware would fault).
     pr = random.Random(base)
-    data = bytearray(b''.join(pr.getrandbits(46 if width == 64 else 32).to_bytes(
-        8 if width == 64 else 4, 'little') for _ in range(PAGE // (8 if width == 64 else 4))))
+    data = bytearray(b''.join(pr.getrandbits(15 if width == 64 else 32).to_bytes(4, 'little')
+                              for _ in range(PAGE // 4)))
     for addr, size, raw in sections:
         lo, hi = max(base, addr), min(base + PAGE, addr + size)
         for a in range(lo, hi):
@@ -118,6 +121,11 @@ for b in blocks:
     if blk.unlifted():
         stats['skipped (unlifted)'] += 1
         continue
+    if _os.environ.get('REALBLOCK_OPT'):
+        # Run the IGNIL optimisers first: the optimised block must give the
+        # same concrete values as the original (everything is live).
+        blk, _ = blk.simplify()
+        blk, _ = blk.dead_store_eliminate(arch)
     stats['blocks run'] += 1
     for trial in range(TRIALS):
         r = random.Random(b * 131 + trial)
