@@ -108,3 +108,21 @@ target_include_directories(dragon_tests
 include(CTest)
 include(Catch)
 catch_discover_tests(dragon_tests)
+# Python API tests. Optional like Unicorn: they need a Python 3 with cffi,
+# and are simply not registered without one.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import cffi"
+                    RESULT_VARIABLE _dragon_cffi_missing OUTPUT_QUIET ERROR_QUIET)
+    if(_dragon_cffi_missing EQUAL 0)
+        add_test(NAME "Python API - borrowed views keep their Graph alive"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_lifetimes.py)
+        set_tests_properties("Python API - borrowed views keep their Graph alive"
+                PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+    else()
+        message(STATUS "Python cffi not found - Python API tests disabled")
+    endif()
+else()
+    message(STATUS "Python 3 not found - Python API tests disabled")
+endif()

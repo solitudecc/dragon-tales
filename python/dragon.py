@@ -94,13 +94,50 @@ class Strategy:
     RECURSIVE_TRAVERSAL = 1
 
 
+# -- Borrowed views ------------------------------------------------------------
+
+class _View:
+    """Base for wrappers whose C pointer is only valid while another object is.
+
+    Instruction, BasicBlock, Function and a Graph's IGNILBlock all point into
+    memory a Graph owns. A wrapper that held only the raw pointer let the
+    Graph be collected underneath it - ``dis.analyze(code).instructions()``
+    drops the Graph before the list is even iterated - and every later call
+    read freed memory: usually stale-but-plausible data, sometimes SIGSEGV.
+
+    So a view keeps its owner alive (``_owner``), and checks on every access
+    that neither it nor anything it depends on was closed explicitly (``with``
+    exit / ``__exit__``), raising ReferenceError instead of touching freed
+    memory. ``_ptr`` is that checked accessor; the raw handle is ``_raw``.
+    """
+
+    _raw = None
+    _owner = None
+
+    def _bind(self, ptr, owner):
+        self._raw = ptr
+        self._owner = owner
+
+    @property
+    def _ptr(self):
+        if self._raw is None:
+            raise ReferenceError(f'{type(self).__name__} has been closed')
+        if self._owner is not None and self._owner._ptr is None:
+            # A closed Graph sets its own _ptr to None; a closed view raises
+            # from the line above when its _ptr is read here.
+            raise ReferenceError(
+                f'{type(self).__name__} used after its '
+                f'{type(self._owner).__name__} was closed')
+        return self._raw
+
+
 # -- Instruction ---------------------------------------------------------------
 
-class Instruction:
-    """Lightweight view into the graph listing — not owned, no destroy."""
+class Instruction(_View):
+    """View into a Graph's listing; keeps the Graph alive, never destroyed."""
 
-    def __init__(self, ptr):
-        self._ptr = ptr
+    def __init__(self, ptr, owner=None):
+        self._bind(ptr, owner)
 
     @property
     def address(self):
@@ -188,16 +225,20 @@ class Instruction:
 
 # -- BasicBlock ----------------------------------------------------------------
 
-class BasicBlock:
-    """Heap-allocated view - owns its pointer, must be destroyed."""
+class BasicBlock(_View):
+    """Heap-allocated view - owns its pointer, must be destroyed.
 
-    def __init__(self, ptr):
-        self._ptr = ptr
+    The C++ BasicBlock holds a pointer to its Graph, so this keeps the Graph
+    alive too.
+    """
+
+    def __init__(self, ptr, owner=None):
+        self._bind(ptr, owner)
 
     def __del__(self):
-        if self._ptr:
-            lib.dragon_block_destroy(self._ptr)
-            self._ptr = None
+        if self._raw:
+            lib.dragon_block_destroy(self._raw)
+        self._raw = None
 
     def __enter__(self):
         return self
@@ -222,8 +263,9 @@ class BasicBlock:
 
     def instructions(self):
         result = []
+        # The instructions live in the Graph, not in this block view.
         cb = ffi.callback('void(const dragon_instruction_t *, void *)',
-                          lambda ptr, _: result.append(Instruction(ptr)))
+                          lambda ptr, _: result.append(Instruction(ptr, self._owner)))
         lib.dragon_block_each_instruction(self._ptr, cb, ffi.NULL)
         return result
 
@@ -239,16 +281,20 @@ class BasicBlock:
 
 # -- Function ------------------------------------------------------------------
 
-class Function:
-    """Heap-allocated view - owns its pointer, must be destroyed."""
+class Function(_View):
+    """Heap-allocated view - owns its pointer, must be destroyed.
 
-    def __init__(self, ptr):
-        self._ptr = ptr
+    The C++ Function holds a pointer to its Graph, so this keeps the Graph
+    alive too.
+    """
+
+    def __init__(self, ptr, owner=None):
+        self._bind(ptr, owner)
 
     def __del__(self):
-        if self._ptr:
-            lib.dragon_function_destroy(self._ptr)
-            self._ptr = None
+        if self._raw:
+            lib.dragon_function_destroy(self._raw)
+        self._raw = None
 
     def __enter__(self):
         return self
@@ -319,18 +365,18 @@ class Graph:
         ptr = lib.dragon_graph_get_instruction(self._ptr, address)
         if ptr == ffi.NULL:
             return None
-        return Instruction(ptr)
+        return Instruction(ptr, self)
 
     def get_block(self, address):
-        return BasicBlock(lib.dragon_graph_get_block(self._ptr, address))
+        return BasicBlock(lib.dragon_graph_get_block(self._ptr, address), self)
 
     def get_function(self, address):
-        return Function(lib.dragon_graph_get_function(self._ptr, address))
+        return Function(lib.dragon_graph_get_function(self._ptr, address), self)
 
     def instructions(self):
         result = []
         cb = ffi.callback('void(const dragon_instruction_t *, void *)',
-                          lambda ptr, _: result.append(Instruction(ptr)))
+                          lambda ptr, _: result.append(Instruction(ptr, self)))
         lib.dragon_graph_each_instruction(self._ptr, cb, ffi.NULL)
         return result
 
@@ -351,7 +397,7 @@ class Graph:
         ptr = lib.dragon_graph_get_ignil_block(self._ptr, address)
         if ptr == ffi.NULL:
             return None
-        return IGNILBlock(ptr)
+        return IGNILBlock(ptr, owner=self)
 
     def __repr__(self):
         return f'<Graph instructions={len(self)}>'
@@ -603,24 +649,24 @@ class IGNILOpcode:
 
 # -- IGNIL block ---------------------------------------------------------------
 
-class IGNILBlock:
+class IGNILBlock(_View):
     """View of an IGNIL block.
 
-    Blocks obtained from Graph.get_ignil_block() are borrowed — valid while
-    the owning Graph is alive, and must not be destroyed. Blocks obtained
-    from Disassembler.lift_trace() are owned by this object instead (there is
-    no backing Graph) and are destroyed when it is garbage-collected / the
-    context manager exits.
+    Blocks obtained from Graph.get_ignil_block() are borrowed: they keep the
+    Graph alive and must not be destroyed. Blocks obtained from
+    Disassembler.lift_trace(), simplify() or dead_store_eliminate() are owned
+    by this object instead (there is no backing Graph) and are destroyed when
+    it is garbage-collected / the context manager exits.
     """
 
-    def __init__(self, ptr, owned=False):
-        self._ptr = ptr
+    def __init__(self, ptr, owned=False, owner=None):
+        self._bind(ptr, owner)
         self._owned = owned
 
     def __del__(self):
-        if self._owned and self._ptr:
-            lib.dragon_ignil_block_destroy(self._ptr)
-        self._ptr = None
+        if self._owned and self._raw:
+            lib.dragon_ignil_block_destroy(self._raw)
+        self._raw = None
 
     def __enter__(self):
         return self

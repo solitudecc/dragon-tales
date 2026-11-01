@@ -226,6 +226,28 @@ if fn.is_valid:
     print(f"cyclomatic:   {fn.cyclomatic_complexity}")
 ```
 
+### Lifetimes: views keep their graph alive
+
+`Instruction`, `BasicBlock`, `Function` and the `IGNILBlock` returned by
+`Graph.get_ignil_block()` all point into memory the `Graph` owns. Each of
+them holds a reference to its graph, so the graph lives as long as any view
+of it does, and chaining is safe:
+
+```python
+for insn in dis.analyze(code, 0x1000).instructions():   # graph kept alive
+    print(insn.disassembly)
+```
+
+Closing the graph explicitly (`with graph:` exit, or `graph.__exit__()`)
+still frees it immediately. Any view of it used afterwards raises
+`ReferenceError` instead of reading freed memory:
+
+```python
+with dis.analyze(code, 0x1000) as graph:
+    insn = graph.get_instruction(0x1000)
+insn.disassembly   # ReferenceError: Instruction used after its Graph was closed
+```
+
 ---
 
 ## Assembler
@@ -373,8 +395,8 @@ if ib:
         print(ib.op_to_string(idx))
 ```
 
-`IGNILBlock` is a borrowed view — it is valid as long as the owning graph
-is alive; no `__exit__` / destroy needed.
+`IGNILBlock` is a borrowed view — it keeps the owning graph alive and is
+never destroyed itself; see [Lifetimes](#lifetimes-views-keep-their-graph-alive).
 
 ### Peephole simplification
 
