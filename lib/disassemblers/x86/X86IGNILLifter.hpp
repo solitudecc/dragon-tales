@@ -10,6 +10,8 @@
 
 #include <functional>
 #include <map>
+#include <optional>
+#include <string_view>
 #include <span>
 #include <utility>
 #include <unordered_map>
@@ -75,6 +77,28 @@ class X86IGNILLifter {
   liftTrace(std::span<const Instruction> trace) const;
 
   private:
+  // Integer instructions with a memory operand not covered by a dedicated
+  // lifter, classified by opcode name in the constructor (see
+  // liftMemOperandForm).
+  enum class AluKind : std::uint8_t {
+    Add, Sub, Adc, Sbb, And, Or, Xor, Cmp, Test, Neg, Not,
+    Cmov, Setcc, MovStoreImm, MovLoadOffset, MovStoreOffset, PushMem, PopMem
+  };
+  enum class MemOperandForm : std::uint8_t {
+    MemReg, // op mem, reg       (*mr)
+    RegMem, // op reg, mem       (*rm)
+    MemImm, // op mem, imm       (*mi, *mi8, *mi32)
+    Mem,    // op mem            (NEG/NOT/SETcc/PUSH/POP)
+    Offset, // mov acc, [moffs] / mov [moffs], acc
+  };
+  struct MemOperandOp {
+    AluKind kind;
+    MemOperandForm form;
+    ignil::Width width; // operand width in bits
+  };
+  std::unordered_map<unsigned, MemOperandOp> memOperandOps_;
+  static std::optional<MemOperandOp> classifyMemOperandOp(std::string_view name);
+
   // How one MOVZX/MOVSX spelling extends: the width in bits of the value
   // being widened, and whether that value comes from memory (the rm forms)
   // rather than a register (the rr forms).
@@ -103,6 +127,12 @@ class X86IGNILLifter {
                                       std::uint32_t &tmp) const;
 
   // Per-opcode lifting helpers
+  // Generic lifter for memOperandOps_: load the memory operand, apply the
+  // operation with the same flag rules as the register forms, store back.
+  void liftMemOperandForm(const llvm::MCInst &mc, const MemOperandOp &op,
+                          std::uint64_t addr, ignil::Block &out,
+                          std::uint32_t &tmp) const;
+
   void liftMov(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftMovLoad(const llvm::MCInst &mc, std::uint64_t addr,
@@ -647,6 +677,7 @@ class X86IGNILLifter {
   unsigned opSar32ri_{}, opSar64ri_{};
   unsigned opImul64rri32_{}, opImul64rri8_{}, opImul32rri_{}, opImul32rri8_{};
   unsigned opImul32rr_{}, opImul64rr_{};
+  unsigned opImul16rr_{}, opImul16rri_{}, opImul16rri8_{};
   unsigned opLea64_32r_{};
   unsigned opInc32r_{}, opInc64r_{}, opDec32r_{}, opDec64r_{};
   unsigned opInc32r_alt_{}, opDec32r_alt_{}; // 0x40+r / 0x48+r, 32-bit only
@@ -759,6 +790,7 @@ class X86IGNILLifter {
   unsigned opMovsdRR_{}, opMovsdLoad_{}, opMovsdStore_{};
   // Every nop encoding (NOOP*, FNOP): lifted to nothing.
   std::unordered_set<unsigned> nopOpcodes_;
+
 
   // LLVM register integer -> ignil::Reg mapping
   // Built once in constructor by scanning MCRegisterInfo +

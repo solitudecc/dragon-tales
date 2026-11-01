@@ -2,9 +2,11 @@
 
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Instruction.hpp>
+#include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <array>
 #include <cmath>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 
@@ -222,6 +224,9 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"IMUL32rri", &X86IGNILLifter::opImul32rri_},
           {"IMUL32rri8", &X86IGNILLifter::opImul32rri8_},
           {"IMUL32rr", &X86IGNILLifter::opImul32rr_},
+          {"IMUL16rr", &X86IGNILLifter::opImul16rr_},
+          {"IMUL16rri", &X86IGNILLifter::opImul16rri_},
+          {"IMUL16rri8", &X86IGNILLifter::opImul16rri8_},
           {"IMUL64rr", &X86IGNILLifter::opImul64rr_},
           {"LEA64_32r", &X86IGNILLifter::opLea64_32r_},
           {"INC32r", &X86IGNILLifter::opInc32r_},
@@ -555,6 +560,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     // forms. FNOP is the x87 one.
     if (name.starts_with("NOOP") || name == "FNOP")
       nopOpcodes_.insert(i);
+    if (auto op = classifyMemOperandOp(name))
+      memOperandOps_.emplace(i, *op);
 
     if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
@@ -988,9 +995,10 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   else if (opc == opSar32ri_ || opc == opSar64ri_)
     liftSarImm(*mc, addr, out, tempId);
   else if (opc == opImul64rri32_ || opc == opImul64rri8_ ||
-           opc == opImul32rri_ || opc == opImul32rri8_)
+           opc == opImul32rri_ || opc == opImul32rri8_ ||
+           opc == opImul16rri_ || opc == opImul16rri8_)
     liftImulImm(*mc, addr, out, tempId);
-  else if (opc == opImul32rr_ || opc == opImul64rr_)
+  else if (opc == opImul32rr_ || opc == opImul64rr_ || opc == opImul16rr_)
     liftImulRR(*mc, addr, out, tempId);
   else if (opc == opLea64_32r_)
     liftLeaTrunc32(*mc, addr, out, tempId);
@@ -1146,6 +1154,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftMovLoad(*mc, addr, out, tempId);
   else if (opc == opMovsdStore_)
     liftMovStore(*mc, addr, out, tempId);
+  else if (auto mo = memOperandOps_.find(opc); mo != memOperandOps_.end())
+    liftMemOperandForm(*mc, mo->second, addr, out, tempId);
   else if (nopOpcodes_.contains(opc)) {
     // No effect. A multi-byte nop has a memory operand it never accesses,
     // so the generic fallback below reported every one of them unlifted
@@ -1199,6 +1209,362 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
           mc->getNumOperands() >= kMemoryOperandCount)
         out.noteUnlifted(addr);
     }
+  }
+}
+
+
+std::optional<dragon::x86::X86IGNILLifter::MemOperandOp>
+dragon::x86::X86IGNILLifter::classifyMemOperandOp(std::string_view name) {
+  using K = AluKind;
+  using F = MemOperandForm;
+  auto widthOf = [](std::string_view digits) -> ignil::Width {
+    if (digits == "8") return 8;
+    if (digits == "16") return 16;
+    if (digits == "32") return 32;
+    if (digits == "64") return 64;
+    return 0;
+  };
+  // <OP><width><form>: ADD32mr, SUB16rm, XOR8mi, AND64mi8, CMP64mi32, ...
+  static const std::pair<std::string_view, AluKind> kAlu[] = {
+          {"ADD", K::Add}, {"SUB", K::Sub}, {"ADC", K::Adc}, {"SBB", K::Sbb},
+          {"AND", K::And}, {"XOR", K::Xor}, {"CMP", K::Cmp}, {"TEST", K::Test},
+          {"OR", K::Or}, {"NEG", K::Neg}, {"NOT", K::Not}};
+  for (const auto &[prefix, kind]: kAlu) {
+    if (!name.starts_with(prefix))
+      continue;
+    std::string_view rest = name.substr(prefix.size());
+    std::size_t digits = 0;
+    while (digits < rest.size() && rest[digits] >= '0' && rest[digits] <= '9')
+      ++digits;
+    const ignil::Width w = widthOf(rest.substr(0, digits));
+    if (!w)
+      return std::nullopt;
+    const std::string_view form = rest.substr(digits);
+    if (kind == K::Neg || kind == K::Not)
+      return form == "m" ? std::optional{MemOperandOp{kind, F::Mem, w}}
+                         : std::nullopt;
+    if (form == "mr")
+      return MemOperandOp{kind, F::MemReg, w};
+    if (form == "rm" && kind != K::Test)
+      return MemOperandOp{kind, F::RegMem, w};
+    if (form == "mi" || form == "mi8" || form == "mi32")
+      return MemOperandOp{kind, F::MemImm, w};
+    return std::nullopt;
+  }
+  if (name == "CMOV16rm") return MemOperandOp{K::Cmov, F::RegMem, 16};
+  if (name == "CMOV32rm") return MemOperandOp{K::Cmov, F::RegMem, 32};
+  if (name == "CMOV64rm") return MemOperandOp{K::Cmov, F::RegMem, 64};
+  if (name == "SETCCm") return MemOperandOp{K::Setcc, F::Mem, 8};
+  if (name == "MOV16mi") return MemOperandOp{K::MovStoreImm, F::MemImm, 16};
+  if (name == "PUSH64rmm") return MemOperandOp{K::PushMem, F::Mem, 64};
+  if (name == "PUSH32rmm") return MemOperandOp{K::PushMem, F::Mem, 32};
+  if (name == "POP64rmm") return MemOperandOp{K::PopMem, F::Mem, 64};
+  if (name == "POP32rmm") return MemOperandOp{K::PopMem, F::Mem, 32};
+  // mov al/ax/eax/rax, [moffs] (MOV<w>ao<asize>) and the store
+  // MOV<w>o<asize>a.
+  if (name.starts_with("MOV")) {
+    std::string_view rest = name.substr(3);
+    std::size_t digits = 0;
+    while (digits < rest.size() && rest[digits] >= '0' && rest[digits] <= '9')
+      ++digits;
+    const ignil::Width w = widthOf(rest.substr(0, digits));
+    const std::string_view tail = rest.substr(digits);
+    if (w && tail.size() > 2 && tail.starts_with("ao"))
+      return MemOperandOp{K::MovLoadOffset, F::Offset, w};
+    if (w && tail.size() > 2 && tail.starts_with("o") && tail.ends_with("a"))
+      return MemOperandOp{K::MovStoreOffset, F::Offset, w};
+  }
+  return std::nullopt;
+}
+
+void dragon::x86::X86IGNILLifter::liftMemOperandForm(const llvm::MCInst &mc,
+                                                     const MemOperandOp &op,
+                                                     std::uint64_t addr,
+                                                     ignil::Block &out,
+                                                     std::uint32_t &tmp) const {
+  using K = AluKind;
+  using F = MemOperandForm;
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  const ignil::Width w = op.width;
+  auto fail = [&](const char *why) {
+    logger_.log("Error liftMemOperandForm in addr {:#x}: {}", addr, why);
+    out.noteUnlifted(addr);
+  };
+
+  // -- moffs: the address is an absolute offset, the register the
+  // accumulator of the operand's width.
+  if (op.form == F::Offset) {
+    static const ignil::Reg *const kAcc[] = {&dragon::x86::AL, &dragon::x86::AX,
+                                             &dragon::x86::EAX,
+                                             &dragon::x86::RAX};
+    const ignil::Reg &acc = *kAcc[w == 8 ? 0 : w == 16 ? 1 : w == 32 ? 2 : 3];
+    const auto offset = static_cast<std::uint64_t>(mc.getOperand(0).getImm());
+    auto a = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::COPY, a, {ignil::Const{offset, ptrWidth}},
+                addr});
+    if (op.kind == K::MovLoadOffset) {
+      auto v = newTemp(tmp, w);
+      out.append({ignil::Opcode::LOAD, v, {a}, addr});
+      out.append({ignil::Opcode::COPY, acc, {v}, addr});
+    } else {
+      out.append({ignil::Opcode::STORE, std::nullopt, {a, acc}, addr});
+    }
+    return;
+  }
+
+  // -- PUSH/POP [mem]
+  if (op.kind == K::PushMem || op.kind == K::PopMem) {
+    const ignil::Reg &sp = ptrWidth == 64 ? dragon::x86::RSP : dragon::x86::ESP;
+    const ignil::Const slot{std::uint64_t{w} / 8, ptrWidth};
+    if (op.kind == K::PushMem) {
+      auto a = emitAddress(mc, 0, ptrWidth, addr, out, tmp); // before RSP moves
+      auto v = newTemp(tmp, w);
+      out.append({ignil::Opcode::LOAD, v, {a}, addr});
+      auto nsp = newTemp(tmp, ptrWidth);
+      out.append({ignil::Opcode::SUB, nsp, {sp, slot}, addr});
+      out.append({ignil::Opcode::STORE, std::nullopt, {nsp, v}, addr});
+      out.append({ignil::Opcode::COPY, sp, {nsp}, addr});
+    } else {
+      auto v = newTemp(tmp, w);
+      out.append({ignil::Opcode::LOAD, v, {sp}, addr});
+      auto nsp = newTemp(tmp, ptrWidth);
+      out.append({ignil::Opcode::ADD, nsp, {sp, slot}, addr});
+      out.append({ignil::Opcode::COPY, sp, {nsp}, addr});
+      // An RSP-based destination is addressed with the incremented RSP.
+      auto a = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
+      out.append({ignil::Opcode::STORE, std::nullopt, {a, v}, addr});
+    }
+    return;
+  }
+
+  // -- operands. Memory starts at 0 for mem-first forms; for reg-first ones
+  // after the destination (and its tied source), or after the single
+  // register of CMP.
+  const bool memFirst = op.form != F::RegMem;
+  const unsigned memStart =
+          memFirst ? 0 : (op.kind == K::Cmp ? 1u : 2u);
+  auto ea = emitAddress(mc, memStart, ptrWidth, addr, out, tmp);
+  auto memVal = newTemp(tmp, w);
+  if (op.kind != K::MovStoreImm && op.kind != K::Setcc)
+    out.append({ignil::Opcode::LOAD, memVal, {ea}, addr});
+
+  if (op.kind == K::MovStoreImm) {
+    const auto imm = static_cast<std::uint64_t>(mc.getOperand(5).getImm());
+    out.append({ignil::Opcode::STORE, std::nullopt, {ea, ignil::Const{imm, w}},
+                addr});
+    return;
+  }
+  if (op.kind == K::Setcc) {
+    const auto cc = static_cast<unsigned>(mc.getOperand(5).getImm());
+    auto cond = emitCondition(cc, addr, out, tmp);
+    auto v = newTemp(tmp, 8);
+    out.append({ignil::Opcode::ZEXT, v, {cond}, addr});
+    out.append({ignil::Opcode::STORE, std::nullopt, {ea, v}, addr});
+    return;
+  }
+
+  std::optional<ignil::Reg> reg; // the register operand, if any
+  if (op.form == F::MemReg) {
+    reg = toReg(mc.getOperand(5).getReg());
+    if (!reg)
+      return fail("no register operand");
+  } else if (op.form == F::RegMem) {
+    reg = toReg(mc.getOperand(0).getReg());
+    if (!reg)
+      return fail("no register operand");
+  }
+
+  if (op.kind == K::Cmov) {
+    // dst = cond ? [mem] : dst. The load happens either way (as on
+    // hardware, a faulting address faults even when the move is not taken).
+    const auto cc = static_cast<unsigned>(mc.getOperand(7).getImm());
+    auto cond = emitCondition(cc, addr, out, tmp);
+    auto kept = newTemp(tmp, w);
+    out.append({ignil::Opcode::COPY, kept, {*reg}, addr});
+    auto condW = newTemp(tmp, w);
+    out.append({ignil::Opcode::ZEXT, condW, {ignil::Value{cond}}, addr});
+    auto mask = newTemp(tmp, w);
+    out.append({ignil::Opcode::NEG, mask, {ignil::Value{condW}}, addr});
+    auto keepMask = newTemp(tmp, w);
+    out.append({ignil::Opcode::NOT, keepMask, {ignil::Value{mask}}, addr});
+    auto a = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, a, {memVal, mask}, addr});
+    auto b = newTemp(tmp, w);
+    out.append({ignil::Opcode::AND, b, {kept, keepMask}, addr});
+    auto r = newTemp(tmp, w);
+    out.append({ignil::Opcode::OR, r, {a, b}, addr});
+    out.append({ignil::Opcode::COPY, *reg, {r}, addr}); // 32-bit zero-extends
+    return;
+  }
+
+  // lhs is the destination operand, rhs the source.
+  ignil::Temp lhs = newTemp(tmp, w);
+  ignil::Value rhs = ignil::Const{0, w};
+  switch (op.form) {
+    case F::MemReg:
+      out.append({ignil::Opcode::COPY, lhs, {memVal}, addr});
+      rhs = *reg;
+      break;
+    case F::RegMem:
+      out.append({ignil::Opcode::COPY, lhs, {*reg}, addr});
+      rhs = memVal;
+      break;
+    case F::MemImm:
+      out.append({ignil::Opcode::COPY, lhs, {memVal}, addr});
+      rhs = ignil::Const{static_cast<std::uint64_t>(mc.getOperand(5).getImm()),
+                         w};
+      break;
+    default: // Mem: NEG/NOT
+      out.append({ignil::Opcode::COPY, lhs, {memVal}, addr});
+      break;
+  }
+  // A copy of rhs, so a register both read and written stays the input.
+  auto rhsT = newTemp(tmp, w);
+  out.append({ignil::Opcode::COPY, rhsT, {rhs}, addr});
+
+  auto result = newTemp(tmp, w);
+  auto writeBack = [&](ignil::Temp v) {
+    if (op.form == F::RegMem)
+      out.append({ignil::Opcode::COPY, *reg, {v}, addr});
+    else
+      out.append({ignil::Opcode::STORE, std::nullopt, {ea, v}, addr});
+  };
+  auto logicFlags = [&](ignil::Temp r) {
+    emitArithFlags(addr, out, tmp,
+                   {
+                           {X86Flag::CF, cfAlwaysZero(addr)},
+                           {X86Flag::PF, pfParity(r, addr)},
+                           {X86Flag::AF, afAlwaysZero(addr)},
+                           {X86Flag::ZF, zfEqZero(r, addr)},
+                           {X86Flag::SF, sfSignBit(r, addr)},
+                           {X86Flag::OF, ofAlwaysZero(addr)},
+                   });
+  };
+
+  switch (op.kind) {
+    case K::Add:
+      out.append({ignil::Opcode::ADD, result, {lhs, rhsT}, addr});
+      writeBack(result);
+      emitArithFlags(addr, out, tmp,
+                     {
+                             {X86Flag::CF, cfAddOverflow(result, rhsT, addr)},
+                             {X86Flag::PF, pfParity(result, addr)},
+                             {X86Flag::AF, afNibbleCarry(lhs, rhsT, result, addr)},
+                             {X86Flag::ZF, zfEqZero(result, addr)},
+                             {X86Flag::SF, sfSignBit(result, addr)},
+                             {X86Flag::OF, ofAddOverflow(lhs, rhsT, result, addr)},
+                     });
+      return;
+    case K::Sub:
+    case K::Cmp:
+      out.append({ignil::Opcode::SUB, result, {lhs, rhsT}, addr});
+      if (op.kind == K::Sub)
+        writeBack(result);
+      emitArithFlags(addr, out, tmp,
+                     {
+                             {X86Flag::CF, cfSubBorrow(lhs, rhsT, addr)},
+                             {X86Flag::PF, pfParity(result, addr)},
+                             {X86Flag::AF, afNibbleCarry(lhs, rhsT, result, addr)},
+                             {X86Flag::ZF, zfEqZero(result, addr)},
+                             {X86Flag::SF, sfSignBit(result, addr)},
+                             {X86Flag::OF, ofSubOverflow(lhs, rhsT, result, addr)},
+                     });
+      return;
+    case K::And:
+    case K::Test:
+      out.append({ignil::Opcode::AND, result, {lhs, rhsT}, addr});
+      if (op.kind == K::And)
+        writeBack(result);
+      logicFlags(result);
+      return;
+    case K::Or:
+      out.append({ignil::Opcode::OR, result, {lhs, rhsT}, addr});
+      writeBack(result);
+      logicFlags(result);
+      return;
+    case K::Xor:
+      out.append({ignil::Opcode::XOR, result, {lhs, rhsT}, addr});
+      writeBack(result);
+      logicFlags(result);
+      return;
+    case K::Not:
+      out.append({ignil::Opcode::NOT, result, {lhs}, addr});
+      writeBack(result); // NOT affects no flags
+      return;
+    case K::Neg: {
+      out.append({ignil::Opcode::NEG, result, {lhs}, addr});
+      writeBack(result);
+      std::map<X86Flag, FlagSetter> flags{
+              {X86Flag::CF,
+               [this, lhs, addr](ignil::Block &b, std::uint32_t &t) {
+                 auto cf = newTemp(t, 1);
+                 b.append({ignil::Opcode::NEQ, cf,
+                           {ignil::Value{lhs}, ignil::Const{0, lhs.width}},
+                           addr});
+                 b.append({ignil::Opcode::COPY, regCF_, {ignil::Value{cf}},
+                           addr});
+               }},
+              {X86Flag::PF, pfParity(result, addr)},
+              {X86Flag::AF, afNibbleCarry(ignil::Const{0, lhs.width},
+                                          ignil::Value{lhs}, result, addr)},
+              {X86Flag::ZF, zfEqZero(result, addr)},
+              {X86Flag::SF, sfSignBit(result, addr)},
+              {X86Flag::OF,
+               [this, lhs, addr](ignil::Block &b, std::uint32_t &t) {
+                 const std::uint64_t minNeg = std::uint64_t{1}
+                                              << (lhs.width - 1);
+                 auto of = newTemp(t, 1);
+                 b.append({ignil::Opcode::EQ, of,
+                           {ignil::Value{lhs}, ignil::Const{minNeg, lhs.width}},
+                           addr});
+                 b.append({ignil::Opcode::COPY, regOF_, {ignil::Value{of}},
+                           addr});
+               }},
+      };
+      emitArithFlags(addr, out, tmp, flags);
+      return;
+    }
+    case K::Adc:
+    case K::Sbb: {
+      const bool isSbb = op.kind == K::Sbb;
+      auto carryIn = newTemp(tmp, w);
+      out.append({w == 8 ? ignil::Opcode::COPY : ignil::Opcode::ZEXT, carryIn,
+                  {regCF_}, addr});
+      const ignil::Opcode step = isSbb ? ignil::Opcode::SUB : ignil::Opcode::ADD;
+      auto partial = newTemp(tmp, w);
+      out.append({step, partial, {lhs, rhsT}, addr});
+      out.append({step, result, {partial, carryIn}, addr});
+      writeBack(result);
+      FlagSetter carryOut = [this, lhs, rhsT, carryIn, partial, result, isSbb,
+                             addr](ignil::Block &block, std::uint32_t &t) {
+        auto first = newTemp(t, 1);
+        auto second = newTemp(t, 1);
+        if (isSbb) {
+          block.append({ignil::Opcode::ULT, first, {lhs, rhsT}, addr});
+          block.append({ignil::Opcode::ULT, second, {partial, carryIn}, addr});
+        } else {
+          block.append({ignil::Opcode::ULT, first, {partial, lhs}, addr});
+          block.append({ignil::Opcode::ULT, second, {result, partial}, addr});
+        }
+        auto carry = newTemp(t, 1);
+        block.append({ignil::Opcode::OR, carry, {first, second}, addr});
+        block.append({ignil::Opcode::COPY, regCF_, {carry}, addr});
+      };
+      emitArithFlags(addr, out, tmp,
+                     {
+                             {X86Flag::CF, carryOut},
+                             {X86Flag::PF, pfParity(result, addr)},
+                             {X86Flag::AF, afNibbleCarry(lhs, rhsT, result, addr)},
+                             {X86Flag::ZF, zfEqZero(result, addr)},
+                             {X86Flag::SF, sfSignBit(result, addr)},
+                             {X86Flag::OF, isSbb ? ofSubOverflow(lhs, rhsT, result, addr)
+                                                 : ofAddOverflow(lhs, rhsT, result, addr)},
+                     });
+      return;
+    }
+    default:
+      return fail("unexpected kind");
   }
 }
 

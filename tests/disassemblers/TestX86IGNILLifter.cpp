@@ -1576,17 +1576,18 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     return out;
   };
 
-  SECTION("adc eax, [rbp] [13 45 00] - no lifter: EAX and the flags it writes") {
-    // The register and immediate ADC/SBB forms are lifted; the memory-source
-    // form (ADC32rm) is not, so it stands in as an instruction whose results
+  SECTION("popcnt eax, ebx [f3 0f b8 c3] - no lifter: EAX and the flags it "
+          "writes") {
+    // POPCNT has no lifter, so it stands in as an instruction whose results
     // must fall back to UNDEF (both the destination register and the flags).
-    const auto *ib = lift({0x13, 0x45, 0x00});
+    // (This used to be `adc eax, [rbp]`, lifted since.)
+    const auto *ib = lift({0xf3, 0x0f, 0xb8, 0xc3});
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
     const auto regs = undefined(*ib);
     REQUIRE(regs.count(dragon::x86::EAX.offset) == 1);
-    // ADC defines CF and OF; without this a `jc` after it would read the
-    // carry of whatever ran before.
+    // POPCNT defines CF and OF (cleared); without this a `jc` after it would
+    // read the carry of whatever ran before.
     REQUIRE(regs.count(dragon::x86::CF.offset) == 1);
     REQUIRE(regs.count(dragon::x86::OF.offset) == 1);
   }
@@ -1611,7 +1612,7 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     REQUIRE(hasOpcode(*ib, Opcode::UMOD));
   }
   SECTION("the optimisation passes carry the record over") {
-    const auto *ib = lift({0x13, 0x45, 0x00}); // adc eax, [rbp] - still unlifted
+    const auto *ib = lift({0xf3, 0x0f, 0xb8, 0xc3}); // popcnt eax, ebx - unlifted
     REQUIRE(ib != nullptr);
     REQUIRE_FALSE(ib->unlifted().empty());
     const auto simplified = dragon::ignil::simplifyBlock(*ib);
@@ -2552,3 +2553,58 @@ TEST_CASE("IGNIL lifting - multi-byte nops are not unlifted",
   CHECK(block.unlifted().empty());
   CHECK(block.ops().empty());
 }
+
+#ifdef DRAGON_WITH_Z3
+// Integer instructions with a memory operand that no dedicated lifter covered
+// - every ALU op at every width in mr/rm/mi form, NEG/NOT/SETcc/PUSH/POP on
+// memory, CMOVcc from memory, `mov acc, [moffs]` - and 16-bit IMUL: all were
+// unlifted. Expected values are Unicorn's (the Unicorn difftest now has no
+// unlifted x86-64 template left).
+TEST_CASE("X86 IGNIL lifting - integer memory-operand forms",
+          "[ignil][x86][x86_64]") {
+  struct Case {
+    const char *name;
+    std::vector<std::uint8_t> bytes;
+    std::uint64_t raxAfter, memAfter; // qword at 0x200008
+    int cf, zf, sf, of;
+    bool flagsDefined = true; // ZF/SF are undefined after IMUL
+  };
+  const Case cases[] = {
+          {"sbb word ptr [rbx + 8], ax", {0x66, 0x19, 0x43, 0x8}, 0x1122334455668899, 0xba9d806346298455, 1, 0, 1, 1},
+          {"neg dword ptr [rbx + 8]", {0xf7, 0x5b, 0x8}, 0x1122334455668899, 0xba9d8063b9d6f311, 1, 0, 1, 0},
+          {"test byte ptr [rbx + 8], 0x81", {0xf6, 0x43, 0x8, 0x81}, 0x1122334455668899, 0xba9d806346290cef, 0, 0, 1, 0},
+          {"cmovs rax, qword ptr [rbx + 8]", {0x48, 0xf, 0x48, 0x43, 0x8}, 0xba9d806346290cef, 0xba9d806346290cef, 1, 0, 1, 0},
+          {"imul ax, bx, -3", {0x66, 0x6b, 0xc3, 0xfd}, 0x1122334455660000, 0xba9d806346290cef, 0, 1, 0, 0, false},
+          {"adc al, byte ptr [rbx + 9]", {0x12, 0x43, 0x9}, 0x11223344556688a6, 0xba9d806346290cef, 0, 0, 1, 0},
+          {"mov eax, [moffs]", {0xa1, 0x10, 0x0, 0x20, 0x0, 0x0, 0x0, 0x0, 0x0}, 0x2e11f4d7, 0xba9d806346290cef, 1, 0, 1, 0},
+  };
+  std::vector<std::uint8_t> page(0x100);
+  for (std::size_t i = 0; i < page.size(); ++i)
+    page[i] = static_cast<std::uint8_t>(i * 29 + 7);
+
+  for (const auto &c: cases) {
+    INFO(c.name);
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne(c.bytes,
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.mapMemory(0x200000, page);
+             e.setRegister(x86r::RAX, 0x1122334455668899);
+             e.setRegister(x86r::RBX, 0x200000);
+             e.setRegister(x86r::CF, 1);
+             e.setRegister(x86r::ZF, 0);
+             e.setRegister(x86r::SF, 1);
+             e.setRegister(x86r::OF, 0);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == c.raxAfter);
+    CHECK(ex.evaluate(ex.readMemory(0x200008, 64)) == c.memAfter);
+    CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == c.cf);
+    CHECK(ex.evaluate(ex.readRegister(x86r::OF)) == c.of);
+    if (c.flagsDefined) {
+      CHECK(ex.evaluate(ex.readRegister(x86r::ZF)) == c.zf);
+      CHECK(ex.evaluate(ex.readRegister(x86r::SF)) == c.sf);
+    }
+  }
+}
+#endif // DRAGON_WITH_Z3
