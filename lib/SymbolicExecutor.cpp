@@ -151,6 +151,12 @@ z3::expr SymbolicState::symbol(std::string_view name, Width width) const {
   return s;
 }
 
+z3::expr SymbolicState::freshSymbol(std::string_view prefix,Width width) const {
+  const auto value=z3::to_expr(*ctx_,Z3_mk_fresh_const(*ctx_,std::string(prefix).c_str(),ctx_->bv_sort(width)));
+  symbols_.emplace(value.decl().name().str(),value);
+  return value;
+}
+
 z3::expr SymbolicState::readByte(const ByteStore &store, std::uint64_t key,
                                  std::string_view kind) const {
   auto it = store.find(key);
@@ -690,7 +696,9 @@ z3::expr SymbolicExecutor::shift(Opcode op, const z3::expr &lhs,
 z3::expr SymbolicExecutor::binary(Opcode op, const z3::expr &lhs,
                                   const z3::expr &rhs, Width dstWidth) const {
   if (detail::floatBinaryOp(op))
-    return zeroCoerce(detail::floatBinary(op,lhs,rhs),dstWidth);
+    return zeroCoerce(detail::floatBinary(op,lhs,rhs,[this](unsigned width) {
+      return state_.freshSymbol("nan_bits",width);
+    }),dstWidth);
   if (op == Opcode::SHL || op == Opcode::SHR || op == Opcode::SAR)
     return zeroCoerce(shift(op, lhs, rhs), dstWidth);
 
@@ -746,7 +754,9 @@ z3::expr SymbolicExecutor::binary(Opcode op, const z3::expr &lhs,
 z3::expr SymbolicExecutor::unary(Opcode op, const z3::expr &src,
                                  Width dstWidth) const {
   if (detail::floatUnaryOp(op))
-    return zeroCoerce(detail::floatUnary(op,src,dstWidth),dstWidth);
+    return zeroCoerce(detail::floatUnary(op,src,dstWidth,[this](unsigned width) {
+      return state_.freshSymbol("nan_bits",width);
+    }),dstWidth);
   switch (op) {
     case Opcode::NEG: {
       const Width w = std::max(dstWidth, bvWidth(src));
@@ -1180,9 +1190,7 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::UNDEF: {
       if (!op.dst)
         return ExecStatus::MalformedOp;
-      writeDst(*op.dst, state_.symbol("undef@" + hex(op.address) + "_" +
-                                              std::to_string(op.address),
-                                      widthOf(*op.dst)));
+      writeDst(*op.dst, state_.freshSymbol("undef@" + hex(op.address),widthOf(*op.dst)));
       return ExecStatus::Ok;
     }
 

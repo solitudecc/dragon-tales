@@ -1562,6 +1562,18 @@ class x86:
     XMM14 = (255, 64, 'XMM14'); XMM14H = (383, 64, 'XMM14H')
     XMM15 = (263, 64, 'XMM15'); XMM15H = (391, 64, 'XMM15H')
 
+    # Physical x87 registers; logical ST(i) = FPU[(FPTOP+i)&7].
+    FPU0 = (400, 80, 'FPU0'); FPU0L = (400, 64, 'FPU0L'); FPU0H = (408, 16, 'FPU0H')
+    FPU1 = (410, 80, 'FPU1'); FPU1L = (410, 64, 'FPU1L'); FPU1H = (418, 16, 'FPU1H')
+    FPU2 = (420, 80, 'FPU2'); FPU2L = (420, 64, 'FPU2L'); FPU2H = (428, 16, 'FPU2H')
+    FPU3 = (430, 80, 'FPU3'); FPU3L = (430, 64, 'FPU3L'); FPU3H = (438, 16, 'FPU3H')
+    FPU4 = (440, 80, 'FPU4'); FPU4L = (440, 64, 'FPU4L'); FPU4H = (448, 16, 'FPU4H')
+    FPU5 = (450, 80, 'FPU5'); FPU5L = (450, 64, 'FPU5L'); FPU5H = (458, 16, 'FPU5H')
+    FPU6 = (460, 80, 'FPU6'); FPU6L = (460, 64, 'FPU6L'); FPU6H = (468, 16, 'FPU6H')
+    FPU7 = (470, 80, 'FPU7'); FPU7L = (470, 64, 'FPU7L'); FPU7H = (478, 16, 'FPU7H')
+    FPTOP = (480, 8, 'FPTOP'); FPTAG = (482, 16, 'FPTAG')
+    FPCW = (484, 16, 'FPCW'); FPSW = (486, 16, 'FPSW')
+
 
 # -- AArch64 register descriptors -----------------------------------------------
 

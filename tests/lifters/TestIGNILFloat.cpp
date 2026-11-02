@@ -81,3 +81,25 @@ TEST_CASE("LLVM floating results can feed integer widening of raw bits", "[float
   REQUIRE(lifter.liftBlock(block));
   CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
 }
+
+TEST_CASE("Arithmetic NaN results keep their class without sharing unknown payloads", "[float32][nan-fresh]") {
+  using namespace dragon;
+  const ignil::Temp first{0,32},second{1,32};
+  const ignil::Reg difference{0,32,"difference"},unordered{8,1,"unordered"};
+  ignil::Block block{0x1000};
+  block.append({ignil::Opcode::FADD32,first,{ignil::Const{0x7fc00001,32},ignil::Const{0,32}},0x1000});
+  block.append({ignil::Opcode::FADD32,second,{ignil::Const{0x7fc00002,32},ignil::Const{0,32}},0x1004});
+  block.append({ignil::Opcode::XOR,difference,{first,second},0x1008});
+  block.append({ignil::Opcode::FUNO32,unordered,{first,first},0x100c});
+  ignil::SymbolicExecutor executor; REQUIRE(executor.run(block).ok());
+  CHECK_FALSE(executor.evaluate(executor.readRegister(difference)).has_value());
+  // Independent Unicorn addss/addss/movd/movd/xor execution yields 3 for
+  // these payloads; the abstract NaN model must at least admit that value.
+  CHECK(executor.isSatisfiable(executor.readRegister(difference)==executor.bv(3,32))==true);
+  CHECK(executor.evaluate(executor.readRegister(unordered))==1);
+  Graph graph{Architecture::X86_64,Configuration{}};graph.addBlock(0x1000);graph.addIGNILBlock(block);
+  z3::context context;slice::SliceExprZ3 lowerer{context};
+  CHECK_FALSE(lowerer.lower(BackwardSlicer{}.slice(difference,0x1000,graph)).simplify().is_numeral());
+  const auto flag=lowerer.lower(BackwardSlicer{}.slice(unordered,0x1000,graph)).simplify();
+  z3::solver proof{context};proof.add(flag!=context.bv_val(1,1));CHECK(proof.check()==z3::unsat);
+}

@@ -360,6 +360,8 @@ class SymbolicState {
 
   /// Create (or return the existing) free variable of the given name.
   z3::expr symbol(std::string_view name, Width width) const;
+  /// A new independent variable, even when the prefix or bit width repeats.
+  z3::expr freshSymbol(std::string_view prefix, Width width) const;
 
   private:
   /// One stored byte, remembered as a slice of the value it was written from

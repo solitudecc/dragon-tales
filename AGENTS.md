@@ -103,11 +103,12 @@ Gotchas:
   through their register form over a scratch GPR (`MemViaReg`,
   `rewriteThroughScratch`): any fix to a register form fixes its memory form.
 - IGNIL CALL does not push a return address and RET has no operand (x86 and
-  ARM alike) — a deliberate abstraction; difftests show 3 expected diffs on
+  ARM alike) — a deliberate abstraction. x86 RET stores any imm16 byte count
+  in aux for clients; current backends do not pop the guest stack. Difftests show 3 expected diffs on
   AArch64 `bl/blr/ret` because of it.
 - Float ops (FADD/FSUB/FMUL/FDIV/SITOFP/FPTOSI/FLT/FEQ/FUNO) treat 64-bit
-  slots as IEEE doubles. A NaN *result* is left unknown by the executor (Z3
-  does not fix NaN bit patterns).
+  slots as IEEE doubles. A NaN result keeps its class but has independent
+  unknown sign/payload bits (Z3 does not fix NaN bit patterns).
 - Binary32 uses distinct `*32` arithmetic/comparison/conversion operations;
   it never computes through binary64. `FPEXT` and `FPTRUNC` change precision,
   `UITOFP` / `FPTOUI` provide unsigned conversion, and `FSQRT`, `FFLOOR`,
@@ -129,6 +130,26 @@ Gotchas:
   invalid source is replaced with zero *before* FP-to-int (avoiding LLVM
   poison). Range checks use the truncated value to accept fractional inputs
   just below the signed minimum whose toward-zero result is representable.
+- x87 uses physical raw 80-bit `FPU0..7` at offsets `400+10*i` (64-bit
+  `FPUiL` plus 16-bit `FPUiH`), TOP8 at 480, full TAG16 at 482, CW16 at
+  484 and SW16 at 486. `ST(i)=FPU[(TOP+i)&7]`; LLVM ST register numbers
+  must never be mapped directly to physical registers. FPTOP is authoritative
+  when composing SW's TOP bits. Register-file extents include all 10 bytes.
+  Loads, stores, integer conversion and comparisons use integer bit operations,
+  preserve extended precision and obey CW.RC; PC-dependent arithmetic stays
+  UNDEF + unlifted. Masked stack faults produce extended indefinite and IE/SF.
+  Unmasked exceptions conservatively make affected data/stack/status unknown; this
+  library does not deliver hardware/OS traps or model FIP/FDP. Undefined
+  condition bits are independent UNDEF. Legacy x87 environment stores invalidate the
+  actual written byte range; unsupported MMX invalidates its aliased FPU state,
+  and EMMS empties tags. FXRSTOR/XRSTOR-family restore fallbacks also invalidate
+  all modelled XMM halves. x87 addresses honor 16/32/64-bit wrapping and
+  RIP-relative next-PC setup; unknown segments/base registers are explicitly
+  unlifted rather than replaced with zero. Control-word reserved bits normalize to `(CW&0x1f3f)|0x40`.
+- Every executor UNDEF execution gets a fresh Z3 constant, including repeated
+  operations at one address and destinations of different widths. Arithmetic
+  NaN results have independent sign/payload bits constrained to quiet NaN;
+  Z3's single underspecified `fp.to_ieee_bv(NaN)` term must not correlate them.
 - `LABEL` / `LOCALJMP` / `LOCALCJMP` use `Op::aux` for block-local labels.
   They model runtime REP loops without creating fake machine instructions or
   CFG addresses. Temp definitions must dominate uses; loop-carried state is
@@ -191,6 +212,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `difftest_x64.py` | 992 x64 templates incl. runtime string/REP forms: 986 match, 0 diff, 6 existing unlifted (16-bit push/pop and LEA; listed below). Compares GPRs, flags and memory; string cases also vary/compare DF. `ONLY=text` filters. |
 | `difftest_strings.py` | 165 forms / 3960 Unicorn executions: i386, x64, x64 addr32; counts 0/1/2/5, DF 0/1, overlap and comparison exits. All registers/flags and the complete data buffer must match; no unknown outputs allowed. |
 | `difftest_a64.py` | 835 AArch64 templates, including scalar FP edges, SIMD moves and memory; compares all 32 V registers as 64-bit halves. Expected: 3 diffs = CALL/RET abstraction, 0 unlifted. `ONLY=text` filters. |
+| `difftest_x87.py` | Raw physical 80-bit registers, TOP/TAG/CW, defined SW bits, GPRs and memory in i386/x64 across all RC modes. Exact Fraction status oracle plus native fixtures cover documented Unicorn bugs. `ONLY=text`, `TRIALS=N`. |
 | `difftest_sse.py` | 393 SSE/SSSE3/SSE4.1 templates x 60 inputs; includes saturation boundaries, FP32/64 exceptional values and conversions. Checks FP32 per lane, including untouched lanes; only active arithmetic NaN results may be unknown. `ONLY=text` filters. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |
@@ -220,6 +242,17 @@ forms produce an unknown oracle. Unreadable table ranges are reported
 separately, never counted as verified. `tests/python/test_table_bounds.py`
 regresses unrelated comparisons, index redefinitions and bypass paths.
 
+`x87_native.c` is a second x87 reference: compile with `clang -arch x86_64 -O0`
+on macOS/Rosetta (or gcc on real x86). It reproduces status flags, reserved CW
+bits, stack faults, NaN conversions, FISTTP overflow and exception priority.
+Unicorn omits conversion exception/C1 updates, fails to quiet some SNaNs,
+returns saturated FISTTP overflow values and preserves AF/SF/OF after FCOMI.
+The x87 difftest documents narrowly corrected reference fields. Real-block
+harnesses initialize/compare physical FPU state and correct FCOMI flags before
+later instructions consume them. They report/skip stack-fault trials and cases
+exporting incomplete Unicorn exception status; these exclusions are not passes.
+Native LLVM also compares each defined SW bit to symbolic execution.
+
 ## 5. Current state
 
 Work done in this fork (see `git log` for full messages): ARM32 branch
@@ -235,7 +268,7 @@ join merging; x86 integer memory forms + moffs; AArch64 integer data
 processing; SSE low-half + FLT/FEQ/FUNO; optimistic x86 indirect-jump resolution
 with whole-candidate revalidation/rollback and nested-join loop invariants.
 
-Numbers on the Lua builds (linear sweep unless noted):
+Historical Lua baseline before the 2026-11-02 task series (linear sweep unless noted):
 
 | | i686 PE | x86-64 PE | aarch64 ELF |
 |---|---|---|---|
@@ -345,13 +378,11 @@ item, with a status table to update when a task is done): `docs/agent-tasks.md`.
    only 48 instructions). PE leaf functions can lack unwind records; Lua's
    `register_tm_clones` has no FDE. Existing heuristic inside-body starts
    remain measured false positives; see the per-sample validation report.
-3. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
-   `rep movs/stos` (needs a loop or a bounded expansion); rare SSE
-   (`packuswb`, `pmuludq`, `psubus*`, `cvtss2sd` - needs float32); AVX/VEX
-   forms; AArch64 FP (`fmov`, `fcmp/fcmpe`, `scvtf`, `fcvtzs`, `frintm`, `ldr/str`
-   of D/Q registers — note a 64-bit write to a V register must zero its upper
-   half, which the current 32-bit-only zero-extension rule does not do),
-   `clz`, `rbit`. Validate each with the difftests and add templates.
+3. **Lift coverage left** (`unlifted.py`): x87 extended arithmetic with CW.PC,
+   transcendental/environment operations; AVX/VEX; AArch64 PAC/AUT, crypto,
+   vector arithmetic and structured loads. Common scalar A64 FP, SIMD data
+   movement, CLZ/RBIT, listed SSE/SSSE3/SSE4.1 forms and runtime x86 strings
+   are implemented. Do not replace remaining extended arithmetic with double.
 4. C shim/Python analysis hints and calling conventions are exposed; regression
    tests: `tests/TestCAnalysisHints.cpp`, `tests/python/test_analysis_hints.py`.
 5. Extend the speculative resolver to ARM when useful. Failed hypotheses remain

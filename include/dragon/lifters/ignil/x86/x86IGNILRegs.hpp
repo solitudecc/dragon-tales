@@ -3,6 +3,7 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 /// IGNIL register descriptors for the x86 / x86-64 architecture.
@@ -181,13 +182,20 @@ inline constexpr std::uint32_t kOffXMM0 = 143;
 inline constexpr std::uint32_t kOffXMM0H = 271;
 inline constexpr unsigned kNumXMM = 16;
 
+inline constexpr std::uint32_t kOffFPU0=400, kOffFPTOP=480, kOffFPTAG=482, kOffFPCW=484, kOffFPSW=486;
+inline const ignil::Reg FPTOP{kOffFPTOP,8,"FPTOP"}, FPTAG{kOffFPTAG,16,"FPTAG"},
+                        FPCW{kOffFPCW,16,"FPCW"}, FPSW{kOffFPSW,16,"FPSW"};
+[[nodiscard]] inline ignil::Reg physicalFPU(unsigned index) {
+  return {kOffFPU0+index*10,80,"FPU"+std::to_string(index)};
+}
+
 /// The x86-64 register file: RAX..R15 and RIP (8 bytes each), the seven modeled
 /// EFLAGS bits (one byte each), and the two 8-byte halves of XMM0..XMM15. Every 32-bit view in this space has an 8-byte parent, so passing this
 /// to deadStoreEliminate() matches the default assumption - it is here so the
 /// caller never has to rely on that assumption holding.
 [[nodiscard]] inline std::vector<ignil::RegExtent> registerFile() {
   std::vector<ignil::RegExtent> file;
-  file.reserve(17 + 7 + 2 * kNumXMM);
+  file.reserve(17 + 7 + 2 * kNumXMM + 8 + 4);
   for (std::uint32_t off = kOffRAX; off <= kOffRIP; off += 8)
     file.push_back({off, 8}); // RAX..R15, RIP
   for (std::uint32_t off = kOffCF; off <= kOffDF; ++off)
@@ -196,6 +204,9 @@ inline constexpr unsigned kNumXMM = 16;
     file.push_back({kOffXMM0 + i * 8, 8}); // XMM0..XMM15, bits 63:0
   for (unsigned i = 0; i < kNumXMM; ++i)
     file.push_back({kOffXMM0H + i * 8, 8}); // XMM0H..XMM15H, bits 127:64
+  for (unsigned i=0;i<8;++i) file.push_back({kOffFPU0+i*10,10});
+  file.push_back({kOffFPTOP,1});
+  for (auto offset : {kOffFPTAG,kOffFPCW,kOffFPSW}) file.push_back({offset,2});
   return file;
 }
 

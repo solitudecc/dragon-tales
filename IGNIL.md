@@ -32,6 +32,22 @@ by VEX IR (angr/Valgrind), P-CODE (Ghidra), and BAP's BIL.
 
 ---
 
+## Current x87 register state
+
+Physical `FPUi` values occupy 10 bytes each at `400+10*i`, with overlapping
+`FPUiL:i64` and `FPUiH:i16` views. `FPTOP:i8` (480), `FPTAG:i16` (482),
+`FPCW:i16` (484) and `FPSW:i16` (486) are explicit state; logical ST(i)
+selects physical `(TOP+i)&7`. Initialize TOP and SW consistently; TOP is
+used when an instruction composes SW. This is raw extended storage, separate
+from IGNIL's binary32/64 arithmetic. Conversion/rounding expands into integer
+operations, including guard shifts to avoid LLVM poison. Unsupported extended
+arithmetic destroys FPU data/TOP/TAG/SW and is recorded as unlifted.
+
+UNDEF is fresh per execution and width. Unknown floating NaN payloads remain
+quiet NaNs with independent sign/payload bits in both Z3 backends.
+
+---
+
 ## Part 1 — Implementing IGNIL types
 
 ### Step 1 — Create `include/dragon/IGNIL.hpp`

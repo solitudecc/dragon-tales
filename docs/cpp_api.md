@@ -583,6 +583,15 @@ Available groups:
 - 8-bit high: `AH CH DH BH`
 - Flags (8-bit slots): `CF PF AF ZF SF OF DF`
 
+x87 physical registers are available as `x86::physicalFPU(i)` (`i` in 0..7),
+80 bits at `400+10*i`. Low/high views use the same offset at width 64 and
+offset+8 at width 16. `FPTOP` (8 bits), `FPTAG`, `FPCW` and `FPSW` (16 bits)
+are named constants. ST(i) selects physical `(TOP+i)&7`; initialize TOP/TAG/CW/SW
+along with raw data. `registerFile()` includes each complete 10-byte extent.
+Conversions honor CW.RC using integer operations; unsupported extended arithmetic
+remains UNDEF and is listed in `Block::unlifted()`. FPTOP determines composed
+SW TOP bits; hardware traps and FIP/FDP are outside the execution model.
+
 ### AArch64 register constants
 
 `include/dragon/lifters/ignil/arm/armIGNILRegs.hpp` provides the same kind of

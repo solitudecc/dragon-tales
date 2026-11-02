@@ -254,6 +254,9 @@ class X86IGNILLifter {
   // Whether `insn` carries a 0x67 among its legacy prefixes.
   static bool hasAddressSizePrefix(const Instruction &insn);
   bool liftString(const Instruction &insn,ignil::Block &out,std::uint32_t &tmp) const;
+  bool liftX87(const Instruction &insn,ignil::Block &out,std::uint32_t &tmp) const;
+  std::unordered_map<unsigned,unsigned> x87StackIndex_;
+  std::unordered_set<unsigned> mmxRegisters_;
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;

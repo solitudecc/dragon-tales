@@ -517,6 +517,25 @@ dragon.x86.AH    # (1,    8, 'AH')
 
 ---
 
+The x87 descriptors are `FPU0..FPU7` (raw 80 bits), `FPU0L..FPU7L`
+(low 64) and `FPU0H..FPU7H` (high 16), plus `FPTOP`, `FPTAG`, `FPCW`, `FPSW`.
+Use the two views to initialize full extended values without losing bits:
+
+```python
+ex.set_register(dragon.x86.FPU0L, 0x8000000000000001)
+ex.set_register(dragon.x86.FPU0H, 0x3fff)
+ex.set_register(dragon.x86.FPTOP, 0)
+ex.set_register(dragon.x86.FPTAG, 0xfffc)  # R0 valid, other slots empty
+ex.set_register(dragon.x86.FPCW, 0x037f)  # masked exceptions, nearest ties-even
+ex.set_register(dragon.x86.FPSW, 0)
+```
+
+ST(i) means physical `(TOP+i)&7`. Stores and integer conversions honor CW.RC;
+extended arithmetic remains explicitly unlifted. FPTOP is authoritative when
+composing SW. The executor does not deliver hardware traps or model FIP/FDP.
+
+---
+
 ## AArch64 register constants
 
 `dragon.arm` mirrors `dragon.x86` for AArch64 — every register as a 3-tuple

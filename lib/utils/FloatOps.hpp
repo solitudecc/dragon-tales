@@ -39,6 +39,7 @@ inline unsigned floatBits(Opcode op) {
 
 #ifdef DRAGON_WITH_Z3
 #include <z3++.h>
+#include <functional>
 
 namespace dragon::ignil::detail {
 inline z3::expr fpBits(const z3::expr &value, unsigned width) {
@@ -49,7 +50,21 @@ inline z3::expr fpBits(const z3::expr &value, unsigned width) {
 inline z3::sort floatSort(z3::context &ctx, unsigned bits) {
   return bits == 32 ? ctx.fpa_sort(8,24) : ctx.fpa_sort(11,53);
 }
-inline z3::expr floatBinary(Opcode op, const z3::expr &left, const z3::expr &right) {
+using FreshFloatBits=std::function<z3::expr(unsigned)>;
+inline z3::expr ieeeResult(const z3::expr &value,unsigned bits,const FreshFloatBits &fresh={}) {
+  auto &ctx=value.ctx();
+  const auto nan=z3::to_expr(ctx,Z3_mk_fpa_is_nan(ctx,value)).simplify();
+  if (nan.is_false()) return value.mk_to_ieee_bv();
+  // fp.to_ieee_bv(NaN) is one underspecified SMT term for every NaN. Using
+  // that term directly correlates independent payloads and can prove a false
+  // integer XOR=0. Keep the result a quiet NaN with an independent payload.
+  const auto payload=fresh ? fresh(bits) : z3::to_expr(ctx,Z3_mk_fresh_const(ctx,"nan_bits",ctx.bv_sort(bits)));
+  const uint64_t variable=bits==32 ? 0x803fffffull : 0x8007ffffffffffffull;
+  const uint64_t fixed=bits==32 ? 0x7fc00000ull : 0x7ff8000000000000ull;
+  const auto pattern=(payload & ctx.bv_val(variable,bits)) | ctx.bv_val(fixed,bits);
+  return nan.is_true() ? pattern : z3::ite(nan,pattern,value.mk_to_ieee_bv());
+}
+inline z3::expr floatBinary(Opcode op, const z3::expr &left, const z3::expr &right,const FreshFloatBits &fresh={}) {
   auto &ctx = left.ctx();
   const auto bits = floatBits(op);
   auto sort = floatSort(ctx,bits);
@@ -74,9 +89,9 @@ inline z3::expr floatBinary(Opcode op, const z3::expr &left, const z3::expr &rig
     case Opcode::FMUL: case Opcode::FMUL32: result = Z3_mk_fpa_mul(ctx,rne,a,b); break;
     default: result = Z3_mk_fpa_div(ctx,rne,a,b); break;
   }
-  return z3::to_expr(ctx,result).mk_to_ieee_bv();
+  return ieeeResult(z3::to_expr(ctx,result),bits,fresh);
 }
-inline z3::expr floatUnary(Opcode op, const z3::expr &source, unsigned destinationWidth) {
+inline z3::expr floatUnary(Opcode op, const z3::expr &source, unsigned destinationWidth,const FreshFloatBits &fresh={}) {
   auto &ctx = source.ctx();
   const auto bits = floatBits(op);
   auto sort = floatSort(ctx,bits);
@@ -96,16 +111,16 @@ inline z3::expr floatUnary(Opcode op, const z3::expr &source, unsigned destinati
     case Opcode::FPTOUI: case Opcode::FPTOUI32:
       return z3::to_expr(ctx,Z3_mk_fpa_to_ubv(ctx,rtz,value,destinationWidth));
     case Opcode::FPEXT: case Opcode::FPTRUNC:
-      return z3::to_expr(ctx,Z3_mk_fpa_to_fp_float(ctx,rne,value,
-                          floatSort(ctx,op == Opcode::FPEXT ? 64 : 32))).mk_to_ieee_bv();
+      return ieeeResult(z3::to_expr(ctx,Z3_mk_fpa_to_fp_float(ctx,rne,value,
+                          floatSort(ctx,op == Opcode::FPEXT ? 64 : 32))),op == Opcode::FPEXT ? 64 : 32,fresh);
     case Opcode::FSQRT: case Opcode::FSQRT32:
-      return z3::to_expr(ctx,Z3_mk_fpa_sqrt(ctx,rne,value)).mk_to_ieee_bv();
+      return ieeeResult(z3::to_expr(ctx,Z3_mk_fpa_sqrt(ctx,rne,value)),bits,fresh);
     default: break;
   }
   auto rounding = op == Opcode::FFLOOR || op == Opcode::FFLOOR32 ? z3::to_expr(ctx,Z3_mk_fpa_round_toward_negative(ctx))
                   : op == Opcode::FCEIL || op == Opcode::FCEIL32 ? z3::to_expr(ctx,Z3_mk_fpa_round_toward_positive(ctx))
                                                                : rtz;
-  return z3::to_expr(ctx,Z3_mk_fpa_round_to_integral(ctx,rounding,value)).mk_to_ieee_bv();
+  return ieeeResult(z3::to_expr(ctx,Z3_mk_fpa_round_to_integral(ctx,rounding,value)),bits,fresh);
 }
 }
 #endif

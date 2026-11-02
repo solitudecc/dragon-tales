@@ -25,7 +25,7 @@ if(DRAGON_USE_Z3)
         obfush/TestObfushZ3.cpp
         symbolic/TestSymbolicExecutor.cpp
         symbolic/TestSymbolicCFG.cpp)
-    target_sources(dragon_tests PRIVATE lifters/TestIGNILFloat.cpp)
+    target_sources(dragon_tests PRIVATE lifters/TestIGNILFloat.cpp lifters/TestX87.cpp)
 endif()
 
 if(DRAGON_USE_UNICORN AND DRAGON_USE_Z3)

@@ -27,6 +27,7 @@ import sys
 from collections import Counter
 
 import dragon
+import x87_state
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_ARCH_ARM64, UC_MODE_32, UC_MODE_64, \
     UC_MODE_ARM, UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED, \
     UC_HOOK_MEM_FETCH_UNMAPPED, UC_HOOK_MEM_WRITE
@@ -134,10 +135,10 @@ for b in blocks:
     if not insns or any(i.is_call or i.is_jump or i.is_return or i.is_trap or
                         i.mnemonic in ('syscall', 'svc', 'int', 'cpuid', 'rdtsc',
                                        'xgetbv', 'rdrand', 'hlt', 'in', 'out')
-                        or i.mnemonic.startswith(('lock', 'cmpxchg'))
-                        or (arch != A.ARM64 and i.mnemonic.startswith('f')) for i in insns):
-        stats['skipped (call/system/x87)'] += 1
+                        or i.mnemonic.startswith(('lock', 'cmpxchg')) for i in insns):
+        stats['skipped (call/system)'] += 1
         continue
+    has_x87 = uc_arch == UC_ARCH_X86 and any(i.mnemonic.startswith('f') for i in insns)
     code = b''.join(bytes(i.bytes) for i in insns)
     start, end = insns[0].address, insns[-1].address + insns[-1].size
     blk = dis.lift_trace(dis.disassemble(code, start).instructions())
@@ -194,11 +195,15 @@ for b in blocks:
         xv = xmm_values(b * 131 + trial + 7)
         for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
             uc.reg_write(ucx, (vhi << 64) | vlo)
+        fpstate = x87_state.initial(b+trial) if has_x87 else []
+        if fpstate: x87_state.seed_uc(uc,fpstate)
+        finish_x87_flags=x87_state.fix_compare_flags(uc,insns) if has_x87 else lambda:None
         try:
             uc.emu_start(start, end, count=100000 if any(i.mnemonic.startswith('rep') for i in insns) else len(insns), timeout=200000)
         except UcError:
             stats['trials faulted'] += 1
             continue
+        finish_x87_flags()
         if uc.reg_read(X86C.UC_X86_REG_RIP if width == 64 and uc_arch == UC_ARCH_X86 else
                        X86C.UC_X86_REG_EIP if uc_arch == UC_ARCH_X86 else A64C.UC_ARM64_REG_PC) != end:
             stats['trials left early'] += 1
@@ -213,6 +218,7 @@ for b in blocks:
         for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
             ex.set_register(lo, vlo)
             ex.set_register(hi, vhi)
+        x87_state.seed_ex(ex,fpstate)
         for base, data in mapped.items():
             # the executor sees the memory as it was before the block ran
             ex.map_memory(base, data)
@@ -220,7 +226,16 @@ for b in blocks:
         if not res.ok:
             stats['executor stopped early'] += 1
             continue
+        if has_x87 and ex.evaluate(ex.read_register(dragon.x86.FPSW)&0x40)==0x40:
+            stats['x87 stack faults (Unicorn oracle unreliable)'] += 1
+            continue
+        if has_x87 and any(i.mnemonic.startswith('fnstsw') for i in insns) and ex.evaluate(ex.read_register(dragon.x86.FPSW)&0x3f) not in (None,0):
+            stats['x87 status exported (Unicorn oracle incomplete)'] += 1
+            continue
         diffs = []
+        for reg,want in (x87_state.expected(uc) if has_x87 else []):
+            got=ex.concrete_register(reg)
+            if got is not None and got!=want: diffs.append(f'{reg[2]}: dragon={got:#x} unicorn={want:#x}')
         for n, reg, ucr in regs:
             got, want = ex.concrete_register(reg), uc.reg_read(ucr) & MASK
             if got is not None and got != want:

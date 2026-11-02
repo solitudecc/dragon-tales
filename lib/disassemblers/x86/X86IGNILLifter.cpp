@@ -39,6 +39,10 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   // Build LLVM register integer -> ignil::Reg mapping
   for (unsigned i = 0; i < regInfo.getNumRegs(); ++i) {
     std::string_view name = regInfo.getName(i);
+    if (name.size()==3 && name.starts_with("ST") && name[2]>='0' && name[2]<='7')
+      x87StackIndex_.emplace(i,name[2]-'0');
+    if (name.size()==3 && name.starts_with("MM") && name[2]>='0' && name[2]<='7')
+      mmxRegisters_.insert(i);
     auto it = kRegisterTable.find(name);
     if (it != kRegisterTable.end())
       regMap_.emplace(i, it->second);
@@ -1227,6 +1231,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
       break;
     }
   }
+
+  if (liftX87(insn,out,tempId)) return;
 
   // Memory-operand forms lifted through their register form: from here on
   // `mc` is that register form over a scratch register; the epilogue at the

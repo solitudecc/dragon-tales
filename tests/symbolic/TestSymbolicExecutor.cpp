@@ -1070,3 +1070,30 @@ TEST_CASE("SymbolicExecutor - an access through an unconstrained pointer is "
   REQUIRE(r.unresolved[1].address.id() == dst.id());
   REQUIRE(r.unresolved[1].value.id() == r.unresolved[0].value.id());
 }
+
+TEST_CASE("UNDEF values are independent across destinations widths and repeated events", "[ignil][symbolic][undef-fresh]") {
+  using namespace dragon;
+  SECTION("two destinations of one instruction cannot be proved equal") {
+    ignil::Block block{0x1000};
+    block.append({ignil::Opcode::UNDEF,x86::RAX,{},0x1000});
+    block.append({ignil::Opcode::UNDEF,x86::RCX,{},0x1000});
+    block.append({ignil::Opcode::SUB,x86::RDX,{x86::RAX,x86::RCX},0x1000});
+    ignil::SymbolicExecutor executor; REQUIRE(executor.run(block).ok());
+    CHECK(executor.proves(executor.readRegister(x86::RAX)==executor.readRegister(x86::RCX))==false);
+    CHECK_FALSE(executor.evaluate(executor.readRegister(x86::RDX)).has_value());
+  }
+  SECTION("a one-bit unknown cannot constrain a later 64-bit unknown") {
+    ignil::Block block{0x1000};
+    block.append({ignil::Opcode::UNDEF,ignil::Temp{0,1},{},0x1000});
+    block.append({ignil::Opcode::UNDEF,x86::RAX,{},0x1000});
+    ignil::SymbolicExecutor executor; REQUIRE(executor.run(block).ok());
+    CHECK(executor.proves(z3::ult(executor.readRegister(x86::RAX),executor.bv(2,64)))==false);
+  }
+  SECTION("executing the same undefined event again creates a new unknown") {
+    ignil::Block block{0x1000}; block.append({ignil::Opcode::UNDEF,x86::RAX,{},0x1000});
+    ignil::SymbolicExecutor executor; REQUIRE(executor.run(block).ok());
+    const auto previous=executor.readRegister(x86::RAX);
+    REQUIRE(executor.run(block).ok());
+    CHECK(executor.proves(previous==executor.readRegister(x86::RAX))==false);
+  }
+}
