@@ -10,7 +10,7 @@ import os as _os, sys as _sys
 _HERE = _os.path.dirname(_os.path.abspath(__file__))
 _sys.path.insert(0, _os.path.join(_HERE, '..', '..', 'python'))  # dragon.py
 _sys.path.insert(0, _HERE)
-import os, random, sys
+import os, random, re, sys
 from collections import defaultdict
 
 
@@ -28,6 +28,9 @@ A = dragon.arm
 XREGS = [getattr(A, f'X{i}') for i in range(31)]
 UC_X = [globals()[f'UC_ARM64_REG_X{i}'] for i in range(29)] + [UC_ARM64_REG_X29, UC_ARM64_REG_X30]
 FLAGS = [(A.NF, 31), (A.ZF, 30), (A.CF, 29), (A.VF, 28)]
+UC_V = [globals()[f'UC_ARM64_REG_Q{i}'] for i in range(32)]
+VHALVES = [[(getattr(A,f'V{i}')[0]+8*half,64,f'V{i}.{half}')
+            for half in range(2)] for i in range(32)]
 
 asm = dragon.Assembler(dragon.Architecture.ARM64, dragon.Configuration())
 dis = dragon.Disassembler(dragon.Architecture.ARM64, dragon.Configuration())
@@ -36,13 +39,23 @@ dis = dragon.Disassembler(dragon.Architecture.ARM64, dragon.Configuration())
 EDGES = [0, 1, 2, 0x7f, 0x80, 0xff, 0x7fff, 0x8000, 0xffff, 0x7fffffff, 0x80000000,
          0xffffffff, 0x100000000, 0x7fffffffffffffff, 0x8000000000000000,
          0xffffffffffffffff, 0xfffffffffffffffe]
+FLOAT64 = [0,0x8000000000000000,0x3ff0000000000000,0xbfd0000000000000,
+           0x7ff0000000000000,0xfff0000000000000,0x7ff8000000000001,0x7ff0000000000001,
+           1,0xfffffffffffff,0x10000000000000,0x7fefffffffffffff,
+           0x41dfffffffffffff,0x41e0000000000000,0xc1e0000000000000,
+           0x43dfffffffffffff,0x43e0000000000000,0xc3e0000000000000,
+           0x43efffffffffffff,0x43f0000000000000]
+FLOAT32 = [0,0x80000000,0x3f800000,0xbe800000,0x7f800000,0xff800000,
+           0x7fc00001,0x7f800001,1,0x7fffff,0x800000,0x7f7fffff,
+           0x4effffff,0x4f000000,0xcf000000,0x5effffff,0x5f000000,
+           0xdf000000,0x5f7fffff,0x5f800000]
 
 
 def rand64(rng):
     return rng.choice(EDGES) if rng.random() < 0.35 else rng.getrandbits(64)
 
 
-def run_case(text, rng, mem_regs, idx=None):
+def run_case(text, rng, mem_regs, idx=None, trial=0):
     code = bytes(asm.assemble(text))
     assert len(code) == 4, (text, code)
     g = dis.disassemble(code, CODE)
@@ -62,6 +75,17 @@ def run_case(text, rng, mem_regs, idx=None):
     regs[30] = CODE + 0x300      # ret
     sp = BASE + rng.randrange(-0x100, 0x100, 16)
     nzcv = rng.getrandbits(4) << 28
+    vectors = [rng.getrandbits(128) for _ in range(32)]
+    floating = text.startswith(('fadd','fsub','fmul','fdiv','fcmp','fcsel','frint','fcvt','fsqrt','fneg','fabs'))
+    fp_registers = re.findall(r'\b([sd])\d+\b',text)
+    fp_width = 32 if fp_registers and fp_registers[-1] == 's' else 64
+    result_width = 32 if fp_registers and fp_registers[0] == 's' else 64
+    if floating:
+        edges = FLOAT32 if fp_width == 32 else FLOAT64
+        mask = (1 << fp_width)-1
+        for index in range(3):
+            value = edges[(trial+index) % len(edges)] if trial < len(edges) else rng.getrandbits(fp_width)
+            vectors[index] = (vectors[index] & ~mask) | value
     page = bytes(rng.getrandbits(8) for _ in range(DATA_SIZE))
 
     # -- Unicorn
@@ -74,12 +98,14 @@ def run_case(text, rng, mem_regs, idx=None):
         uc.reg_write(UC_X[i], v)
     uc.reg_write(UC_ARM64_REG_SP, sp)
     uc.reg_write(UC_ARM64_REG_NZCV, nzcv)
+    for reg, value in zip(UC_V,vectors): uc.reg_write(reg,value)
     uc.emu_start(CODE, CODE + 4, count=1)
     exp_regs = [uc.reg_read(r) for r in UC_X]
     exp_sp = uc.reg_read(UC_ARM64_REG_SP)
     exp_nzcv = uc.reg_read(UC_ARM64_REG_NZCV)
     exp_pc = uc.reg_read(UC_ARM64_REG_PC)
     exp_page = bytes(uc.mem_read(DATA, DATA_SIZE))
+    exp_vectors = [uc.reg_read(reg) for reg in UC_V]
 
     # -- dragon
     ex = dragon.SymbolicExecutor()
@@ -87,6 +113,9 @@ def run_case(text, rng, mem_regs, idx=None):
         ex.set_register(reg, v)
     ex.set_register(A.SP, sp)
     ex.set_register(A.XZR, 0)
+    for halves, value in zip(VHALVES,vectors):
+        ex.set_register(halves[0],value & ((1<<64)-1))
+        ex.set_register(halves[1],value >> 64)
     for reg, bit in FLAGS:
         ex.set_register(reg, (nzcv >> bit) & 1)
     ex.map_memory(DATA, page)
@@ -118,6 +147,18 @@ def run_case(text, rng, mem_regs, idx=None):
         want = (exp_nzcv >> bit) & 1
         if got is None or (got & 1) != want:
             diffs.append(f'{reg[2]}: dragon={got} unicorn={want}')
+    for i,(halves, value) in enumerate(zip(VHALVES,exp_vectors)):
+        for half,reg in enumerate(halves):
+            got = ex.concrete_register(reg)
+            want = (value >> (half*64)) & ((1<<64)-1)
+            if got != want:
+                nan_result = text.startswith(('fadd','fsub','fmul','fdiv','frint','fsqrt','fcvt d','fcvt s'))
+                if got is None and half == 0 and nan_result:
+                    if result_width == 32 and (want & 0x7f800000) == 0x7f800000 and want & 0x7fffff:
+                        if ex.concrete_register((reg[0]+4,32,'upper32')) == want >> 32: continue
+                    elif result_width == 64 and (want & 0x7ff0000000000000) == 0x7ff0000000000000 and want & ((1<<52)-1):
+                        continue
+                diffs.append(f'V{i}.{half}: dragon={got} unicorn={want:#x}')
     for off in range(0, DATA_SIZE, 8):
         got = ex.concrete_memory(DATA + off, 64)
         want = int.from_bytes(exp_page[off:off + 8], 'little')
@@ -224,24 +265,86 @@ for w in ('x', 'w'):
           (f'madd {w}1, {w}1, {w}1, {w}1', []), (f'sdiv {w}1, {w}1, {w}2', []),
           (f'adds {w}1, {w}1, w2, sxtb #2', []), (f'subs {w}2, {w}1, w2, uxth', [])]
 
+for shape in ('b','h','s','d','q'):
+    size = {'b':1,'h':2,'s':4,'d':8,'q':16}[shape]
+    for op in ('ldr','str'):
+        T += [(f'{op} {shape}0, [x9, #{size}]',[9]),
+              (f'{op} {shape}0, [x9, #-16]!',[9]),
+              (f'{op} {shape}0, [x9], #16',[9]),
+              (f'{op} {shape}0, [x9, x10, lsl #{size.bit_length()-1}]',[9],'x'),
+              (f'{op} {shape}0, [x9, w10, sxtw #{size.bit_length()-1}]',[9],'w')]
+    T += [(f'ldur {shape}0, [x9, #-7]',[9]), (f'stur {shape}0, [x9, #3]',[9])]
+    if shape in ('s','d','q'):
+        for op in ('ldp','stp'):
+            T += [(f'{op} {shape}0, {shape}1, [x9, #{size*2}]',[9]),
+                  (f'{op} {shape}0, {shape}1, [x9, #-32]!',[9]),
+                  (f'{op} {shape}0, {shape}1, [x9], #32',[9])]
+for shape, gpr in (('s','w'),('d','x')):
+    T += [(f'fmov {shape}0, {gpr}1',[]),(f'fmov {gpr}0, {shape}1',[]),
+          (f'fmov {shape}0, {shape}1',[]),(f'fmov {shape}0, {shape}0',[])]
+    T += [(f'fmov {shape}0, #{value}',[]) for value in ('1.0','-2.0','0.125','31.0')]
+T += [('fmov v0.d[1], x1',[]),('fmov x0, v1.d[1]',[])]
+for bits, suffix in ((8,'b'),(16,'h'),(32,'s'),(64,'d')):
+    gpr = 'x' if bits == 64 else 'w'
+    for width in (64,128):
+        if width == bits: continue
+        shape = f'v0.{width//bits}{suffix}'
+        T += [(f'dup {shape}, {gpr}1',[]), (f'dup {shape}, v1.{suffix}[1]',[])]
+    T += [(f'ins v0.{suffix}[1], {gpr}1',[]), (f'ins v0.{suffix}[1], v1.{suffix}[0]',[]),
+          (f'umov {gpr}0, v1.{suffix}[1]',[])]
+for width in (8,16):
+    T += [(f'movi v0.{width}b, #0x81',[])]
+    for op in ('and','orr','eor','bic','orn'):
+        T += [(f'{op} v0.{width}b, v1.{width}b, v2.{width}b',[]),
+              (f'{op} v1.{width}b, v1.{width}b, v1.{width}b',[])]
+    T += [(f'not v0.{width}b, v1.{width}b',[])]
+for shape in ('4h','8h','2s','4s'):
+    for op in ('movi','mvni'):
+        T += [(f'{op} v0.{shape}, #0x81, lsl #8',[])]
+for shape in ('2s','4s'):
+    for op in ('movi','mvni'):
+        for shift in (8,16): T += [(f'{op} v0.{shape}, #0x12, msl #{shift}',[])]
+T += [('movi v0.2d, #0xff00ff00ff00ff00',[]),('movi d0, #0xff00ff00ff00ff00',[])]
+for w in ('x','w'):
+    T += [(f'{op} {w}0, {w}1',[]) for op in ('clz','rbit')]
+    T += [(f'{op} {w}1, {w}1',[]) for op in ('clz','rbit')]
+for shape in ('s','d'):
+    for op in ('fadd','fsub','fmul','fdiv'):
+        T += [(f'{op} {shape}0, {shape}1, {shape}2',[]),
+              (f'{op} {shape}1, {shape}1, {shape}2',[])]
+    for op in ('fneg','fabs','frintm','frintp','frintz','fsqrt'):
+        T += [(f'{op} {shape}0, {shape}1',[])]
+    for op in ('fcmp','fcmpe'):
+        T += [(f'{op} {shape}0, {shape}1',[]),(f'{op} {shape}0, #0.0',[])]
+    for condition in ('eq','ne','lt','le','gt','ge','vs','vc'):
+        T += [(f'fcsel {shape}0, {shape}1, {shape}2, {condition}',[])]
+    for gpr in ('x','w'):
+        for op in ('scvtf','ucvtf'): T += [(f'{op} {shape}0, {gpr}1',[])]
+        for op in ('fcvtzs','fcvtzu'): T += [(f'{op} {gpr}0, {shape}1',[])]
+T += [('fcvt d0, s1',[]),('fcvt s0, d1',[])]
+
 rng = random.Random(1234)
 summary = defaultdict(list)
 for item in T:
     text, mem = item[0], item[1]
+    if _os.environ.get('ONLY') and _os.environ['ONLY'] not in text: continue
     idx = item[2] if len(item) > 2 else None
     kinds = defaultdict(int)
     first = None
-    for _ in range(TRIALS):
+    for trial in range(TRIALS):
         try:
-            kind, info = run_case(text, rng, mem, idx)
+            kind, info = run_case(text, rng, mem, idx, trial)
         except Exception as e:
+            kinds['harness'] += 1
             print("HARNESS", text, e); break
         kinds[kind] += 1
         if kind == 'unlifted':
             break
         if kind == 'diff' and first is None:
             first = info
-    if kinds['diff']:
+    if kinds['harness']:
+        summary['harness'].append(text)
+    elif kinds['diff']:
         diffs, regs, sp, nzcv = first
         summary['diff'].append(text)
         print(f'DIFF  {text:32s} {kinds["diff"]}/{sum(kinds.values())}  e.g. {"; ".join(diffs[:3])}')
@@ -253,3 +356,7 @@ for item in T:
 print(f"\n{len(summary['ok'])} ok, {len(summary['diff'])} diff, "
       f"{len(summary['unlifted'])} unlifted (reported in Block.unlifted): "
       + ', '.join(summary['unlifted']))
+print(f"{len(summary['harness'])} harness errors")
+if summary['harness'] or summary['unlifted'] or any(
+        text not in ('bl #0x40','blr x5','ret') for text in summary['diff']):
+    sys.exit(1)

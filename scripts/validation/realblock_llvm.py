@@ -71,6 +71,10 @@ xmms = []
 if arch in (A.X86_64, A.X86_32):
     xmms = [(i, getattr(dragon.x86, f'XMM{i}'), getattr(dragon.x86, f'XMM{i}H'),
              getattr(X86C, f'UC_X86_REG_XMM{i}')) for i in range(16 if arch == A.X86_64 else 8)]
+elif arch == A.ARM64:
+    xmms = [(i,(getattr(dragon.arm,f'V{i}')[0],64,f'V{i}'),
+             (getattr(dragon.arm,f'V{i}')[0]+8,64,f'V{i}H'),
+             getattr(A64C,f'UC_ARM64_REG_Q{i}')) for i in range(32)]
 def xmm_values(seed):
     xr = random.Random(seed)
     half = lambda: xr.getrandbits(46) if xr.random() < 0.5 else xr.getrandbits(64)
@@ -160,7 +164,8 @@ for b in blocks:
         continue
     if not insns or any(i.is_call or i.is_jump or i.is_return or i.is_trap or
                         i.mnemonic in ('syscall', 'svc', 'int', 'cpuid', 'rdtsc', 'xgetbv', 'rdrand', 'hlt')
-                        or i.mnemonic.startswith(('rep', 'lock', 'f', 'cmpxchg')) for i in insns):
+                        or i.mnemonic.startswith(('rep', 'lock', 'cmpxchg'))
+                        or (arch != A.ARM64 and i.mnemonic.startswith('f')) for i in insns):
         continue
     code = b''.join(bytes(i.bytes) for i in insns)
     start, end = insns[0].address, insns[-1].address + insns[-1].size
@@ -319,7 +324,8 @@ for b in blocks:
             diffs.append(f'{n}: llvm={v & MASK:#x} unicorn={want:#x}')
     for i, lo, hi, ucx in xmms:
         full = uc.reg_read(ucx)
-        for name, reg, want in ((f'XMM{i}', lo, full & (2**64 - 1)), (f'XMM{i}H', hi, full >> 64)):
+        prefix = 'V' if arch == A.ARM64 else 'XMM'
+        for name, reg, want in ((f'{prefix}{i}', lo, full & (2**64 - 1)), (f'{prefix}{i}H', hi, full >> 64)):
             v = got.get(('R', reg[0]))
             if reg[0] not in undef_offsets and v is not None and v != want:
                 diffs.append(f'{name}: llvm={v:#x} unicorn={want:#x}')

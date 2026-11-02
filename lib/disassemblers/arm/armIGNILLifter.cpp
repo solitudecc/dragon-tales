@@ -2,6 +2,7 @@
 
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Instruction.hpp>
+#include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 
 #include <array>
 #include <bit>
@@ -332,6 +333,8 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
           {"REVWr", {I::Rev, 32}},        {"REVXr", {I::Rev, 64}},
           {"REV16Wr", {I::Rev16, 32}},    {"REV16Xr", {I::Rev16, 64}},
           {"REV32Xr", {I::Rev32, 64}},
+          {"CLZWr", {I::Clz, 32}},       {"CLZXr", {I::Clz, 64}},
+          {"RBITWr", {I::Rbit, 32}},     {"RBITXr", {I::Rbit, 64}},
   };
 
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
@@ -345,6 +348,99 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
       extAddSub_.emplace(i, it->second);
     if (auto it = kIntOps.find(name); it != kIntOps.end())
       intOps_.emplace(i, it->second);
+  }
+  // Reuse integer transfer address/writeback handling. The explicit width
+  // override preserves 128-bit Q transfers and their 16-byte scaling.
+  std::unordered_map<std::string,LaneOp> laneNames;
+  std::unordered_map<std::string,FpOp> fpNames;
+  using F = FpKind;
+  for (const auto &[letter,width] : std::array<std::pair<char,ignil::Width>,2>{{{'S',32},{'D',64}}}) {
+    const std::string size(1,letter);
+    for (const auto &[name,kind] : std::array<std::pair<std::string_view,F>,4>{
+             {{"FADD",F::Add},{"FSUB",F::Sub},{"FMUL",F::Mul},{"FDIV",F::Div}}})
+      fpNames.emplace(std::string(name)+size+"rr",FpOp{kind,width});
+    for (const auto &[name,kind] : std::array<std::pair<std::string_view,F>,6>{
+             {{"FNEG",F::Neg},{"FABS",F::Abs},{"FRINTM",F::Floor},
+              {"FRINTP",F::Ceil},{"FRINTZ",F::Trunc},{"FSQRT",F::Sqrt}}})
+      fpNames.emplace(std::string(name)+size+"r",FpOp{kind,width});
+    fpNames.emplace("FCSEL"+size+"rrr",FpOp{F::Select,width});
+    for (const std::string prefix : {"FCMP","FCMPE"}) {
+      fpNames.emplace(prefix+size+"rr",FpOp{F::Compare,width});
+      fpNames.emplace(prefix+size+"ri",FpOp{F::Compare,width,true});
+    }
+    for (const std::string integer : {"W","X"}) {
+      fpNames.emplace("SCVTFU"+integer+size+"ri",FpOp{F::FromSigned,width});
+      fpNames.emplace("UCVTFU"+integer+size+"ri",FpOp{F::FromUnsigned,width});
+      fpNames.emplace("FCVTZSU"+integer+size+"r",FpOp{F::ToSigned,width});
+      fpNames.emplace("FCVTZUU"+integer+size+"r",FpOp{F::ToUnsigned,width});
+    }
+  }
+  fpNames.emplace("FCVTDSr",FpOp{F::Extend,64});
+  fpNames.emplace("FCVTSDr",FpOp{F::Narrow,32});
+  using L = LaneKind;
+  for (ignil::Width width : {64,128}) {
+    for (ignil::Width bits : {8,16,32,64}) {
+      const std::string shape = "v" + std::to_string(width/bits) + "i" + std::to_string(bits);
+      laneNames.emplace("DUP"+shape+"gpr", LaneOp{L::DupGpr,bits,width});
+      laneNames.emplace("DUP"+shape+"lane", LaneOp{L::DupLane,bits,width});
+      if (bits == 16 || bits == 32)
+        for (bool inverted : {false,true}) {
+          const std::string prefix = inverted ? "MVNI" : "MOVI";
+          laneNames.emplace(prefix+shape, LaneOp{L::Immediate,bits,width,inverted});
+          if (bits == 32)
+            laneNames.emplace(prefix+"v"+std::to_string(width/32)+"s_msl", LaneOp{L::ImmediateMsl,bits,width,inverted});
+        }
+    }
+    const std::string bytes = "v" + std::to_string(width/8) + "i8";
+    for (const auto &[name,kind] : std::array<std::pair<std::string_view,L>,6>{
+             {{"AND",L::And},{"ORR",L::Or},{"EOR",L::Xor},{"BIC",L::Bic},{"ORN",L::Orn},{"NOT",L::Not}}})
+      laneNames.emplace(std::string(name)+bytes,LaneOp{kind,8,width});
+    laneNames.emplace(width == 128 ? "MOVIv16b_ns" : "MOVIv8b_ns", LaneOp{L::Immediate,8,width});
+    laneNames.emplace(width == 128 ? "MOVIv2d_ns" : "MOVID", LaneOp{L::Immediate64,64,width});
+  }
+  for (ignil::Width bits : {8,16,32,64}) {
+    const std::string shape = "vi"+std::to_string(bits);
+    laneNames.emplace("INS"+shape+"gpr",LaneOp{L::InsertGpr,bits,128});
+    laneNames.emplace("INS"+shape+"lane",LaneOp{L::InsertLane,bits,128});
+    laneNames.emplace("UMOV"+shape,LaneOp{L::Extract,bits,128});
+  }
+  for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
+    const std::string name = instrInfo.getName(i).str();
+    for (const auto &[letter, width] : std::array<std::pair<char, ignil::Width>, 5>{
+             {{'B',8},{'H',16},{'S',32},{'D',64},{'Q',128}}}) {
+      const std::string size(1, letter);
+      for (bool store : {false,true}) {
+        const std::string prefix = store ? "STR" : "LDR";
+        for (const auto &[suffix, generic] : std::array<std::pair<std::string_view,unsigned>,3>{
+                 {{"ui",store ? opSTRXui_ : opLDRXui_},
+                  {"pre",store ? opSTRXpre_ : opLDRXpre_},
+                  {"post",store ? opSTRXpost_ : opLDRXpost_}}})
+          if (name == prefix + size + std::string(suffix))
+            vectorMemory_.emplace(i, VectorMemory{generic,width,store,false});
+        const std::string pairPrefix = store ? "STP" : "LDP";
+        for (const auto &[suffix, generic] : std::array<std::pair<std::string_view,unsigned>,3>{
+                 {{"i",store ? opSTPXi_ : opLDPXi_},
+                  {"pre",store ? opSTPXpre_ : opLDPXpre_},
+                  {"post",store ? opSTPXpost_ : opLDPXpost_}}})
+          if (name == pairPrefix + size + std::string(suffix))
+            vectorMemory_.emplace(i, VectorMemory{generic,width,store,true});
+        for (const auto &[suffix, form] : std::array<std::pair<std::string_view,A>,2>{
+                 {{"roW",A::RegW},{"roX",A::RegX}}})
+          if (name == prefix + size + std::string(suffix))
+            memForms_.emplace(i, MemForm{width,store,false,form});
+        if (name == (store ? "STUR" : "LDUR") + size + "i")
+          memForms_.emplace(i, MemForm{width,store,false,A::Unscaled});
+      }
+    }
+    if (name == "FMOVDi" || name == "FMOVSi")
+      vectorMoves_.emplace(i, VectorMove::Immediate);
+    if (name == "FMOVXDHighr") vectorMoves_.emplace(i,VectorMove::InsertHigh);
+    if (name == "FMOVDXHighr") vectorMoves_.emplace(i,VectorMove::ExtractHigh);
+    if (name == "FMOVDr" || name == "FMOVSr" || name == "FMOVDXr" ||
+        name == "FMOVXDr" || name == "FMOVSWr" || name == "FMOVWSr")
+      vectorMoves_.emplace(i, VectorMove::Register);
+    if (auto op = laneNames.find(name); op != laneNames.end()) laneOps_.emplace(i,op->second);
+    if (auto op = fpNames.find(name); op != fpNames.end()) fpOps_.emplace(i,op->second);
   }
 }
 
@@ -445,6 +541,21 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
   // variants of the instructions (register, immediate, and S-suffixed).
   else if (auto io = intOps_.find(opc); io != intOps_.end())
     liftIntOp(*mc, io->second, addr, out, tempId);
+  else if (auto move = vectorMoves_.find(opc); move != vectorMoves_.end())
+    liftVectorMove(*mc, move->second, addr, out, tempId);
+  else if (auto lane = laneOps_.find(opc); lane != laneOps_.end())
+    liftLaneOp(*mc, lane->second, addr, out, tempId);
+  else if (auto fp = fpOps_.find(opc); fp != fpOps_.end())
+    liftFpOp(*mc, fp->second, addr, out, tempId);
+  else if (auto memory = vectorMemory_.find(opc); memory != vectorMemory_.end()) {
+    auto generic = *mc;
+    generic.setOpcode(memory->second.genericOpcode);
+    const auto &form = memory->second;
+    if (form.pair && form.store) liftStorePair(generic,addr,out,tempId,form.width);
+    else if (form.pair) liftLoadPair(generic,addr,out,tempId,form.width);
+    else if (form.store) liftStore(generic,addr,out,tempId,form.width);
+    else liftLoad(generic,addr,out,tempId,form.width);
+  }
   else if (extAddSub_.contains(opc))
     liftAddSub(*mc, addr, out, tempId);
   else if (auto mf = memForms_.find(opc); mf != memForms_.end())
@@ -745,6 +856,11 @@ void dragon::arm::ARMIGNILLifter::liftMovn(const llvm::MCInst &mc,
 
 void dragon::arm::ARMIGNILLifter::emitUndef(ignil::Reg dst, std::uint64_t addr,
                                             ignil::Block &out) const {
+  // A scalar FP write also replaces upper vector bits. Leaving those bits
+  // from a previous V value would manufacture knowledge after an unknown op.
+  if (dst.offset >= kOffV0 && dst.offset <= kOffV31 &&
+      (dst.offset-kOffV0) % 16 == 0 && dst.width < 128)
+    dst = ignil::Reg{dst.offset,128,dst.name+"[V]"};
   ignil::Op op;
   op.opcode = ignil::Opcode::UNDEF;
   op.dst = dst;
@@ -1102,7 +1218,243 @@ void dragon::arm::ARMIGNILLifter::liftMemForm(const llvm::MCInst &mc,
     loaded = t;
   }
   if (!isZeroReg(*rt))
-    out.append({ignil::Opcode::COPY, *rt, {loaded}, addr});
+    writeScalar(*rt, loaded, addr, out, tmp);
+}
+
+void dragon::arm::ARMIGNILLifter::writeScalar(const ignil::Reg &reg,
+    ignil::Value value, std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const {
+  if (isZeroReg(reg)) return;
+  if (reg.offset >= kOffV0 && reg.offset <= kOffV31 &&
+      (reg.offset - kOffV0) % 16 == 0 && reg.width < 128) {
+    auto wide = newTemp(tmp, 128);
+    out.append({ignil::Opcode::ZEXT, wide, {std::move(value)}, address});
+    out.append({ignil::Opcode::COPY, ignil::Reg{reg.offset,128,reg.name+"[V]"}, {wide}, address});
+  } else out.append({ignil::Opcode::COPY, reg, {std::move(value)}, address});
+}
+
+void dragon::arm::ARMIGNILLifter::liftVectorMove(const llvm::MCInst &mc, VectorMove kind,
+    std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const {
+  const auto dst = toReg(mc.getOperand(0).getReg());
+  if (!dst) { out.noteUnlifted(address); return; }
+  if (kind == VectorMove::InsertHigh || kind == VectorMove::ExtractHigh) {
+    const auto src=toReg(mc.getOperand(1).getReg());
+    if (!src) { emitUndef(*dst,address,out); out.noteUnlifted(address); return; }
+    if (kind == VectorMove::ExtractHigh) {
+      const auto shifted=newTemp(tmp,128),value=newTemp(tmp,64);
+      out.append({ignil::Opcode::SHR,shifted,{*src,ignil::Const{64,8}},address});
+      out.append({ignil::Opcode::TRUNC,value,{shifted},address});
+      writeScalar(*dst,value,address,out,tmp);
+    } else {
+      const auto wide=newTemp(tmp,128),high=newTemp(tmp,128),low=newTemp(tmp,128),value=newTemp(tmp,128);
+      out.append({ignil::Opcode::ZEXT,wide,{isZeroReg(*src) ? ignil::Value{ignil::Const{0,64}} : ignil::Value{*src}},address});
+      out.append({ignil::Opcode::SHL,high,{wide,ignil::Const{64,8}},address});
+      out.append({ignil::Opcode::AND,low,{*dst,ignil::Const{~0ull,128}},address});
+      out.append({ignil::Opcode::OR,value,{low,high},address});
+      writeScalar(*dst,value,address,out,tmp);
+    }
+    return;
+  }
+  if (kind == VectorMove::Register) {
+    const auto src = toReg(mc.getOperand(1).getReg());
+    if (!src || src->width != dst->width) {
+      emitUndef(*dst, address, out); out.noteUnlifted(address); return;
+    }
+    writeScalar(*dst, *src, address, out, tmp);
+    return;
+  }
+  const uint64_t immediate = mc.getOperand(1).getImm();
+  const unsigned exponentBits = dst->width == 64 ? 11 : 8;
+  const unsigned fractionBits = dst->width == 64 ? 52 : 23;
+  const uint64_t repeated = ((immediate >> 6) & 1) ? ((1ull << (exponentBits-3))-1) : 0;
+  const uint64_t exponent = (((~immediate >> 6) & 1) << (exponentBits-1)) |
+                            (repeated << 2) | ((immediate >> 4) & 3);
+  const uint64_t bits = ((immediate >> 7) << (dst->width-1)) |
+                         (exponent << fractionBits) | ((immediate & 15) << (fractionBits-4));
+  writeScalar(*dst, ignil::Const{bits,dst->width}, address, out, tmp);
+}
+
+void dragon::arm::ARMIGNILLifter::liftLaneOp(const llvm::MCInst &mc, const LaneOp &op,
+    std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const {
+  using O = ignil::Opcode;
+  using L = LaneKind;
+  auto emit = [&](O code, std::vector<ignil::Value> sources, ignil::Width width) {
+    auto result = newTemp(tmp,width);
+    out.append({code,result,std::move(sources),address});
+    return result;
+  };
+  auto constant = [](uint64_t value, ignil::Width width) -> ignil::Value { return ignil::Const{value,width}; };
+  auto resized = [&](ignil::Value value, ignil::Width width) -> ignil::Value {
+    const auto from = ignil::widthOf(value);
+    if (from == width) return value;
+    return emit(from < width ? O::ZEXT : O::TRUNC,{value},width);
+  };
+  auto reg = [&](unsigned index) -> ignil::Value {
+    auto value = toReg(mc.getOperand(index).getReg());
+    if (!value) {
+      out.noteUnlifted(address);
+      return emit(O::UNDEF,{},op.vector);
+    }
+    return !isZeroReg(*value) ? ignil::Value{*value} : constant(0,op.lane);
+  };
+  auto lane = [&](ignil::Value value, unsigned index) -> ignil::Value {
+    if (index) value = emit(O::SHR,{value,constant(index*op.lane,8)},ignil::widthOf(value));
+    return resized(value,op.lane);
+  };
+  const auto destination = toReg(mc.getOperand(0).getReg());
+  if (!destination) { out.noteUnlifted(address); return; }
+  if (op.kind == L::And || op.kind == L::Or || op.kind == L::Xor ||
+      op.kind == L::Bic || op.kind == L::Orn || op.kind == L::Not) {
+    ignil::Value value = reg(1);
+    if (op.kind == L::Not) value = emit(O::NOT,{value},op.vector);
+    else {
+      auto rhs = reg(2);
+      if (op.kind == L::Bic || op.kind == L::Orn) rhs = emit(O::NOT,{rhs},op.vector);
+      const auto code = op.kind == L::And || op.kind == L::Bic ? O::AND
+                        : op.kind == L::Xor ? O::XOR : O::OR;
+      value = emit(code,{value,rhs},op.vector);
+    }
+    writeScalar(*destination,value,address,out,tmp);
+    return;
+  }
+  if (op.kind == L::Extract) {
+    const unsigned index = mc.getOperand(2).getImm();
+    writeScalar(*destination,resized(lane(reg(1),index),destination->width),address,out,tmp);
+    return;
+  }
+  if (op.kind == L::InsertGpr || op.kind == L::InsertLane) {
+    const unsigned index = mc.getOperand(2).getImm();
+    auto value = op.kind == L::InsertGpr ? resized(reg(3),op.lane)
+                                        : lane(reg(3),mc.getOperand(4).getImm());
+    auto wide = resized(value,128);
+    auto mask = resized(constant(maskToWidth(~0ull,op.lane),op.lane),128);
+    if (index) {
+      wide = emit(O::SHL,{wide,constant(index*op.lane,8)},128);
+      mask = emit(O::SHL,{mask,constant(index*op.lane,8)},128);
+    }
+    auto keep = emit(O::AND,{reg(1),emit(O::NOT,{mask},128)},128);
+    writeScalar(*destination,emit(O::OR,{keep,wide},128),address,out,tmp);
+    return;
+  }
+  ignil::Value value = constant(0,op.lane);
+  if (op.kind == L::DupGpr) value = resized(reg(1),op.lane);
+  else if (op.kind == L::DupLane) value = lane(reg(1),mc.getOperand(2).getImm());
+  else {
+    uint64_t immediate = mc.getOperand(1).getImm();
+    if (op.kind == L::Immediate64) {
+      uint64_t expanded = 0;
+      for (unsigned byte=0;byte<8;++byte)
+        if (immediate & (1ull << byte)) expanded |= 0xffull << (8*byte);
+      immediate = expanded;
+    }
+    if (op.kind == L::Immediate && op.lane > 8) immediate <<= mc.getOperand(2).getImm();
+    if (op.kind == L::ImmediateMsl) {
+      const unsigned shift = mc.getOperand(2).getImm() & 255;
+      immediate = (immediate << shift) | ((1ull << shift)-1);
+    }
+    if (op.invert) immediate = ~immediate;
+    value = constant(maskToWidth(immediate,op.lane),op.lane);
+  }
+  auto part = resized(value,op.vector);
+  ignil::Value result = part;
+  for (unsigned index = 1; index < op.vector/op.lane; ++index) {
+    auto shifted = emit(O::SHL,{part,constant(index*op.lane,8)},op.vector);
+    result = emit(O::OR,{result,shifted},op.vector);
+  }
+  writeScalar(*destination,result,address,out,tmp);
+}
+
+void dragon::arm::ARMIGNILLifter::liftFpOp(const llvm::MCInst &mc, const FpOp &op,
+    std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const {
+  using O = ignil::Opcode;
+  using F = FpKind;
+  const auto width = op.width;
+  auto emit = [&](O code, std::vector<ignil::Value> sources, ignil::Width bits) {
+    auto result = newTemp(tmp,bits);
+    out.append({code,result,std::move(sources),address});
+    return result;
+  };
+  auto c = [](uint64_t value, ignil::Width bits) -> ignil::Value { return ignil::Const{value,bits}; };
+  auto reg = [&](unsigned index) -> ignil::Value {
+    const auto value = toReg(mc.getOperand(index).getReg());
+    if (!value) { out.noteUnlifted(address); return emit(O::UNDEF,{},width); }
+    return isZeroReg(*value) ? c(0,value->width) : ignil::Value{*value};
+  };
+  auto select = [&](ignil::Value condition, ignil::Value a, ignil::Value b, ignil::Width bits) {
+    auto mask = emit(O::NEG,{emit(O::ZEXT,{condition},bits)},bits);
+    auto left = emit(O::AND,{a,mask},bits);
+    auto right = emit(O::AND,{b,emit(O::NOT,{mask},bits)},bits);
+    return emit(O::OR,{left,right},bits);
+  };
+  const auto less = width == 32 ? O::FLT32 : O::FLT;
+  const auto unordered = width == 32 ? O::FUNO32 : O::FUNO;
+  if (op.kind == F::Compare) {
+    auto a = reg(0), b = op.zero ? c(0,width) : reg(1);
+    auto n = emit(less,{a,b},1);
+    auto z = emit(width == 32 ? O::FEQ32 : O::FEQ,{a,b},1);
+    auto v = emit(unordered,{a,b},1);
+    auto carry = emit(O::XOR,{n,c(1,1)},1);
+    for (const auto &[destination,value] : std::array<std::pair<ignil::Reg,ignil::Value>,4>{
+             {{regNF_,n},{regZF_,z},{regCF_,carry},{regVF_,v}}})
+      out.append({O::COPY,destination,{value},address});
+    return;
+  }
+  const auto destination = toReg(mc.getOperand(0).getReg());
+  if (!destination) { out.noteUnlifted(address); return; }
+  auto source = reg(1);
+  ignil::Value result = source;
+  switch (op.kind) {
+    case F::Add: case F::Sub: case F::Mul: case F::Div: {
+      const auto code = op.kind == F::Add ? (width == 32 ? O::FADD32 : O::FADD)
+                        : op.kind == F::Sub ? (width == 32 ? O::FSUB32 : O::FSUB)
+                        : op.kind == F::Mul ? (width == 32 ? O::FMUL32 : O::FMUL)
+                                           : (width == 32 ? O::FDIV32 : O::FDIV);
+      result = emit(code,{source,reg(2)},width);
+      break;
+    }
+    case F::Neg: result = emit(O::XOR,{source,c(1ull << (width-1),width)},width); break;
+    case F::Abs: result = emit(O::AND,{source,c((1ull << (width-1))-1,width)},width); break;
+    case F::Floor: case F::Ceil: case F::Trunc: case F::Sqrt: {
+      const auto code = op.kind == F::Floor ? (width == 32 ? O::FFLOOR32 : O::FFLOOR)
+                        : op.kind == F::Ceil ? (width == 32 ? O::FCEIL32 : O::FCEIL)
+                        : op.kind == F::Trunc ? (width == 32 ? O::FTRUNC32 : O::FTRUNC)
+                                             : (width == 32 ? O::FSQRT32 : O::FSQRT);
+      result = emit(code,{source},width);
+      break;
+    }
+    case F::Extend: result = emit(O::FPEXT,{source},64); break;
+    case F::Narrow: result = emit(O::FPTRUNC,{source},32); break;
+    case F::Select:
+      result = select(emitCondition(mc.getOperand(3).getImm(),address,out,tmp),source,reg(2),width);
+      break;
+    case F::FromSigned: case F::FromUnsigned:
+      result = emit(op.kind == F::FromSigned ? (width == 32 ? O::SITOFP32 : O::SITOFP)
+                                           : (width == 32 ? O::UITOFP32 : O::UITOFP),{source},width);
+      break;
+    case F::ToSigned: case F::ToUnsigned: {
+      const bool signedResult = op.kind == F::ToSigned;
+      const unsigned bits = destination->width;
+      const auto exponent = signedResult ? bits-1 : bits;
+      const auto positive = width == 64 ? uint64_t(1023+exponent) << 52
+                                        : uint64_t(127+exponent) << 23;
+      const auto negative = signedResult ? positive | (1ull << (width-1)) : 0;
+      auto nan = emit(unordered,{source,source},1);
+      auto tooLow = emit(less,{source,c(negative,width)},1);
+      auto tooHigh = emit(O::XOR,{emit(less,{source,c(positive,width)},1),c(1,1)},1);
+      auto bad = emit(O::OR,{nan,emit(O::OR,{tooLow,tooHigh},1)},1);
+      // Avoid an invalid LLVM fptosi/fptoui even on the discarded path.
+      auto safe = select(bad,c(0,width),source,width);
+      result = emit(signedResult ? (width == 32 ? O::FPTOSI32 : O::FPTOSI)
+                                 : (width == 32 ? O::FPTOUI32 : O::FPTOUI),{safe},bits);
+      const uint64_t minimum = signedResult ? 1ull << (bits-1) : 0;
+      const uint64_t maximum = signedResult ? (1ull << (bits-1))-1 : maskToWidth(~0ull,bits);
+      result = select(tooLow,c(minimum,bits),result,bits);
+      result = select(tooHigh,c(maximum,bits),result,bits);
+      result = select(nan,c(0,bits),result,bits);
+      break;
+    }
+    default: out.noteUnlifted(address); emitUndef(*destination,address,out); return;
+  }
+  writeScalar(*destination,result,address,out,tmp);
 }
 
 void dragon::arm::ARMIGNILLifter::liftIntOp(const llvm::MCInst &mc,
@@ -1144,6 +1496,31 @@ void dragon::arm::ARMIGNILLifter::liftIntOp(const llvm::MCInst &mc,
   };
 
   switch (op.kind) {
+    case I::Clz: {
+      ignil::Value value = val(1,w), count = c(0,w);
+      for (unsigned bits = w/2; bits; bits /= 2) {
+        auto top = emit(Opc::SHR,{value,c(w-bits,8)},w);
+        auto zero = emit(Opc::EQ,{top,c(0,w)},1);
+        auto shifted = emit(Opc::SHL,{value,c(bits,8)},w);
+        value = select(zero,shifted,value,w);
+        count = emit(Opc::ADD,{count,select(zero,c(bits,w),c(0,w),w)},w);
+      }
+      auto zero = emit(Opc::EQ,{value,c(0,w)},1);
+      writeDst(emit(Opc::ADD,{count,emit(Opc::ZEXT,{zero},w)},w));
+      return;
+    }
+    case I::Rbit: {
+      const auto input = val(1,w);
+      ignil::Value result = c(0,w);
+      for (unsigned bit = 0; bit < w; ++bit) {
+        auto shifted = emit(Opc::SHR,{input,c(bit,8)},w);
+        auto low = emit(Opc::AND,{shifted,c(1,w)},w);
+        auto reversed = emit(Opc::SHL,{low,c(w-1-bit,8)},w);
+        result = emit(Opc::OR,{result,reversed},w);
+      }
+      writeDst(result);
+      return;
+    }
     case I::Bic:
     case I::Bics:
     case I::Orn:
@@ -1621,7 +1998,7 @@ dragon::ignil::Temp dragon::arm::ARMIGNILLifter::emitAddress(
 void dragon::arm::ARMIGNILLifter::liftLoad(const llvm::MCInst &mc,
                                            std::uint64_t addr,
                                            ignil::Block &out,
-                                           std::uint32_t &tmp) const {
+                                           std::uint32_t &tmp, ignil::Width widthOverride) const {
   const unsigned opc = mc.getOpcode();
 
   ignil::Width memWidth;
@@ -1671,6 +2048,10 @@ void dragon::arm::ARMIGNILLifter::liftLoad(const llvm::MCInst &mc,
 
   // *ui: op[0]=dst, op[1]=Rn, op[2]=imm. pre/post: op[0]=writeback(=Rn),
   // op[1]=dst, op[2]=Rn, op[3]=imm.
+  if (widthOverride) {
+    memWidth = widthOverride;
+    if (!isPrePost) scale = widthOverride / 8;
+  }
   const unsigned dstOpIdx = isPrePost ? 1 : 0;
   const unsigned baseOpIdx = isPrePost ? 2 : 1;
 
@@ -1721,7 +2102,7 @@ void dragon::arm::ARMIGNILLifter::liftLoad(const llvm::MCInst &mc,
   }
 
   if (!isZeroReg(*dst))
-    out.append({ignil::Opcode::COPY, *dst, {loaded}, addr});
+    writeScalar(*dst, loaded, addr, out, tmp);
 
   if (isPrePost) {
     auto baseReg = toReg(mc.getOperand(baseOpIdx).getReg());
@@ -1733,7 +2114,7 @@ void dragon::arm::ARMIGNILLifter::liftLoad(const llvm::MCInst &mc,
 void dragon::arm::ARMIGNILLifter::liftStore(const llvm::MCInst &mc,
                                             std::uint64_t addr,
                                             ignil::Block &out,
-                                            std::uint32_t &tmp) const {
+                                            std::uint32_t &tmp, ignil::Width widthOverride) const {
   const unsigned opc = mc.getOpcode();
 
   ignil::Width memWidth;
@@ -1770,6 +2151,10 @@ void dragon::arm::ARMIGNILLifter::liftStore(const llvm::MCInst &mc,
 
   // *ui: op[0]=Rt(src), op[1]=Rn, op[2]=imm. pre/post: op[0]=writeback(=Rn),
   // op[1]=Rt(src), op[2]=Rn, op[3]=imm.
+  if (widthOverride) {
+    memWidth = widthOverride;
+    if (!isPrePost) scale = widthOverride / 8;
+  }
   const unsigned srcOpIdx = isPrePost ? 1 : 0;
   const unsigned baseOpIdx = isPrePost ? 2 : 1;
 
@@ -1823,7 +2208,7 @@ void dragon::arm::ARMIGNILLifter::liftStore(const llvm::MCInst &mc,
 void dragon::arm::ARMIGNILLifter::liftLoadPair(const llvm::MCInst &mc,
                                                std::uint64_t addr,
                                                ignil::Block &out,
-                                               std::uint32_t &tmp) const {
+                                               std::uint32_t &tmp, ignil::Width widthOverride) const {
   const unsigned opc = mc.getOpcode();
 
   ignil::Width elemWidth;
@@ -1858,6 +2243,7 @@ void dragon::arm::ARMIGNILLifter::liftLoadPair(const llvm::MCInst &mc,
     return;
   }
 
+  if (widthOverride) { elemWidth = widthOverride; scale = widthOverride / 8; }
   const bool isPrePost = isPre || isPost;
   // offset form: op[0]=Rt1, op[1]=Rt2, op[2]=Rn, op[3]=imm.
   // pre/post form: op[0]=writeback(=Rn), op[1]=Rt1, op[2]=Rt2, op[3]=Rn,
@@ -1870,6 +2256,11 @@ void dragon::arm::ARMIGNILLifter::liftLoadPair(const llvm::MCInst &mc,
   auto rt2 = toReg(mc.getOperand(rt2Idx).getReg());
   if (!rt1 || !rt2) {
     logger_.log("Error liftLoadPair in addr {:#x} bad Rt1/Rt2", addr);
+    return;
+  }
+  if (widthOverride && rt1->offset == rt2->offset) {
+    emitUndef(ignil::Reg{rt1->offset,128,rt1->name+"[V]"},addr,out);
+    out.noteUnlifted(addr);
     return;
   }
 
@@ -1902,7 +2293,7 @@ void dragon::arm::ARMIGNILLifter::liftLoadPair(const llvm::MCInst &mc,
   auto loaded1 = newTemp(tmp, elemWidth);
   out.append({ignil::Opcode::LOAD, loaded1, {loadAddr}, addr});
   if (!isZeroReg(*rt1))
-    out.append({ignil::Opcode::COPY, *rt1, {loaded1}, addr});
+    writeScalar(*rt1, loaded1, addr, out, tmp);
 
   auto addr2 = newTemp(tmp, ptrWidth);
   out.append({ignil::Opcode::ADD,
@@ -1912,7 +2303,7 @@ void dragon::arm::ARMIGNILLifter::liftLoadPair(const llvm::MCInst &mc,
   auto loaded2 = newTemp(tmp, elemWidth);
   out.append({ignil::Opcode::LOAD, loaded2, {addr2}, addr});
   if (!isZeroReg(*rt2))
-    out.append({ignil::Opcode::COPY, *rt2, {loaded2}, addr});
+    writeScalar(*rt2, loaded2, addr, out, tmp);
 
   if (isPrePost) {
     auto baseReg = toReg(mc.getOperand(baseIdx).getReg());
@@ -1924,7 +2315,7 @@ void dragon::arm::ARMIGNILLifter::liftLoadPair(const llvm::MCInst &mc,
 void dragon::arm::ARMIGNILLifter::liftStorePair(const llvm::MCInst &mc,
                                                 std::uint64_t addr,
                                                 ignil::Block &out,
-                                                std::uint32_t &tmp) const {
+                                                std::uint32_t &tmp, ignil::Width widthOverride) const {
   const unsigned opc = mc.getOpcode();
 
   ignil::Width elemWidth;
@@ -1959,6 +2350,7 @@ void dragon::arm::ARMIGNILLifter::liftStorePair(const llvm::MCInst &mc,
     return;
   }
 
+  if (widthOverride) { elemWidth = widthOverride; scale = widthOverride / 8; }
   const bool isPrePost = isPre || isPost;
   const unsigned rt1Idx = isPrePost ? 1 : 0;
   const unsigned rt2Idx = isPrePost ? 2 : 1;

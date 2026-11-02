@@ -88,6 +88,17 @@ Gotchas:
   movsd-load zero it, scalar arithmetic keeps it, packed ops compute it);
   an unlifted instruction writing XMM/YMM/ZMM clobbers both halves. Bits
   above 127 are not modelled. AArch64 V registers are 16 bytes.
+- A64 scalar B/H/S/D destinations explicitly clear the rest of V128; this
+  includes unknown scalar definitions. Lane insertion preserves other lanes,
+  including FMOV to/from `Vn.D[1]`. Vector load/store widths determine address
+  scaling and writeback, independently of the generic integer MC opcode used
+  to dispatch them. LLVM names unscaled vector forms `LDURBi`/`STURQi`, etc.
+  MOVI D/2D expands imm8 bits into byte masks; MSL forms encode the shift as
+  264/272, whose low byte is the actual shift.
+- A64 scalar FP32/FP64 operations share IGNIL's exact FPA primitives. FCMP
+  uses NZCV=0011 for unordered. FCVTZS/FCVTZU saturate infinities/overflow
+  and return zero for NaN; the source is guarded before integer conversion
+  so the LLVM path cannot evaluate an overflowing FP-to-int into poison.
 - x86 memory-operand forms of shifts/mul/bt*/shld/bsf/xadd/BMI are lifted
   through their register form over a scratch GPR (`MemViaReg`,
   `rewriteThroughScratch`): any fix to a register form fixes its memory form.
@@ -154,7 +165,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | Script | What it checks |
 |---|---|
 | `difftest_x64.py` | ~810 single-instruction x86-64 templates vs Unicorn (regs, flags, memory), incl. memory-operand forms, every cc, high-byte registers, SP operands. Expected: 0 diff; the ~135 unlifted are memory-operand shifts/rotates/mul/bt*/shld (coverage, see backlog). `ONLY=text` filters. |
-| `difftest_a64.py` | ~530 AArch64 templates vs Unicorn. Expected: 3 diffs = CALL/RET abstraction. |
+| `difftest_a64.py` | 835 AArch64 templates, including scalar FP edges, SIMD moves and memory; compares all 32 V registers as 64-bit halves. Expected: 3 diffs = CALL/RET abstraction, 0 unlifted. `ONLY=text` filters. |
 | `difftest_sse.py` | 35 SSE templates vs Unicorn incl. NaN/±0/inf; NaN results counted as "unknown", not wrong. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |

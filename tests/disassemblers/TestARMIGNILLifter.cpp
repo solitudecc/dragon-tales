@@ -2,6 +2,7 @@
 
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 #ifdef DRAGON_WITH_Z3
@@ -10,9 +11,127 @@
 
 #include <algorithm>
 #include <set>
+#include <string>
+#include <tuple>
 #include <vector>
 
 namespace arm = dragon::arm;
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("ARM scalar and SIMD transfers preserve raw bits and clear scalar upper bits",
+          "[arm-vector-data][ignil][arm64]") {
+  using namespace dragon;
+  struct Case { const char *text; uint64_t low, high; };
+  constexpr uint64_t input = 0x7ff0000000000011ull;
+  const Case cases[] = {
+    {"fmov d0, x1",input,0}, {"fmov s0, w1",0x11,0},
+    {"fmov d0, #1.0",0x3ff0000000000000ull,0},
+    {"fmov s0, #-2.0",0xc0000000,0},
+    {"ldr d0, [x9]",0x1122334455667788ull,0},
+    {"ldr q0, [x9]",0x1122334455667788ull,0x99aabbccddeeff00ull},
+    {"ldur b0, [x9, #1]",0x77,0}, {"ldur h0, [x9, #1]",0x6677,0},
+    {"ldur s0, [x9, #3]",0x22334455,0},
+    {"ldur d0, [x9, #1]",0x0011223344556677ull,0},
+    {"ldur q0, [x9]",0x1122334455667788ull,0x99aabbccddeeff00ull},
+    {"movi v0.16b, #0x81",0x8181818181818181ull,0x8181818181818181ull},
+    {"movi d0, #0xff00ff00ff00ff00",0xff00ff00ff00ff00ull,0},
+    {"movi v0.4s, #0x12, msl #8",0x000012ff000012ffull,0x000012ff000012ffull},
+    {"dup v0.2d, x1",input,input},
+    {"ins v0.d[1], x1",0x1234,input},
+    {"fmov v0.d[1], x1",0x1234,input},
+  };
+  const ignil::Reg low{arm::kOffV0,64,"V0.low"}, high{arm::kOffV0+8,64,"V0.high"};
+  Assembler assembler{Architecture::ARM64,Configuration{}};
+  Disassembler dis{Architecture::ARM64,Configuration{}};
+  for (const auto &test : cases) {
+    INFO(test.text);
+    const auto instructions = dis.disassemble(assembler.assemble(test.text),0x1000);
+    REQUIRE(instructions.size() == 1);
+    const auto block = dis.liftTrace(instructions);
+    REQUIRE(block.unlifted().empty());
+    ignil::SymbolicExecutor ex;
+    ex.setRegister(arm::X1,input);
+    ex.setRegister(arm::X9,0x200000);
+    ex.setRegister(low,0x1234);
+    ex.setRegister(high,~0ull);
+    std::vector<uint8_t> data;
+    for (uint64_t value : {0x1122334455667788ull,0x99aabbccddeeff00ull})
+      for (unsigned byte=0; byte<8; ++byte) data.push_back(value >> (byte*8));
+    ex.mapMemory(0x200000,data);
+    REQUIRE(ex.run(block).ok());
+    CHECK(ex.evaluate(ex.readRegister(low)) == test.low);
+    CHECK(ex.evaluate(ex.readRegister(high)) == test.high);
+  }
+}
+
+TEST_CASE("ARM CLZ and RBIT include zero and in-place operands", "[arm-vector-data][ignil][arm64]") {
+  using namespace dragon;
+  Assembler assembler{Architecture::ARM64,Configuration{}};
+  Disassembler dis{Architecture::ARM64,Configuration{}};
+  for (const auto &[instruction, input, expected] :
+       std::vector<std::tuple<std::string,uint64_t,uint64_t>>{
+           {"clz x1, x1",0,64},{"clz x1, x1",1,63},
+           {"clz w1, w1",0xffff000000000001ull,31},
+           {"rbit x1, x1",1,0x8000000000000000ull},
+           {"rbit w1, w1",0xffff000000000002ull,0x40000000},
+           {"fmov x1, v0.d[1]",0x7ff0000000000011ull,0x7ff0000000000011ull}}) {
+    INFO(instruction);
+    const auto block = dis.liftTrace(dis.disassemble(assembler.assemble(instruction),0x1000));
+    REQUIRE(block.unlifted().empty());
+    ignil::SymbolicExecutor ex;
+    ex.setRegister(arm::X1,input);
+    ex.setRegister(ignil::Reg{arm::kOffV0+8,64,"V0.high"},input);
+    REQUIRE(ex.run(block).ok());
+    CHECK(ex.evaluate(ex.readRegister(arm::X1)) == expected);
+  }
+}
+
+TEST_CASE("ARM floating integer conversions saturate and zero NaNs", "[arm-fp][ignil][arm64]") {
+  using namespace dragon;
+  struct Case { const char *text; uint64_t source, expected; };
+  const Case cases[] = {
+    {"fcvtzs x0, d1",0x7ff8000000000001ull,0},
+    {"fcvtzs x0, d1",0x7ff0000000000000ull,0x7fffffffffffffffull},
+    {"fcvtzs x0, d1",0xfff0000000000000ull,0x8000000000000000ull},
+    {"fcvtzs w0, d1",0x41e0000000000000ull,0x7fffffffull},
+    {"fcvtzs w0, d1",0xfff0000000000000ull,0x80000000ull},
+    {"fcvtzu x0, d1",0xfff0000000000000ull,0},
+    {"fcvtzu x0, d1",0x7ff0000000000000ull,~0ull},
+    {"fcvtzs x0, s1",0x7f800000,0x7fffffffffffffffull},
+    {"fcvtzu w0, s1",0x7f800000,0xffffffffull},
+    {"fcvtzu w0, s1",0x7fc00001,0},
+  };
+  Assembler assembler{Architecture::ARM64,Configuration{}};
+  Disassembler dis{Architecture::ARM64,Configuration{}};
+  for (const auto &test : cases) {
+    INFO(test.text);
+    const auto block = dis.liftTrace(dis.disassemble(assembler.assemble(test.text),0x1000));
+    REQUIRE(block.unlifted().empty());
+    ignil::SymbolicExecutor executor;
+    executor.setRegister(ignil::Reg{arm::kOffV1,64,"V1.low"},test.source);
+    REQUIRE(executor.run(block).ok());
+    CHECK(executor.evaluate(executor.readRegister(arm::X0)) == test.expected);
+  }
+}
+
+TEST_CASE("ARM unordered floating comparisons set NZCV", "[arm-fp][ignil][arm64]") {
+  using namespace dragon;
+  Assembler assembler{Architecture::ARM64,Configuration{}};
+  Disassembler dis{Architecture::ARM64,Configuration{}};
+  for (const auto *text : {"fcmp d0, d1","fcmpe d0, #0.0"}) {
+    auto block = dis.liftTrace(dis.disassemble(assembler.assemble(text),0x1000));
+    REQUIRE(block.unlifted().empty());
+    ignil::SymbolicExecutor executor;
+    executor.setRegister(arm::D0,0x7ff8000000000001ull);
+    executor.setRegister(arm::D1,0x3ff0000000000000ull);
+    REQUIRE(executor.run(block).ok());
+    CHECK(executor.evaluate(executor.readRegister(arm::NF)) == 0);
+    CHECK(executor.evaluate(executor.readRegister(arm::ZF)) == 0);
+    CHECK(executor.evaluate(executor.readRegister(arm::CF)) == 1);
+    CHECK(executor.evaluate(executor.readRegister(arm::VF)) == 1);
+  }
+}
+#endif
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -297,10 +416,10 @@ TEST_CASE("ARM IGNIL lifting - unlifted AArch64 instruction clobbers its defs",
           "[ignil][arm64]") {
   auto dis = makeDisassembler(dragon::Architecture::ARM64);
 
-  SECTION("clz: X0 becomes UNDEF and the address is reported") {
+  SECTION("cls: X0 becomes UNDEF and the address is reported") {
     const std::vector<std::uint8_t> bytes = {
             0x60, 0x00, 0x80, 0xd2, // mov x0, #3      @ 0x1000
-            0x20, 0x10, 0xc0, 0xda, // clz x0, x1      @ 0x1004
+            0x20, 0x14, 0xc0, 0xda, // cls x0, x1      @ 0x1004
             0xc0, 0x03, 0x5f, 0xd6, // ret             @ 0x1008
     };
     auto g = makeGraph(dragon::Architecture::ARM64);

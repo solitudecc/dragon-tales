@@ -82,6 +82,25 @@ class ARMIGNILLifter {
   };
   std::unordered_map<unsigned, MemForm> memForms_;
 
+  struct VectorMemory {
+    unsigned genericOpcode;
+    ignil::Width width;
+    bool store;
+    bool pair;
+  };
+  std::unordered_map<unsigned, VectorMemory> vectorMemory_;
+  enum class VectorMove : std::uint8_t { Register, Immediate, InsertHigh, ExtractHigh };
+  std::unordered_map<unsigned, VectorMove> vectorMoves_;
+  enum class LaneKind : std::uint8_t { Immediate, ImmediateMsl, Immediate64,
+    DupGpr, DupLane, InsertGpr, InsertLane, Extract, And, Or, Xor, Bic, Orn, Not };
+  struct LaneOp { LaneKind kind; ignil::Width lane; ignil::Width vector; bool invert = false; };
+  std::unordered_map<unsigned,LaneOp> laneOps_;
+  enum class FpKind : std::uint8_t { Add, Sub, Mul, Div, Neg, Abs, Compare,
+    FromSigned, FromUnsigned, ToSigned, ToUnsigned, Select, Floor, Ceil, Trunc,
+    Sqrt, Extend, Narrow };
+  struct FpOp { FpKind kind; ignil::Width width; bool zero = false; };
+  std::unordered_map<unsigned,FpOp> fpOps_;
+
   // Extended-register ADD/SUB (*rx, *rx64), by opcode.
   struct ExtAddSub {
     bool isSub;
@@ -103,6 +122,7 @@ class ARMIGNILLifter {
     Udiv, Sdiv,
     Extr,                             // (Rn:Rm) >> lsb
     Rev, Rev16, Rev32,                // byte reversal
+    Clz, Rbit,
   };
   struct IntOp {
     IntKind kind;
@@ -133,13 +153,21 @@ class ARMIGNILLifter {
   void liftLogic(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                  std::uint32_t &tmp) const;
   void liftLoad(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
-                std::uint32_t &tmp) const;
+                std::uint32_t &tmp, ignil::Width widthOverride = 0) const;
   void liftStore(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
-                 std::uint32_t &tmp) const;
+                 std::uint32_t &tmp, ignil::Width widthOverride = 0) const;
   void liftLoadPair(const llvm::MCInst &mc, std::uint64_t addr,
-                    ignil::Block &out, std::uint32_t &tmp) const;
+                    ignil::Block &out, std::uint32_t &tmp, ignil::Width widthOverride = 0) const;
   void liftStorePair(const llvm::MCInst &mc, std::uint64_t addr,
-                     ignil::Block &out, std::uint32_t &tmp) const;
+                     ignil::Block &out, std::uint32_t &tmp, ignil::Width widthOverride = 0) const;
+  void writeScalar(const ignil::Reg &reg, ignil::Value value,
+                   std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const;
+  void liftVectorMove(const llvm::MCInst &mc, VectorMove kind,
+                      std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const;
+  void liftLaneOp(const llvm::MCInst &mc, const LaneOp &op,
+                  std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const;
+  void liftFpOp(const llvm::MCInst &mc, const FpOp &op,
+                std::uint64_t address, ignil::Block &out, std::uint32_t &tmp) const;
   void liftAdr(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftBcc(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
