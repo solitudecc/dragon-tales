@@ -331,6 +331,9 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 ## 6. Backlog (suggested order)
 
+Known LLVM lowering gaps at call boundaries and out-of-function control flow, with
+the implementation plan: `docs/llvm-control-flow.md`.
+
 Ready-to-paste task prompts for other agents (shared preamble + one prompt per
 item, with a status table to update when a task is done): `docs/agent-tasks.md`.
 

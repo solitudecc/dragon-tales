@@ -12,6 +12,7 @@
 | 5 | 剥离符号的二进制的函数入口识别 | 已完成（2026-11-02；412/412 ctest；300 次 fuzz 无崩溃） |
 | 6 | 切片器的栈内存跟踪 | 已完成（2026-11-02；407/407 ctest；跳转表 wrong=0） |
 | 7 | C shim / Python 暴露 AnalysisHints、callingConvention | 已完成（2026-11-02；403/403 ctest） |
+| 8 | LLVM Lift：跨函数控制流与调用边界（详见 docs/llvm-control-flow.md） | 待做 |
 
 **分配建议**
 - 可以并行：任务 1、2、5、6、7 基本互不冲突。
@@ -239,3 +240,23 @@ sqlite i686 里 fld/fstp/fxch/fldcw 等有约 2000 处。
 - 在 tests/python/ 下加测试，并在 tests/CMakeLists.txt 里注册
   （参考 test_robustness.py 的注册方式，要设置 DRAGON_C_LIB 环境变量）。
 ```
+
+---
+
+## 任务 8：LLVM Lift 的跨函数控制流与调用边界
+
+```
+任务：修复 LLVM 降级层（lib/LLVMLifter.cpp）在函数级控制流和调用边界上的问题，
+按 docs/llvm-control-flow.md 的六步计划逐步实施，每步单独提交。
+
+先完整阅读 docs/llvm-control-flow.md：里面有问题描述、两个现成的失败用例（A：调用结果被忽略；
+B：条件尾调用被降成 unreachable）、main 上已有的基础（LoadedImage::importSlots()、
+x86 ret imm16 记录在 IGNIL RET 的 aux）、每一步的目标和验收要求。
+
+要点：
+- 第 1 步先写出状态和控制流契约（写进文档），再动代码。
+- 函数级执行对拍框架从第 1 步就建立最小版本，每一步先加失败用例再修复。
+- 默认保守，不假设被调函数遵守调用约定；给外部函数命名不等于实现了它的语义。
+- toy-vm 测试用 LLVM JIT 执行 liftBlock 的结果，CALL/RET 语义变化后要重点回归。
+```
+
