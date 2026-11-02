@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -179,6 +180,14 @@ class LoadedImage {
   /// Defined global symbols the image exports.
   [[nodiscard]] std::vector<const Symbol *> exports() const;
 
+  /// Import slots: the address of each pointer cell the dynamic loader fills
+  /// with an imported function's address, and that function's name. PE: the
+  /// IAT entries; ELF: the targets of JUMP_SLOT / GLOB_DAT relocations (the
+  /// GOT cells PLT stubs and `call [rip+GOT]` jump through).
+  [[nodiscard]] const std::map<std::uint64_t, std::string> &importSlots() const {
+    return importSlots_;
+  }
+
   /// The function-typed symbol defined exactly at `addr`, or nullptr. Used to
   /// seed and name recovered functions.
   [[nodiscard]] const Symbol *functionAt(std::uint64_t addr) const;
@@ -203,6 +212,7 @@ class LoadedImage {
   std::vector<Section> segments_;
   std::vector<Symbol> symbols_;
   std::vector<std::uint64_t> functionEntries_;
+  std::map<std::uint64_t, std::string> importSlots_;
 };
 
 } // namespace dragon::loader

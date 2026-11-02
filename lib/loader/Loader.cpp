@@ -114,6 +114,100 @@ void collectSegments(const ObjectFile *obj, std::vector<Section> &out) {
     collectSegments(e->getELFFile(), out);
 }
 
+/// JUMP_SLOT / GLOB_DAT relocations of the allocated (dynamic) relocation
+/// sections whose symbol table is .dynsym: GOT cell -> imported name. Only
+/// ELFFile's checked accessors are used - ObjectFile::
+/// dynamic_relocation_sections() walks .dynamic until DT_NULL without a
+/// bound and reads past the end of a damaged file.
+bool isImportSlotType(unsigned machine, std::uint32_t type) {
+  switch (machine) {
+    case ELF::EM_X86_64:
+      return type == ELF::R_X86_64_JUMP_SLOT || type == ELF::R_X86_64_GLOB_DAT;
+    case ELF::EM_386:
+      return type == ELF::R_386_JUMP_SLOT || type == ELF::R_386_GLOB_DAT;
+    case ELF::EM_AARCH64:
+      return type == ELF::R_AARCH64_JUMP_SLOT || type == ELF::R_AARCH64_GLOB_DAT;
+    case ELF::EM_ARM:
+      return type == ELF::R_ARM_JUMP_SLOT || type == ELF::R_ARM_GLOB_DAT;
+    default:
+      return false;
+  }
+}
+
+template <class ELFT>
+void collectImportSlots(const ELFFile<ELFT> &file,
+                        std::map<std::uint64_t, std::string> &out) {
+  auto sections = file.sections();
+  if (!sections) {
+    consumeError(sections.takeError());
+    return;
+  }
+  const unsigned machine = file.getHeader().e_machine;
+  for (const auto &sec: *sections) {
+    if ((sec.sh_type != ELF::SHT_RELA && sec.sh_type != ELF::SHT_REL) ||
+        !(sec.sh_flags & ELF::SHF_ALLOC))
+      continue;
+    auto symtab = file.getSection(sec.sh_link);
+    if (!symtab) {
+      consumeError(symtab.takeError());
+      continue;
+    }
+    if ((*symtab)->sh_type != ELF::SHT_DYNSYM)
+      continue;
+    auto strtab = file.getStringTableForSymtab(**symtab);
+    auto symbols = file.symbols(*symtab);
+    if (!strtab || !symbols) {
+      if (!strtab)
+        consumeError(strtab.takeError());
+      if (!symbols)
+        consumeError(symbols.takeError());
+      continue;
+    }
+    auto add = [&](std::uint64_t slot, std::uint32_t symIndex, std::uint32_t type) {
+      if (!isImportSlotType(machine, type) || symIndex == 0 ||
+          symIndex >= symbols->size())
+        return;
+      auto name = (*symbols)[symIndex].getName(*strtab);
+      if (!name) {
+        consumeError(name.takeError());
+        return;
+      }
+      if (!name->empty())
+        out.emplace(slot, name->str());
+    };
+    const bool mips = file.isMips64EL();
+    if (sec.sh_type == ELF::SHT_RELA) {
+      auto relas = file.relas(sec);
+      if (!relas) {
+        consumeError(relas.takeError());
+        continue;
+      }
+      for (const auto &r: *relas)
+        add(r.r_offset, r.getSymbol(mips), r.getType(mips));
+    } else {
+      auto rels = file.rels(sec);
+      if (!rels) {
+        consumeError(rels.takeError());
+        continue;
+      }
+      for (const auto &r: *rels)
+        add(r.r_offset, r.getSymbol(mips), r.getType(mips));
+    }
+  }
+}
+
+void collectImportSlots(const ObjectFile *obj,
+                        std::map<std::uint64_t, std::string> &out) {
+  if (const auto *e = dyn_cast<ELF64LEObjectFile>(obj))
+    collectImportSlots(e->getELFFile(), out);
+  else if (const auto *e = dyn_cast<ELF64BEObjectFile>(obj))
+    collectImportSlots(e->getELFFile(), out);
+  else if (const auto *e = dyn_cast<ELF32LEObjectFile>(obj))
+    collectImportSlots(e->getELFFile(), out);
+  else if (const auto *e = dyn_cast<ELF32BEObjectFile>(obj))
+    collectImportSlots(e->getELFFile(), out);
+}
+
 /// Read `size` bytes at `addr` from one section/segment, zero-filling past its
 /// file bytes. nullopt if the run does not fit inside it.
 std::optional<std::vector<std::uint8_t>>
@@ -402,6 +496,7 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
           if (out.name.empty())
             continue;
         }
+        image.importSlots_.emplace(out.address, out.name);
         image.symbols_.push_back(std::move(out));
       }
     }
@@ -445,6 +540,11 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
       image.symbols_.push_back(std::move(out));
     }
   }
+
+  // ELF import slots: the GOT cells named by JUMP_SLOT / GLOB_DAT dynamic
+  // relocations (what a PLT stub or `call [rip+GOT]` loads its target from).
+  if (elf)
+    collectImportSlots(obj, image.importSlots_);
 
   image.functionEntries_ = detail::collectFunctionEntries(*obj, image);
   return image;

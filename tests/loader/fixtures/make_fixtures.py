@@ -190,6 +190,60 @@ def build_elf_dynsym_only():
     return bytes(img), text_addr
 
 
+def build_elf_import_slots():
+    """ELF64 x86-64 with .dynsym and an allocated .rela.plt naming two import
+    slots: puts through R_X86_64_JUMP_SLOT and __gmon_start__ through
+    R_X86_64_GLOB_DAT. An R_X86_64_RELATIVE (no symbol) is not a slot."""
+    base = 0x400000
+    got = base + 0x800
+    ehdr_size, phdr_size, shdr_size, sym_size, rela_size = 64, 56, 64, 24, 24
+    off_text = ehdr_size + phdr_size
+    text_addr = base + off_text
+    dynstr = b"\x00puts\x00__gmon_start__\x00"
+    dynsym = struct.pack("<IBBHQQ", 0, 0, 0, 0, 0, 0)
+    dynsym += struct.pack("<IBBHQQ", dynstr.index(b"puts\x00"), 0x12, 0, 0, 0, 0)
+    dynsym += struct.pack("<IBBHQQ", dynstr.index(b"__gmon_start__\x00"), 0x20, 0, 0, 0, 0)
+    rela = struct.pack("<QQq", got + 0x18, (1 << 32) | 7, 0)   # JUMP_SLOT puts
+    rela += struct.pack("<QQq", got + 0x20, (2 << 32) | 6, 0)  # GLOB_DAT __gmon_start__
+    rela += struct.pack("<QQq", got + 0x28, 8, text_addr)      # RELATIVE: no symbol
+    shstrtab = b"\x00.text\x00.dynsym\x00.dynstr\x00.rela.plt\x00.shstrtab\x00"
+    off_dynsym = align(off_text + len(TEXT), 8)
+    off_dynstr = off_dynsym + len(dynsym)
+    off_rela = align(off_dynstr + len(dynstr), 8)
+    off_shstr = off_rela + len(rela)
+    off_shdr = align(off_shstr + len(shstrtab), 8)
+    total = off_shdr + 6 * shdr_size
+
+    ehdr = b"\x7fELF" + bytes([2, 1, 1, 0]) + b"\x00" * 8
+    ehdr += struct.pack("<HHIQQQIHHHHHH", 3, 62, 1, text_addr, ehdr_size, off_shdr,
+                        0, ehdr_size, phdr_size, 1, shdr_size, 6, 5)
+    phdr = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base, off_shdr, off_shdr, 0x1000)
+
+    def shdr(name, typ, flags, addr, off, size, link, info, align_, entsize):
+        return struct.pack("<IIQQQQIIQQ", name, typ, flags, addr, off, size,
+                           link, info, align_, entsize)
+    sh = shdr(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    sh += shdr(shstrtab.index(b".text\x00"), 1, 6, text_addr, off_text, len(TEXT), 0, 0, 16, 0)
+    sh += shdr(shstrtab.index(b".dynsym\x00"), 11, 2, base + off_dynsym, off_dynsym,
+               len(dynsym), 3, 1, 8, sym_size)
+    sh += shdr(shstrtab.index(b".dynstr\x00"), 3, 2, base + off_dynstr, off_dynstr,
+               len(dynstr), 0, 0, 1, 0)
+    sh += shdr(shstrtab.index(b".rela.plt\x00"), 4, 0x42, base + off_rela, off_rela,
+               len(rela), 2, 0, 8, rela_size)
+    sh += shdr(shstrtab.index(b".shstrtab\x00"), 3, 0, 0, off_shstr, len(shstrtab), 0, 0, 1, 0)
+
+    img = bytearray(total)
+    img[0:len(ehdr)] = ehdr
+    img[ehdr_size:ehdr_size + len(phdr)] = phdr
+    img[off_text:off_text + len(TEXT)] = TEXT
+    img[off_dynsym:off_dynsym + len(dynsym)] = dynsym
+    img[off_dynstr:off_dynstr + len(dynstr)] = dynstr
+    img[off_rela:off_rela + len(rela)] = rela
+    img[off_shstr:off_shstr + len(shstrtab)] = shstrtab
+    img[off_shdr:off_shdr + len(sh)] = sh
+    return bytes(img), got
+
+
 def build_pe_import_export():
     """PE32+ with an import directory (KERNEL32.dll: GetTickCount by name,
     ordinal 5) and an export directory (exported_fn, plus ordinal-only #2),
@@ -356,6 +410,11 @@ def main():
         f.write('\n// Stripped images with unwind/initializer/relocation/TLS metadata.\n')
         f.write(emit('kMetadataElfX64', build_elf_metadata()))
         f.write(emit('kMetadataPeX64', build_pe_metadata()))
+        slots_elf, slots_got = build_elf_import_slots()
+        f.write("\n// ELF with a .rela.plt: JUMP_SLOT puts at GOT+0x18, GLOB_DAT __gmon_start__ at\n")
+        f.write("// GOT+0x20, RELATIVE (not a slot) at GOT+0x28.\n")
+        f.write(f"static constexpr unsigned long long kSlotsElfX64Got = 0x{slots_got:x}ULL;\n")
+        f.write(emit("kSlotsElfX64", slots_elf))
     print(f"ELF: {len(elf)} bytes, entry 0x{elf_entry:x}")
     print(f"PE:  {len(pe)} bytes, entry 0x{pe_entry:x}")
 

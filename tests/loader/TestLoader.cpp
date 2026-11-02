@@ -4,6 +4,7 @@
 #include <dragon/loader/Loader.hpp>
 
 #include <algorithm>
+#include <cstring>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -441,4 +442,57 @@ TEST_CASE("Loader - imports are read from the IAT without a lookup table",
   auto img = LoadedImage::loadBytes(pe);
   REQUIRE(img.has_value());
   CHECK(img->imports().size() == 2);
+}
+
+// -----------------------------------------------------------------------
+// Import slots: the pointer cells the dynamic loader fills with imported
+// function addresses, by name. They let a client name `call [rip+GOT]`,
+// `call [__imp_X]` and PLT/import thunks after the function they reach.
+// -----------------------------------------------------------------------
+
+TEST_CASE("Loader - ELF import slots come from JUMP_SLOT and GLOB_DAT",
+          "[loader][elf][imports]") {
+  auto img = LoadedImage::loadBytes(toVec(kSlotsElfX64, sizeof(kSlotsElfX64)));
+  REQUIRE(img.has_value());
+  const auto &slots = img->importSlots();
+  CHECK(slots.size() == 2);
+  REQUIRE(slots.contains(kSlotsElfX64Got + 0x18));
+  CHECK(slots.at(kSlotsElfX64Got + 0x18) == "puts");
+  REQUIRE(slots.contains(kSlotsElfX64Got + 0x20));
+  CHECK(slots.at(kSlotsElfX64Got + 0x20) == "__gmon_start__");
+  CHECK_FALSE(slots.contains(kSlotsElfX64Got + 0x28)); // RELATIVE: no symbol
+}
+
+TEST_CASE("Loader - PE import slots are the IAT entries",
+          "[loader][pe][imports]") {
+  auto img = LoadedImage::loadBytes(toVec(kImpExpPeX64, sizeof(kImpExpPeX64)));
+  REQUIRE(img.has_value());
+  const auto &slots = img->importSlots();
+  const auto imports = img->imports();
+  CHECK(slots.size() == imports.size());
+  for (const Symbol *s: imports) {
+    INFO(s->name);
+    REQUIRE(slots.contains(s->address));
+    CHECK(slots.at(s->address) == s->name);
+  }
+  CHECK(slots.at(kImpExpPeX64Base + 0x2060) == "GetTickCount");
+}
+
+TEST_CASE("Loader - a damaged relocation section yields no slots, no crash",
+          "[loader][elf][imports][robustness]") {
+  std::vector<std::uint8_t> v = toVec(kSlotsElfX64, sizeof(kSlotsElfX64));
+  std::uint64_t shoff = 0;
+  std::memcpy(&shoff, v.data() + 0x28, 8);
+  const std::size_t rela = shoff + 4 * 64; // section 4 = .rela.plt
+  SECTION("size far past the end of the file") {
+    const std::uint64_t huge = 0x7fffffff0ULL;
+    std::memcpy(v.data() + rela + 32, &huge, 8);
+  }
+  SECTION("symbol table link out of range") {
+    const std::uint32_t badLink = 77;
+    std::memcpy(v.data() + rela + 40, &badLink, 4);
+  }
+  auto img = LoadedImage::loadBytes(v);
+  REQUIRE(img.has_value());
+  CHECK(img->importSlots().empty());
 }
