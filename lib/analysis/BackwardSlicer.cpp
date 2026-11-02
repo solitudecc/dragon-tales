@@ -222,7 +222,96 @@ bool provablyDisjoint(const slice::Expr &load, unsigned loadBytes,
          sd <= -static_cast<std::int64_t>(storeBytes);
 }
 
+bool sameAddress(const slice::Expr &a, const slice::Expr &b) {
+  if (slice::sameValue(a, b)) return true;
+  auto left = splitAddress(a), right = splitAddress(b);
+  if (!left || !right || left->width != right->width ||
+      (left->base == nullptr) != (right->base == nullptr))
+    return false;
+  const auto mask = lowMask(left->width);
+  return (left->offset & mask) == (right->offset & mask) &&
+         (!left->base || slice::sameValue(*left->base, *right->base));
+}
+
 } // namespace
+
+slice::Expr BackwardSlicer::addressOnEdge(
+        const slice::Expr &address, const ignil::Block &block,
+        const ignil::Block &predecessor, const Graph &graph,
+        PredMap &preds, int depth) const {
+  if (--preds.memoryBudget < 0)
+    return slice::Expr{slice::Undef{64}};
+  return address.visit([&](const auto &node) -> slice::Expr {
+    using T = std::decay_t<decltype(node)>;
+    if constexpr (std::is_same_v<T, slice::SymReg>) {
+      if (node.origin == slice::ValueOrigin{block.startAddress(), -1, depth})
+        return sliceReg(node.reg, predecessor, predecessor.ops().size(),
+                        graph, preds, depth - 1);
+      return slice::Expr{node};
+    } else if constexpr (std::is_same_v<T, slice::BinOp>) {
+      if (!node.left || !node.right) return slice::Expr{slice::Undef{64}};
+      return mkBin(node.op, addressOnEdge(*node.left, block, predecessor, graph, preds, depth),
+                   addressOnEdge(*node.right, block, predecessor, graph, preds, depth));
+    } else if constexpr (std::is_same_v<T, slice::UnaryOp>) {
+      if (!node.operand) return slice::Expr{slice::Undef{64}};
+      return slice::Expr{slice::UnaryOp{node.op,
+          std::make_shared<slice::Expr>(addressOnEdge(*node.operand, block, predecessor, graph, preds, depth)),
+          node.resultWidth}};
+    } else {
+      // A loaded pointer is the value of its original read, not a fresh
+      // read on this edge. Keep its producing event/snapshot intact.
+      return slice::Expr{node};
+    }
+  });
+}
+
+std::optional<slice::Expr> BackwardSlicer::storedValue(
+        const ignil::Block &block, int beforeIdx, const Graph &graph,
+        PredMap &preds, int depth, const slice::Expr &address,
+        ignil::Width width, std::set<std::uint64_t> &active) const {
+  if (preds.memoryBudget <= 0 || !block.unlifted().empty() ||
+      !active.insert(block.startAddress()).second)
+    return std::nullopt;
+  // Active is per traversal path: a shared predecessor on two arms is not
+  // itself a cycle. Nested load queries use their own active set and share
+  // the total memory budget.
+  struct Pop {
+    std::set<std::uint64_t> &set;
+    std::uint64_t address;
+    ~Pop() { set.erase(address); }
+  } pop{active, block.startAddress()};
+  for (int i = beforeIdx - 1; i >= 0; --i) {
+    if (--preds.memoryBudget < 0) return std::nullopt;
+    const auto &op = block.ops()[i];
+    if (op.opcode == ignil::Opcode::CALL) return std::nullopt;
+    if (op.opcode != ignil::Opcode::STORE) continue;
+    if (op.srcs.size() != 2) return std::nullopt;
+    auto storeAddress = sliceValue(op.srcs[0], block, i, graph, preds, depth);
+    const auto storeWidth = ignil::widthOf(op.srcs[1]);
+    if (storeWidth == width && sameAddress(address, storeAddress))
+      return sliceValue(op.srcs[1], block, i, graph, preds, depth);
+    if (!provablyDisjoint(address, byteCount(width), storeAddress, byteCount(storeWidth)))
+      return std::nullopt;
+  }
+  if (depth <= 0) return std::nullopt;
+  const auto incoming = preds.preds->find(block.startAddress());
+  if (incoming == preds.preds->end() || incoming->second.empty())
+    return std::nullopt;
+  std::optional<slice::Expr> merged;
+  for (auto from : incoming->second) {
+    const auto *predecessor = graph.getIGNILBlock(from);
+    if (!predecessor || --preds.memoryBudget < 0) return std::nullopt;
+    auto edgeAddress = addressOnEdge(address, block, *predecessor, graph, preds, depth);
+    auto value = storedValue(*predecessor, predecessor->ops().size(), graph,
+                             preds, depth - 1, edgeAddress, width, active);
+    if (!value) return std::nullopt;
+    if (incoming->second.size() > 1 && !isConstantOnly(*value))
+      return std::nullopt;
+    if (merged && !slice::sameValue(*merged, *value)) return std::nullopt;
+    merged = std::move(value);
+  }
+  return merged;
+}
 
 std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
         const ignil::Block &start, int beforeIdx, const Graph &graph,
@@ -534,6 +623,9 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
     case Opc::LOAD: {
       auto addrExpr = src(0);
       ignil::Width w = op.dst ? ignil::widthOf(*op.dst) : 64;
+      std::set<std::uint64_t> active;
+      if (auto value = storedValue(block, opIdx, graph, preds, depth, addrExpr, w, active))
+        return std::move(*value);
       auto state = memoryState(block, opIdx, graph, preds, depth, addrExpr, w);
       return slice::Expr{slice::Load{
               std::make_shared<slice::Expr>(std::move(addrExpr)), w,

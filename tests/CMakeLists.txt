@@ -135,6 +135,9 @@ if(Python3_Interpreter_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_analysis_hints.py)
         set_tests_properties("Python API - analysis hints and calling convention"
                 PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Validation - jump-table bounds follow the actual index"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)
     else()
         message(STATUS "Python cffi not found - Python API tests disabled")
     endif()

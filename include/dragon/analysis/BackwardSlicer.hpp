@@ -81,6 +81,9 @@ class BackwardSlicer {
     // Predecessor blocks still allowed to be entered by this slice() call:
     // following every path through joins is exponential in the worst case.
     int budget = 4096;
+    // Memory forwarding has its own shared budget, including intra-block
+    // scans and address rebasing. Recursive loads must not multiply work.
+    int memoryBudget = 4096;
   };
 
 
@@ -92,6 +95,18 @@ class BackwardSlicer {
           const ignil::Block &block, int beforeIdx, const Graph &graph,
           PredMap &preds, int context, const slice::Expr &loadAddr,
           ignil::Width width) const;
+
+  [[nodiscard]] std::optional<slice::Expr> storedValue(
+          const ignil::Block &block, int beforeIdx, const Graph &graph,
+          PredMap &preds, int depth, const slice::Expr &address,
+          ignil::Width width, std::set<std::uint64_t> &active) const;
+
+  // Translate a block-entry unknown in an address to the value on one
+  // predecessor edge. Other producing values retain their identities.
+  [[nodiscard]] slice::Expr addressOnEdge(
+          const slice::Expr &address, const ignil::Block &block,
+          const ignil::Block &predecessor, const Graph &graph,
+          PredMap &preds, int depth) const;
 
   // Resolve `v` starting the backward scan at `beforeIdx` (exclusive) inside
   // `block`.  Crosses into predecessor blocks when `depth` > 0.

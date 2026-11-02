@@ -29,6 +29,104 @@ static void addValidBlock(dragon::Graph &g, dragon::ignil::Block block) {
   g.addBlock(addr);
 }
 
+TEST_CASE("BackwardSlicer forwards matching stores with barriers", "[slicer][memory-forward]") {
+  using namespace dragon;
+  using O = ignil::Opcode;
+  Graph graph{Architecture::X86_64, Configuration{}};
+  ignil::Block block{0x1000};
+  const ignil::Temp address{0, 64};
+  block.append({O::ADD, address, {x86::RSP, ignil::Const{16, 64}}, 0x1000});
+  block.append({O::STORE, {}, {address, ignil::Const{42, 64}}, 0x1001});
+  bool forwarded = true;
+  SECTION("exact slot") {}
+  SECTION("disjoint slot") {
+    const ignil::Temp other{1, 64};
+    block.append({O::ADD, other, {x86::RSP, ignil::Const{32, 64}}, 0x1002});
+    block.append({O::STORE, {}, {other, ignil::Const{7, 64}}, 0x1003});
+  }
+  SECTION("latest exact store wins") {
+    block.append({O::STORE, {}, {address, ignil::Const{43, 64}}, 0x1002});
+    block.append({O::STORE, {}, {address, ignil::Const{42, 64}}, 0x1003});
+  }
+  SECTION("call barrier") {
+    block.append({O::CALL, {}, {ignil::Const{0x2000, 64}}, 0x1002});
+    forwarded = false;
+  }
+  SECTION("unknown alias barrier") {
+    block.append({O::STORE, {}, {x86::RDI, ignil::Const{7, 64}}, 0x1002});
+    forwarded = false;
+  }
+  SECTION("width mismatch") {
+    block.append({O::STORE, {}, {address, ignil::Const{7, 32}}, 0x1002});
+    forwarded = false;
+  }
+  SECTION("opaque barrier") {
+    block.noteUnlifted(0x1002);
+    forwarded = false;
+  }
+  block.append({O::LOAD, x86::RAX, {address}, 0x1004});
+  addValidBlock(graph, std::move(block));
+  auto result = BackwardSlicer{8}.slice(x86::RAX, 0x1000, graph);
+  if (forwarded) {
+    const auto *value = std::get_if<slice::Const>(&result.data);
+    REQUIRE(value);
+    CHECK(value->value == 42);
+  } else CHECK(std::holds_alternative<slice::Load>(result.data));
+}
+
+TEST_CASE("BackwardSlicer forwards stack slots across agreeing paths", "[slicer][memory-forward]") {
+  using namespace dragon;
+  using O = ignil::Opcode;
+  Graph graph{Architecture::X86_64, Configuration{}};
+  ignil::Block entry{0x1000};
+  entry.append({O::CJMP, {}, {x86::ZF, ignil::Const{0x1010, 64}, ignil::Const{0x1020, 64}}, 0x1000});
+  addValidBlock(graph, std::move(entry));
+  bool same = true;
+  bool missing = false;
+  SECTION("equal stores") {}
+  SECTION("differing stores") { same = false; }
+  SECTION("path without store") { same = false; missing = true; }
+  for (uint64_t at : {0x1010, 0x1020}) {
+    ignil::Block path{at};
+    const ignil::Temp address{0, 64};
+    path.append({O::ADD, address, {x86::RSP, ignil::Const{8, 64}}, at});
+    if (!missing || at != 0x1020)
+      path.append({O::STORE, {}, {address, ignil::Const{same || at == 0x1010 ? 42u : 43u, 64}}, at + 1});
+    path.append({O::JMP, {}, {ignil::Const{0x1030, 64}}, at + 2});
+    addValidBlock(graph, std::move(path));
+  }
+  ignil::Block join{0x1030};
+  const ignil::Temp address{0, 64};
+  join.append({O::ADD, address, {x86::RSP, ignil::Const{8, 64}}, 0x1030});
+  join.append({O::LOAD, x86::RAX, {address}, 0x1031});
+  addValidBlock(graph, std::move(join));
+  auto result = BackwardSlicer{8}.slice(x86::RAX, 0x1030, graph);
+  if (same) {
+    const auto *value = std::get_if<slice::Const>(&result.data);
+    REQUIRE(value);
+    CHECK(value->value == 42);
+  } else CHECK(std::holds_alternative<slice::Load>(result.data));
+}
+
+TEST_CASE("BackwardSlicer forwards the stored value at its own program point", "[slicer][memory-forward]") {
+  using namespace dragon;
+  using O = ignil::Opcode;
+  Graph graph{Architecture::X86_64, Configuration{}};
+  ignil::Block block{0x1000};
+  bool movedStack = false;
+  SECTION("source register overwritten after storing") {}
+  SECTION("stack pointer moved before reloading") { movedStack = true; }
+  block.append({O::STORE, {}, {x86::RSP, x86::RDX}, 0x1000});
+  block.append({O::COPY, x86::RDX, {ignil::Const{9, 64}}, 0x1001});
+  if (movedStack)
+    block.append({O::ADD, x86::RSP, {x86::RSP, ignil::Const{8, 64}}, 0x1002});
+  block.append({O::LOAD, x86::RAX, {x86::RSP}, 0x1003});
+  addValidBlock(graph, std::move(block));
+  auto result = BackwardSlicer{8}.slice(x86::RAX, 0x1000, graph);
+  if (movedStack) CHECK(std::holds_alternative<slice::Load>(result.data));
+  else CHECK(slice::sameValue(result, slice::Expr{slice::SymReg{x86::RDX}}));
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: constant folded through a single COPY in one block
 // ---------------------------------------------------------------------------

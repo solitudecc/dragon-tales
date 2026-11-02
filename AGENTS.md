@@ -136,6 +136,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `difftest_sse.py` | 35 SSE templates vs Unicorn incl. NaN/±0/inf; NaN results counted as "unknown", not wrong. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |
+| `memory_slice_diff.py` | Stack-slot STORE/LOAD forwarding vs 448 Unicorn executions; 192 unique slices, 0 wrong. Includes disjoint/overlapping/unknown-alias stores and SP changes. |
 | `loop_slice_diff.py` | Nested-join loop slices vs 128 Unicorn executions: invariants, differing writes, increments and cross-register copies. |
 | `guard_truth.py` | 27 CFGs vs 20,736 Unicorn executions: byte/word/dword guards, signedness, boolean holes, narrowing and masks. Also runs without Z3. |
 | `llvm_diff.py` | LLVM-lifted code (compiled with `llc-21`, run natively) vs SymbolicExecutor. |
@@ -153,6 +154,13 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 The `[join-width]` C++ tests cover partial join knowledge on x86-64/AArch64,
 guarded dispatch and 240 Unicorn loop executions. A narrow guard alone never
 proves that a wider index's upper bits are zero.
+
+The two table truth scripts use `table_bounds.py` to trace the actual index
+through predecessor instructions. A nearby comparison of another register
+is not a bound. Every path must agree; cycles, redefinitions and unsupported
+forms produce an unknown oracle. Unreadable table ranges are reported
+separately, never counted as verified. `tests/python/test_table_bounds.py`
+regresses unrelated comparisons, index redefinitions and bypass paths.
 
 ## 5. Current state
 
@@ -209,6 +217,15 @@ stores (were silently dropped), ELF non-SHF_ALLOC sections answering
 address lookups at 0 (`Section::mapped`), PE imports without/with a bad ILT, non-UTF-8
 names in Python.
 
+2026-11-02 recheck of the current corpus2 files found two existing exceptions,
+confirmed with the unchanged `e0224b9` implementation (plus API bindings) and
+again after stack forwarding. `cxx_mingw32_O2.exe`: linear/recursive missing
+IGNIL blocks 2/1, edges to undecoded addresses 14/13 (mostly target 0),
+linear objdump missing 70. `sys_libcrypto.so`: linear missing IGNIL blocks 13,
+one undecoded edge `0x2b9a80 -> 0x2b83c0`, objdump missing 102; recursive has
+none of these block/edge issues. All LLVM modules verify. Do not describe
+these corpus files as fully clean; compare against this measured baseline.
+
 `corpus_check.py ~/bench/corpus` is clean on all 34 samples except a known
 false alarm on the x86-64 Lua builds: 2 "blocks without IGNIL" and 2
 "objdump-only" addresses are constants embedded in .text before x87 code.
@@ -226,6 +243,16 @@ snapshot; a join creates a new one. Debug strings are not semantic identities:
 conversion widths and origins matter. Graph-entry register inputs retain their
 public Z3 names; unresolved values at different internal points are distinct.
 
+Exact-width, equal-address STOREs can forward their saved value to a LOAD.
+Disjoint writes can be crossed; CALL, unlifted/opaque instructions, unknown
+aliases and overlapping writes of another width stop forwarding. Values are
+sliced at the STORE, before later register changes. At joins, block-entry
+address unknowns are rebased onto each predecessor edge and only agreeing
+constant expressions are merged. Cycles and a shared memory-query budget
+stop conservatively. A stack slot is not preserved across CALL merely because
+it looks local. Tests use `[memory-forward]`; validation results for all 69
+samples are recorded in `docs/agent-validation-2026-11-02.md`.
+
 Jump-table prefix enumeration only proposes a count. GuardProof proves it
 over all inputs using exact interval sets for supported predicates, otherwise
 SMT with byte-aliasing register inputs (50 ms per check). UNKNOWN rejects the
@@ -239,11 +266,9 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 Ready-to-paste task prompts for other agents (shared preamble + one prompt per
 item, with a status table to update when a task is done): `docs/agent-tasks.md`.
 
-1. **Stack memory tracking in the slicer** (store→load through `[sp, #N]`):
-   the last AArch64 table reloads its base from the stack. The disjoint-store
-   rule in `memoryState` (same base value + non-overlapping constant offsets)
-   is the starting point: a store that *does* match the load could forward
-   its value.
+1. Stack-slot forwarding is implemented. The last AArch64 Lua table remains
+   unresolved because a CALL invalidates its saved base; crossing that barrier
+   requires a separate proven memory-effects model, not an optimistic exception.
 2. **Function starts for stripped binaries**: a stripped PIE reaches `main`
    only through the GOT, so recursive traversal of the corpus' stripped
    aarch64 sqlite decodes 48 instructions. Seed entries from `.eh_frame`
