@@ -28,6 +28,8 @@
 项目：https://github.com/solitudecc/dragon-tales（Fare9/dragon-tales 的 fork）
 C++20 / LLVM 21 二进制分析库：反汇编 → IGNIL 中间语言 → 符号执行 / LLVM IR，带 C shim 和 Python(cffi) 接口。
 开工前先完整阅读仓库根目录的 AGENTS.md（模型不变量、验证工具、已知的刻意设计差异都在里面）。
+同时阅读 docs/correctness.md（怎么确认结果正确：验证分层与盲区、测试框架规则、允许跳过的情况、
+和参考实现不一致时的处理、汇报要求），所有改动语义的工作都必须遵守。
 
 环境：
 - 测试 VM：访问方式见 AGENTS.md 第 2 节（aarch64 Ubuntu，3GB 内存，8 核）。登录和 sudo 凭据向仓库所有者索取。
