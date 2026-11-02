@@ -219,6 +219,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `difftest_strings.py` | 165 forms / 3960 Unicorn executions: i386, x64, x64 addr32; counts 0/1/2/5, DF 0/1, overlap and comparison exits. All registers/flags and the complete data buffer must match; no unknown outputs allowed. |
 | `difftest_a64.py` | 835 AArch64 templates, including scalar FP edges, SIMD moves and memory; compares all 32 V registers as 64-bit halves. Expected: 3 diffs = CALL/RET abstraction, 0 unlifted. `ONLY=text` filters. |
 | `difftest_x87.py` | Raw physical 80-bit registers, TOP/TAG/CW, defined SW bits, GPRs and memory in i386/x64 across all RC modes. Exact Fraction status oracle plus native fixtures cover documented Unicorn bugs. `ONLY=text`, `TRIALS=N`. |
+| `x87_harness_control.py MODE BIN [N]` | Negative control for `diff` / `llvm`: corrupt only tested raw FPU/CW input after seeding Unicorn; each harness must report positive DIFFERENT. Normal harnesses are untouched. |
 | `difftest_sse.py` | 393 SSE/SSSE3/SSE4.1 templates x 60 inputs; includes saturation boundaries, FP32/64 exceptional values and conversions. Checks FP32 per lane, including untouched lanes; only active arithmetic NaN results may be unknown. `ONLY=text` filters. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |
