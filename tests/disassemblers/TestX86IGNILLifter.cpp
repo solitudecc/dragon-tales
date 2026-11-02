@@ -3260,3 +3260,21 @@ TEST_CASE("SSE floating lanes and exceptional conversions match Unicorn", "[sse-
   }
 }
 #endif
+
+// `ret N` pops N bytes after the return address. IGNIL RET has no operands;
+// N is carried in aux for the LLVM lowering (0 for a plain ret).
+TEST_CASE("X86 IGNIL lifting - ret imm16 carries its byte count in aux",
+          "[ignil][x86]") {
+  auto retAux = [](dragon::Architecture arch, std::vector<std::uint8_t> bytes) {
+    auto dis = makeDisassembler(arch);
+    const auto block = dis.liftTrace(dis.disassemble(bytes, 0x1000));
+    std::optional<std::uint32_t> aux;
+    for (const auto &op: block.ops())
+      if (op.opcode == dragon::ignil::Opcode::RET)
+        aux = op.aux;
+    return aux;
+  };
+  CHECK(retAux(dragon::Architecture::X86_64, {0xc2, 0x08, 0x00}) == 8u);     // ret 8
+  CHECK(retAux(dragon::Architecture::X86_32, {0xc2, 0x0c, 0x00}) == 12u);    // ret 12
+  CHECK(retAux(dragon::Architecture::X86_64, {0xc3}) == 0u);                 // ret
+}

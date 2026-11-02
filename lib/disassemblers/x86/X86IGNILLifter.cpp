@@ -4307,10 +4307,13 @@ void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
 void dragon::x86::X86IGNILLifter::liftRet(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
-  // ret N (RETI64/RETI32) pops N extra bytes after the return address, but
-  // control transfers before that cleanup is visible to the callee, so a
-  // plain RET is sufficient for intra-function analysis.
-  out.append({ignil::Opcode::RET, std::nullopt, {}, addr});
+  // ret N (RETI64/RETI32) pops N extra bytes after the return address.
+  // IGNIL RET has no operands; N travels in aux, which the LLVM lowering
+  // adds to the stack pointer together with the return address.
+  ignil::Op ret{ignil::Opcode::RET, std::nullopt, {}, addr};
+  if (mc.getNumOperands() > 0 && mc.getOperand(0).isImm())
+    ret.aux = static_cast<std::uint32_t>(mc.getOperand(0).getImm() & 0xffff);
+  out.append(std::move(ret));
 }
 
 void dragon::x86::X86IGNILLifter::liftLeave(const llvm::MCInst &mc,
