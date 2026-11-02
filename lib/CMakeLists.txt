@@ -37,6 +37,7 @@ llvm_map_components_to_libnames(LLVM_LIBS
         MCDisassembler
         MCParser
         Object
+        DebugInfoDWARF
         Support
         Passes
         TransformUtils

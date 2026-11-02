@@ -260,6 +260,14 @@ if (auto entry = image->entryPoint())   // std::optional<uint64_t>
 `dragon::loader::formatName(format)` returns a human-readable `"elf"`, `"pe"`
 or `"unknown"`.
 
+`image->functionEntries()` returns sorted, unique executable addresses recovered
+from metadata, independently of the symbol table: ELF FDEs, EH frame headers,
+initialization/finalization arrays and code-pointer relocations; PE x64 unwind
+records, exports and TLS callbacks. `disassembleImage()` uses these as recursive
+traversal roots. Relocatable objects have no such virtual-address seeds. These
+are candidates rather than a complete or perfectly precise function inventory:
+leaf functions may have no unwind record, and code pointers may name labels.
+
 ### Sections and segments
 
 ```cpp

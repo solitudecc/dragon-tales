@@ -38,6 +38,67 @@ const Section *findSection(const LoadedImage &img, const std::string &name) {
 
 } // namespace
 
+TEST_CASE("loader - stripped ELF metadata supplies recursive roots", "[loader][metadata-entries]") {
+  auto bytes = toVec(kMetadataElfX64, sizeof(kMetadataElfX64));
+  bool hasFrameName = true;
+  SECTION("all metadata") {}
+  SECTION("header works without an eh_frame section name") {
+    const std::string name = ".eh_frame";
+    auto at = std::search(bytes.begin(), bytes.end(), name.begin(), name.end());
+    REQUIRE(at != bytes.end());
+    *at = '_';
+    hasFrameName = false;
+  }
+  auto image = LoadedImage::loadBytes(bytes);
+  REQUIRE(image);
+  Configuration config;
+  config.disassemblyStrategy = DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  auto graph = disassembleImage(*image, config);
+  if (hasFrameName) CHECK(graph.get(0x400110) != nullptr);
+  for (uint64_t address : {0x400120,0x400130,0x400140,0x400150}) {
+    INFO(std::hex << address);
+    CHECK(graph.get(address) != nullptr);
+    CHECK(graph.isValidFunction(address));
+  }
+}
+
+TEST_CASE("loader - stripped PE unwind and TLS metadata supplies roots", "[loader][metadata-entries]") {
+  auto image = LoadedImage::loadBytes(toVec(kMetadataPeX64, sizeof(kMetadataPeX64)));
+  REQUIRE(image);
+  Configuration config;
+  config.disassemblyStrategy = DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  auto graph = disassembleImage(*image, config);
+  for (uint64_t address : {0x140001010ull,0x140001020ull}) {
+    CHECK(graph.get(address) != nullptr);
+    CHECK(graph.isValidFunction(address));
+  }
+}
+
+TEST_CASE("loader - address lookups reject wrapping ranges", "[loader][metadata-entries]") {
+  Section section;
+  section.address = UINT64_MAX - 7;
+  section.virtualSize = 16;
+  CHECK(section.contains(UINT64_MAX));
+  CHECK_FALSE(section.contains(0));
+  auto image = LoadedImage::loadBytes(toVec(kMetadataElfX64, sizeof(kMetadataElfX64)));
+  REQUIRE(image);
+  CHECK_FALSE(image->readVirtual(0x400100, SIZE_MAX));
+}
+
+TEST_CASE("loader - malformed relocation tables cannot invoke LLVM fatal readers", "[loader][metadata-entries]") {
+  auto bytes = toVec(kMetadataElfX64, sizeof(kMetadataElfX64));
+  uint64_t table = 0;
+  for (unsigned byte=0; byte<8; ++byte) table |= uint64_t(bytes[40+byte]) << (8*byte);
+  // Section 6 is .rela.dyn. A huge size was the fuzzed getType() abort.
+  std::fill_n(bytes.begin()+table+6*64+32,8,0xff);
+  auto image = LoadedImage::loadBytes(bytes);
+  REQUIRE(image);
+  Configuration configuration;
+  configuration.disassemblyStrategy = DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  auto graph = disassembleImage(*image,configuration);
+  CHECK(graph.get(0x400100) != nullptr);
+}
+
 // -----------------------------------------------------------------------
 // ELF
 // -----------------------------------------------------------------------

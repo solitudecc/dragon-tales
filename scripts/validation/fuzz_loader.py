@@ -18,7 +18,12 @@ CHILD = r'''
 import os, sys
 sys.path.insert(0, os.path.join(%r, '..', '..', 'python'))
 import dragon
-img = dragon.LoadedImage.load_bytes(open(sys.argv[1], 'rb').read())
+try:
+    img = dragon.LoadedImage.load_bytes(open(sys.argv[1], 'rb').read())
+except ValueError:
+    # The documented Python loader API raises ValueError for a clean parse
+    # rejection. Catch only this load call; analysis exceptions remain failures.
+    print('LOADFAIL'); sys.exit(0)
 if img is None:
     print('LOADFAIL'); sys.exit(0)
 for s in img.sections():
@@ -89,3 +94,5 @@ for it in range(iterations):
         if stats[kind] <= 3:
             print(f'{kind}: {keep}', flush=True)
 print(stats)
+if any(kind not in ('OK','LOADFAIL') for kind in stats):
+    sys.exit(1)

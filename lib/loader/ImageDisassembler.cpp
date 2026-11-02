@@ -25,6 +25,7 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
 
   // Known code addresses: the entry point and every function symbol.
   std::vector<std::uint64_t> seeds;
+  seeds.insert(seeds.end(), image.functionEntries().begin(), image.functionEntries().end());
   if (auto entry = image.entryPoint())
     seeds.push_back(*entry);
   for (const Symbol *sym : image.definedSymbols())

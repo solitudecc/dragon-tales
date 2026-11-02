@@ -186,9 +186,13 @@ dragon::Disassembler::decodeOne(std::span<const std::uint8_t> bytes,
           address + offset, llvm::nulls());
 
   if (status != llvm::MCDisassembler::Success || instSize == 0) {
-    impl_->logger.log("decodeOne: failed at 0x{:x}, skipping byte",
+    impl_->logger.log("decodeOne: failed at 0x{:x}, skipping invalid encoding",
                       address + offset);
-    offset += 1;
+    // A64 instructions are fixed 4-byte words. Byte-wise recovery can decode
+    // a plausible instruction across an invalid word and the next real one,
+    // losing function entries supplied by symbols/FDEs (libcrypto's BTI).
+    offset += architecture_ == Architecture::ARM64
+                  ? std::min<std::size_t>(4,bytes.size()-offset) : 1;
     return {address + offset,
             0,
             "",

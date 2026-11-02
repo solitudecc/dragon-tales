@@ -1,4 +1,5 @@
 #include <dragon/loader/Loader.hpp>
+#include "FunctionEntries.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -117,7 +118,7 @@ void collectSegments(const ObjectFile *obj, std::vector<Section> &out) {
 /// file bytes. nullopt if the run does not fit inside it.
 std::optional<std::vector<std::uint8_t>>
 readFrom(const Section &s, std::uint64_t addr, std::size_t size) {
-  if (!s.contains(addr) || addr + size > s.address + s.virtualSize)
+  if (!s.contains(addr) || size > s.virtualSize - (addr - s.address))
     return std::nullopt;
   std::vector<std::uint8_t> out(size, 0);
   const std::uint64_t off = addr - s.address;
@@ -445,6 +446,7 @@ LoadedImage::loadBytes(std::vector<std::uint8_t> bytes, std::string *error) {
     }
   }
 
+  image.functionEntries_ = detail::collectFunctionEntries(*obj, image);
   return image;
 }
 

@@ -59,3 +59,48 @@ CALL、不透明指令、未知别名、重叠但宽度不同的写入均阻止�
 
 AArch64 Lua 的最后一张表仍未解析：其基址保存后经过 CALL，按要求让转发失效。
 不能为了提高覆盖率跨 CALL 保留栈槽值。本项未修改指令 lifter。
+
+## 任务 5：去符号二进制的函数入口
+
+入口种子来自 ELF FDE / EH frame header、初始化与终止数组、REL/RELA 代码重定位，
+以及 PE x64 exception directory、导出和 TLS 回调。元数据种子独立于符号表存放，
+不创建虚假的符号。只接受落在实际可执行文件字节中的地址。
+
+`fstarts.py STRIPPED UNSTRIPPED` 使用对应未剥离文件的函数符号作真值。
+PE 符号本身不含长度时，使用其 exception directory 的范围判断函数体内误报。
+以下为递归策略；误报一栏只统计落在已有函数体内的入口，其他未知来源单独计数。
+
+| 样本 | 入口召回：旧 → 新 | 解码指令：旧 → 新 | 函数体内误报：旧 → 新 | 分析秒数：旧 → 新 |
+|---|---|---|---|---|
+| sqlite AArch64 O2 stripped | 4/1874 → 1874/1874 | 48 → 236352 | 0 → 38 | 0.005 → 2.492 |
+| sqlite x64 PE O2 stripped | 1170/2334 → 2084/2334 | 190139 → 247605 | 0 → 0 | 3.372 → 7.809 |
+| Lua gcc x64 ELF O2 stripped | 4/700 → 699/700 | 41 → 46606 | 0 → 84 | 0.031 → 0.876 |
+
+线性策略的入口召回分别为 1647→1874、1648→2084、685→699，指令总数保持不变。
+其函数体内误报分别为 48→48、52→52、134→135。
+函数体内误报仍包含原有启发式入口识别结果，不能把所有恢复入口都当成已验证函数。
+Lua 尚缺 `register_tm_clones`（无函数体长度和对应 FDE）；PE 叶函数可没有 unwind 记录。
+
+验证与硬化：
+
+- 新入口与溢出测试在旧代码上失败。最终元数据测试：4 组、31 个断言；
+  全套 `ctest`：412/412 通过（包括后述 A64 对齐恢复测试）。
+- `Section::contains` / `readVirtual` 改用差值检查，拒绝地址或长度溢出。
+- 新路径的 fuzz 曾触发 LLVM `RelocationRef::getType()` 的 fatal reader；
+  已改为 `ELFFile` 的 checked `Expected<ArrayRef<...>>` 接口，并加入畸形重定位表测试。
+  两份实际触发文件重新运行均为 OK。
+- 修正 fuzz 脚本，只在加载调用处把文档规定的 `ValueError` 作为正常拒绝；
+  后续分析中的异常仍属于失败。
+- 修复后 200 次损坏输入：134 OK、66 LOADFAIL、0 signal、0 timeout、0 意外异常。
+- 全库检查发现 FDE 指向的 `libcrypto` 入口 `0xebe00` 被原有逐字节恢复吞掉：
+  解码器跨无效 A64 字吞入下一条合法指令。现按 4 字节恢复，保留真实指令边界。
+  `ffffffff; nop; ret` 在旧代码中误解码为 `+1` 的 `fnmsub`，新增回归测试
+  旧版 2 个断言失败，修复后通过。随后 100 次完整损坏输入：65 OK、35 LOADFAIL，
+  0 崩溃、0 超时、0 意外异常。
+
+格式核对参考：[LSB EH frame header](https://refspecs.linuxfoundation.org/LSB_5.0.0/LSB-Core-generic/LSB-Core-generic.html)、
+[Microsoft PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)。
+
+最终完整检查覆盖 34+35 个样本的线性与递归策略，所有 LLVM 模块通过 verifier，
+无新增语料库告警。libcrypto 线性缺 IGNIL 块从 13 降到 4，未解码边从 1 降到 0，
+objdump 缺失从 102 降到 70；递归仍无这些问题。其余上述已知告警保持不变。

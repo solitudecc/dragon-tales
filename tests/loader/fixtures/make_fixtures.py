@@ -259,6 +259,70 @@ def build_pe_import_export():
     return bytes(img), IMAGE_BASE
 
 
+def build_elf_metadata():
+    base, text_off, frame_off, hdr_off, array_off, rela_off = 0x400000, 0x100, 0x200, 0x280, 0x2c0, 0x300
+    code = bytearray(b'\xcc' * 0x80)
+    for i in range(0, 0x70, 0x10): code[i] = 0xc3
+    cie = struct.pack('<I', 0) + b'\x01zR\0\x01\x78\x10\x01\x1b'
+    cie = struct.pack('<I', align(len(cie),4)) + cie.ljust(align(len(cie),4), b'\0')
+    frames = bytearray(cie)
+    offsets = []
+    for target in (base+text_off+0x10, base+text_off+0x20):
+        at = len(frames)
+        offsets.append(at)
+        payload = struct.pack('<IiI', at+4, target-(base+frame_off+at+8), 1) + b'\0\0\0\0'
+        frames += struct.pack('<I', len(payload)) + payload
+    frames += b'\0\0\0\0'
+    hdr = b'\x01\x1b\x03\x3b' + struct.pack('<iIii', frame_off-hdr_off-4, 1,
+             text_off+0x20-hdr_off, frame_off+offsets[1]-hdr_off)
+    array = struct.pack('<QQ', base+text_off+0x30, 0)
+    fini = struct.pack('<Q', base+text_off+0x40)
+    rela = struct.pack('<QQq', base+array_off+8, 8, base+text_off+0x50)
+    entries = [('.text',1,6,text_off,bytes(code),0,0),
+               ('.eh_frame',1,2,frame_off,bytes(frames),0,0),
+               ('.eh_frame_hdr',1,2,hdr_off,hdr,0,0),
+               ('.init_array',14,3,array_off,array,0,8),
+               ('.fini_array',15,3,array_off+0x10,fini,0,8),
+               ('.rela.dyn',4,2,rela_off,rela,0,24)]
+    names = b'\0' + b''.join(name.encode()+b'\0' for name,*_ in entries) + b'.shstrtab\0'
+    names_off = 0x340
+    shoff = align(names_off+len(names),8)
+    shdrs = b'\0'*64
+    for name, typ, flags, offset, data, link, entsize in entries:
+        shdrs += struct.pack('<IIQQQQIIQQ',names.index(name.encode()+b'\0'),typ,flags,
+                             base+offset,offset,len(data),link,0,8,entsize)
+    shdrs += struct.pack('<IIQQQQIIQQ',names.index(b'.shstrtab\0'),3,0,0,names_off,len(names),0,0,1,0)
+    size = shoff+len(shdrs)
+    image = bytearray(size)
+    image[:64] = struct.pack('<4sBBBBB7xHHIQQQIHHHHHH', b'\x7fELF',2,1,1,0,0,
+                    2,62,1,base+text_off,64,shoff,0,64,56,1,64,len(entries)+2,len(entries)+1)
+    image[64:120] = struct.pack('<IIQQQQQQ',1,5,0,base,base,size,size,0x1000)
+    for _,_,_,offset,data,_,_ in entries: image[offset:offset+len(data)] = data
+    image[names_off:names_off+len(names)] = names
+    image[shoff:] = shdrs
+    return bytes(image)
+
+
+def build_pe_metadata():
+    original, _ = build_pe()
+    image = bytearray(original[:0x200]) + bytearray(b'\xcc'*0x200) + bytearray(0x200)
+    base = 0x140000000
+    struct.pack_into('<H',image,0x46,2)  # NumberOfSections
+    opt = 0x58
+    struct.pack_into('<I',image,opt+56,0x3000)
+    struct.pack_into('<II',image,opt+112+3*8,0x2000,12)  # exception directory
+    struct.pack_into('<II',image,opt+112+9*8,0x2080,40)  # TLS directory
+    sh = opt+0xf0
+    struct.pack_into('<I',image,sh+8,0x80)
+    image[sh+40:sh+80] = b'.rdata\0\0' + struct.pack('<IIIIIIHHI',0x200,0x2000,0x200,0x400,0,0,0,0,0x40000040)
+    for offset in (0,0x10,0x20,0x30): image[0x200+offset] = 0xc3
+    image[0x400:0x40c] = struct.pack('<III',0x1010,0x1011,0x2040)
+    image[0x440:0x444] = b'\x01\0\0\0'
+    image[0x480:0x4a8] = struct.pack('<QQQQII',0,0,0,base+0x20c0,0,0)
+    image[0x4c0:0x4d0] = struct.pack('<QQ',base+0x1020,0)
+    return bytes(image)
+
+
 def emit(name, data):
     out = f"static const unsigned char {name}[] = {{\n"
     for i in range(0, len(data), 12):
@@ -289,6 +353,9 @@ def main():
         f.write("\n// PE32+ with import and export directories, no COFF symbols; ImageBase.\n")
         f.write(f"static constexpr unsigned long long kImpExpPeX64Base = 0x{pe_ie_base:x}ULL;\n")
         f.write(emit("kImpExpPeX64", pe_ie))
+        f.write('\n// Stripped images with unwind/initializer/relocation/TLS metadata.\n')
+        f.write(emit('kMetadataElfX64', build_elf_metadata()))
+        f.write(emit('kMetadataPeX64', build_pe_metadata()))
     print(f"ELF: {len(elf)} bytes, entry 0x{elf_entry:x}")
     print(f"PE:  {len(pe)} bytes, entry 0x{pe_entry:x}")
 

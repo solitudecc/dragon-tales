@@ -61,7 +61,7 @@ struct Section {
   [[nodiscard]] bool isBss() const { return bytes.empty() && virtualSize != 0; }
 
   [[nodiscard]] bool contains(std::uint64_t addr) const {
-    return mapped && addr >= address && addr < address + virtualSize;
+    return mapped && addr >= address && addr - address < virtualSize;
   }
 };
 
@@ -183,6 +183,13 @@ class LoadedImage {
   /// seed and name recovered functions.
   [[nodiscard]] const Symbol *functionAt(std::uint64_t addr) const;
 
+  /// Valid file-backed executable addresses from unwind metadata, initializer
+  /// arrays, code relocations and PE TLS callbacks. Sorted and deduplicated;
+  /// these are analysis seeds, not invented symbols.
+  [[nodiscard]] const std::vector<std::uint64_t> &functionEntries() const {
+    return functionEntries_;
+  }
+
   private:
   LoadedImage() = default;
 
@@ -195,6 +202,7 @@ class LoadedImage {
   std::vector<Section> sections_;
   std::vector<Section> segments_;
   std::vector<Symbol> symbols_;
+  std::vector<std::uint64_t> functionEntries_;
 };
 
 } // namespace dragon::loader

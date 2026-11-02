@@ -1,9 +1,21 @@
 #include <catch2/catch_test_macros.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
-
 #include <algorithm>
+#include <cstdint>
 #include <set>
+#include <vector>
 
+TEST_CASE("AArch64 invalid words keep subsequent instructions aligned", "[a64-invalid-alignment]") {
+  dragon::Disassembler dis{dragon::Architecture::ARM64,dragon::Configuration{}};
+  // Undefined word; NOP; RET. A one-byte recovery used to invent a half
+  // precision FNMSUB at +1 and consume the real NOP at +4.
+  const std::vector<uint8_t> bytes{0xff,0xff,0xff,0xff,0x1f,0x20,0x03,0xd5,0xc0,0x03,0x5f,0xd6};
+  const auto instructions = dis.disassemble(bytes,0x1000);
+  REQUIRE(instructions.size() == 2);
+  CHECK(instructions[0].address() == 0x1004);
+  CHECK(instructions[0].mnemonic() == "nop");
+  CHECK(instructions[1].address() == 0x1008);
+}
 // -----------------------------------------------------------------------
 // Helper
 // -----------------------------------------------------------------------

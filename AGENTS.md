@@ -102,6 +102,16 @@ Gotchas:
   jump-table resolution read tables outside the analysed bytes.
   `loader::disassembleImage` fills both and re-analyses sections for
   cross-section call/jump targets (e.g. `.plt`).
+- `LoadedImage::functionEntries()` contains sorted metadata seeds independent
+  of symbols: ELF FDE / EH header, init/fini arrays and code REL/RELA targets;
+  PE x64 exception records, exports and TLS callbacks. Only file-backed
+  executable addresses are accepted. `disassembleImage` feeds these into
+  AnalysisHints in both strategies. ELF relocation reads must use checked
+  `ELFFile::rels/relas/symbols` results: `RelocationRef::getType()` can abort
+  on a corrupt relocation table. LLVM's DebugInfoDWARF component is linked
+  for the FDE parser. AArch64 decode failures advance one 4-byte word, never
+  one byte: byte-wise recovery invented unaligned instructions and swallowed
+  an FDE's BTI entry after embedded data in libcrypto.
 - Resolved indirect-jump targets are stored as branches of the jump
   instruction, so they are CFG successors, function members and an LLVM
   `switch`. An unresolved indirect jump has no successors.
@@ -143,13 +153,13 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `analyze_bin.py BIN OBJDUMP` | Whole-binary report: objdump agreement, function recovery, empty functions, IGNIL coverage + top unlifted, indirect jumps, LLVM lift success. `STRATEGY=0/1`, `LLVM=0/1`. |
 | `table_truth.py BIN OBJDUMP STRATEGY` | i386 absolute jump tables: resolved targets vs the table in the image. |
 | `truth_rel.py BIN OBJDUMP STRATEGY` | x86-64 PIC / AArch64 relative tables vs the image. |
-| `fstarts.py BIN` | Classifies function starts: symbol / inside a symbol body (false) / other. |
+| `fstarts.py BIN [TRUTH_BIN]` | Entry recall and inside-body false positives against the corresponding unstripped binary; instructions and analysis time. PE exception ranges provide sizes missing from COFF symbols. |
 | `unlifted.py BIN [N]` | Census of unlifted instruction *forms* (mnemonic + operand shape). |
 | `corpus_check.py DIR` | Every binary of a directory, one subprocess each: objdump agreement, empty symbol functions, blocks without IGNIL, edges to undecoded addresses, LLVM lift + `opt -passes=verify`, time. Corpus on the VM: `~/bench/corpus` (sqlite/zlib/Lua × gcc aarch64 -O0/2/3/s, mingw i686/x64 -O0/2/s, stripped, system bash/libz; `~/bench/build_corpus.sh`). |
 | `realblock_diff.py BIN [BLOCKS] [TRIALS]` | Real basic blocks of a binary vs Unicorn from random states (x86-64/i386/AArch64). Expected: only the deliberate x86 OF difference after multi-bit shifts (see `emitGatedShiftFlags`). Unicorn truncates addresses >= 2^47; the script keeps values below that and compares only writes into known regions. `REALBLOCK_OPT=1` runs `simplify()` + `dead_store_eliminate()` first. |
 | `realblock_llvm.py BIN [BLOCKS]` | Real blocks lifted to LLVM IR, compiled with llc-21, run natively on the AArch64 VM vs Unicorn. Needs `sysctl vm.mmap_min_addr=4096` (shared objects are based at 0). Skips trials that load a 64-bit value >= 2^47 (Unicorn truncates). `REALBLOCK_ONLY=0xADDR` runs one block and keeps its work dir. |
 | `asm_roundtrip.py BIN [N]` | Every distinct instruction: text -> Assembler -> Disassembler must give the same text (110k+ instructions, all same). |
-| `fuzz_loader.py OUT N SEED...` | Damaged ELF/PE inputs through load/disassemble/LLVM in a child process: crashes, hangs, unexpected exceptions. |
+| `fuzz_loader.py OUT N SEED...` | Damaged ELF/PE inputs through load/disassemble/LLVM in a child process. Only a loader ValueError is a clean rejection; crashes, hangs and later exceptions are failures and make the script exit nonzero. |
 
 The `[join-width]` C++ tests cover partial join knowledge on x86-64/AArch64,
 guarded dispatch and 240 Unicorn loop executions. A narrow guard alone never
@@ -226,6 +236,11 @@ one undecoded edge `0x2b9a80 -> 0x2b83c0`, objdump missing 102; recursive has
 none of these block/edge issues. All LLVM modules verify. Do not describe
 these corpus files as fully clean; compare against this measured baseline.
 
+After metadata seeding and aligned A64 invalid-word recovery, `sys_libcrypto.so`
+improves to 4 linear missing IGNIL blocks, 0 undecoded edges and 70 objdump
+missing instructions; recursive remains clean. The i386 C++ and three x64 Lua
+exceptions above are unchanged. All 69 samples still pass LLVM verification.
+
 `corpus_check.py ~/bench/corpus` is clean on all 34 samples except a known
 false alarm on the x86-64 Lua builds: 2 "blocks without IGNIL" and 2
 "objdump-only" addresses are constants embedded in .text before x87 code.
@@ -269,11 +284,11 @@ item, with a status table to update when a task is done): `docs/agent-tasks.md`.
 1. Stack-slot forwarding is implemented. The last AArch64 Lua table remains
    unresolved because a CALL invalidates its saved base; crossing that barrier
    requires a separate proven memory-effects model, not an optimistic exception.
-2. **Function starts for stripped binaries**: a stripped PIE reaches `main`
-   only through the GOT, so recursive traversal of the corpus' stripped
-   aarch64 sqlite decodes 48 instructions. Seed entries from `.eh_frame`
-   FDEs (ELF), `.pdata` (PE x64), `.init_array`, and relocations pointing
-   into code.
+2. Metadata entry seeding is implemented. Stripped AArch64 sqlite now recalls
+   1874/1874 symbol entries under recursive traversal (formerly 4/1874 and
+   only 48 instructions). PE leaf functions can lack unwind records; Lua's
+   `register_tm_clones` has no FDE. Existing heuristic inside-body starts
+   remain measured false positives; see the per-sample validation report.
 3. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
    `rep movs/stos` (needs a loop or a bounded expansion); rare SSE
    (`packuswb`, `pmuludq`, `psubus*`, `cvtss2sd` - needs float32); AVX/VEX
