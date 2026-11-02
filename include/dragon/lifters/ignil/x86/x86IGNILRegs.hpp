@@ -175,26 +175,27 @@ inline const ignil::Reg DF{kOffDF, k8, "DF"}; ///< Direction flag
 // see ignil::RegExtent and ignil::DeadStoreOptions::registerFile.
 // ---------------------------------------------------------------------------
 
-/// Base offset of XMM0. Only the low 64 bits of each XMM register are modeled
-/// (scalar double lanes), so the slots are 8 bytes apart - see
-/// x86registers.def.
+/// Base offset of XMM0 (bits 63:0 of XMM0..XMM15, 8 bytes apart) and of
+/// XMM0H (bits 127:64) - see x86registers.def.
 inline constexpr std::uint32_t kOffXMM0 = 143;
+inline constexpr std::uint32_t kOffXMM0H = 271;
 inline constexpr unsigned kNumXMM = 16;
 
 /// The x86-64 register file: RAX..R15 and RIP (8 bytes each), the seven modeled
-/// EFLAGS bits (one byte each), and XMM0..XMM15 (8 bytes each, the modeled low
-/// half). Every 32-bit view in this space has an 8-byte parent, so passing this
+/// EFLAGS bits (one byte each), and the two 8-byte halves of XMM0..XMM15. Every 32-bit view in this space has an 8-byte parent, so passing this
 /// to deadStoreEliminate() matches the default assumption - it is here so the
 /// caller never has to rely on that assumption holding.
 [[nodiscard]] inline std::vector<ignil::RegExtent> registerFile() {
   std::vector<ignil::RegExtent> file;
-  file.reserve(17 + 7 + kNumXMM);
+  file.reserve(17 + 7 + 2 * kNumXMM);
   for (std::uint32_t off = kOffRAX; off <= kOffRIP; off += 8)
     file.push_back({off, 8}); // RAX..R15, RIP
   for (std::uint32_t off = kOffCF; off <= kOffDF; ++off)
     file.push_back({off, 1}); // CF PF AF ZF SF OF DF
   for (unsigned i = 0; i < kNumXMM; ++i)
-    file.push_back({kOffXMM0 + i * 8, 8}); // XMM0..XMM15
+    file.push_back({kOffXMM0 + i * 8, 8}); // XMM0..XMM15, bits 63:0
+  for (unsigned i = 0; i < kNumXMM; ++i)
+    file.push_back({kOffXMM0H + i * 8, 8}); // XMM0H..XMM15H, bits 127:64
   return file;
 }
 

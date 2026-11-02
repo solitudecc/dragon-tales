@@ -94,14 +94,11 @@ REG("SF",   140, 8)
 REG("OF",   141, 8)
 REG("DF",   142, 8)
 
-// XMM0-XMM15 - only the low 64 bits are modeled (scalar double lanes,
-// SSE2 MOVSD/ADDSD/SUBSD/MULSD/CVTSI2SD/CVTTSD2SI/PXOR). Real XMM registers
-// are 128 bits wide, but nothing this lifter lifts today (scalar-double
-// obfuscated-predicate arithmetic) reads or writes the upper 64 bits, so
-// modeling them would add real complexity (packed-lane semantics, PXOR's
-// true full-128-bit zero vs. a 64-bit one) for no current benefit. A future
-// packed-SSE/AVX target would need to revisit this - documented as a
-// deliberate scope cut, not an oversight.
+// XMM0-XMM15: each 128-bit register is two 64-bit halves. XMMn (offset
+// 143 + 8n) is bits 63:0 - the scalar-double lane every existing scalar
+// lifter uses - and XMMnH (offset 271 + 8n) is bits 127:64. Packed SSE is
+// lifted on the two halves; nothing in IGNIL has to be 128 bits wide.
+// Bits above 127 (YMM/ZMM) are not modelled.
 REG("XMM0",  143, 64)
 REG("XMM1",  151, 64)
 REG("XMM2",  159, 64)
@@ -118,3 +115,19 @@ REG("XMM12", 239, 64)
 REG("XMM13", 247, 64)
 REG("XMM14", 255, 64)
 REG("XMM15", 263, 64)
+REG("XMM0H", 271, 64)
+REG("XMM1H", 279, 64)
+REG("XMM2H", 287, 64)
+REG("XMM3H", 295, 64)
+REG("XMM4H", 303, 64)
+REG("XMM5H", 311, 64)
+REG("XMM6H", 319, 64)
+REG("XMM7H", 327, 64)
+REG("XMM8H", 335, 64)
+REG("XMM9H", 343, 64)
+REG("XMM10H", 351, 64)
+REG("XMM11H", 359, 64)
+REG("XMM12H", 367, 64)
+REG("XMM13H", 375, 64)
+REG("XMM14H", 383, 64)
+REG("XMM15H", 391, 64)

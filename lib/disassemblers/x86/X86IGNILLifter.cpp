@@ -568,6 +568,8 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"ANDNPDrm", {S::Andn, true}}, {"ANDNPSrm", {S::Andn, true}},
           {"ORPDrm", {S::Or, true}},     {"ORPSrm", {S::Or, true}},
           {"XORPDrm", {S::Xor, true}},   {"XORPSrm", {S::Xor, true}},
+          {"PANDrm", {S::And, true}},    {"PANDNrm", {S::Andn, true}},
+          {"PORrm", {S::Or, true}},      {"PXORrm", {S::Xor, true}},
           {"MOVAPDrr", {S::Move}},  {"MOVUPDrr", {S::Move}},  {"MOVAPSrr", {S::Move}},
           {"MOVUPSrr", {S::Move}},  {"MOVDQArr", {S::Move}},  {"MOVDQUrr", {S::Move}},
           {"MOVAPDrr_REV", {S::Move}}, {"MOVUPDrr_REV", {S::Move}},
@@ -771,6 +773,101 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
             bmiOps_.emplace(it->second, kind);
         }
 
+    // XMM halves and the LLVM vector registers that alias them.
+    for (unsigned n = 0; n < 16; ++n) {
+      const std::string idx = std::to_string(n);
+      if (auto lo = kRegisterTable.find("XMM" + idx); lo != kRegisterTable.end())
+        regXmmLo_[n] = lo->second;
+      if (auto hi = kRegisterTable.find("XMM" + idx + "H"); hi != kRegisterTable.end())
+        regXmmHi_[n] = hi->second;
+      for (const char *prefix: {"XMM", "YMM", "ZMM"})
+        if (const unsigned r = llvmRegNamed(std::string(prefix) + idx))
+          vecRegIndex_.emplace(r, n);
+    }
+
+    using V = VecKind;
+    using Sh = VecShift;
+    auto vec = [&](const std::string &name, VecOp op) {
+      if (auto it = nameToOpc.find(name); it != nameToOpc.end())
+        vecOps_.emplace(it->second, op);
+    };
+    // Both the register and the memory-source spelling.
+    auto vecRM = [&](const std::string &base, VecOp op) {
+      vec(base + "rr", op);
+      op.memSrc = true;
+      vec(base + "rm", op);
+    };
+    for (const char *st: {"MOVUPSmr", "MOVAPSmr", "MOVUPDmr", "MOVAPDmr", "MOVDQUmr",
+                          "MOVDQAmr"})
+      vec(st, {V::Store});
+    static constexpr std::pair<std::string_view, ignil::Width> kLanes[] = {
+            {"B", 8}, {"W", 16}, {"D", 32}, {"Q", 64}};
+    for (const auto &[suffix, lw]: kLanes) {
+      const std::string sfx(suffix);
+      vecRM("PADD" + sfx, {V::Add, lw});
+      vecRM("PSUB" + sfx, {V::Sub, lw});
+      if (lw != 64) {
+        vecRM("PCMPEQ" + sfx, {V::CmpEq, lw});
+        vecRM("PCMPGT" + sfx, {V::CmpGt, lw});
+      }
+    }
+    static constexpr std::pair<std::string_view, ignil::Width> kUnpack[] = {
+            {"BW", 8}, {"WD", 16}, {"DQ", 32}, {"QDQ", 64}};
+    for (const auto &[suffix, lw]: kUnpack) {
+      vecRM("PUNPCKL" + std::string(suffix), {V::UnpackLo, lw});
+      vecRM("PUNPCKH" + std::string(suffix), {V::UnpackHi, lw});
+    }
+    vecRM("UNPCKLPS", {V::UnpackLo, 32});
+    vecRM("UNPCKHPS", {V::UnpackHi, 32});
+    vecRM("UNPCKLPD", {V::UnpackLo, 64});
+    vecRM("UNPCKHPD", {V::UnpackHi, 64});
+    vec("PSHUFDri", {V::Pshufd});
+    vec("PSHUFDmi", {V::Pshufd, 64, true});
+    vec("PSHUFLWri", {V::Pshuflw});
+    vec("PSHUFLWmi", {V::Pshuflw, 64, true});
+    vec("PSHUFHWri", {V::Pshufhw});
+    vec("PSHUFHWmi", {V::Pshufhw, 64, true});
+    vec("SHUFPSrri", {V::Shufps});
+    vec("SHUFPSrmi", {V::Shufps, 64, true});
+    vec("SHUFPDrri", {V::Shufpd});
+    vec("SHUFPDrmi", {V::Shufpd, 64, true});
+    static constexpr std::pair<std::string_view, VecShift> kShifts[] = {
+            {"PSLL", Sh::Left}, {"PSRL", Sh::Right}, {"PSRA", Sh::Arith}};
+    for (const auto &[mnemonic, sh]: kShifts)
+      for (const auto &[suffix, lw]: kLanes) {
+        if (sh == Sh::Arith && lw == 64)
+          continue; // no psraq before AVX-512
+        if (lw == 8)
+          continue;
+        const std::string base = std::string(mnemonic) + std::string(suffix);
+        vec(base + "ri", {V::ShiftImm, lw, false, sh});
+        vec(base + "rr", {V::ShiftReg, lw, false, sh});
+        vec(base + "rm", {V::ShiftReg, lw, true, sh});
+      }
+    vec("PSLLDQri", {V::ByteShiftLeft});
+    vec("PSRLDQri", {V::ByteShiftRight});
+    vec("PMOVMSKBrr", {V::Pmovmskb});
+    for (const char *n: {"MOVHPSrm", "MOVHPDrm"})
+      vec(n, {V::MovHiLoad, 64, true});
+    for (const char *n: {"MOVHPSmr", "MOVHPDmr"})
+      vec(n, {V::MovHiStore});
+    for (const char *n: {"MOVLPSrm", "MOVLPDrm"})
+      vec(n, {V::MovLoLoad, 64, true});
+    for (const char *n: {"MOVLPSmr", "MOVLPDmr"})
+      vec(n, {V::MovLoStore});
+    vec("MOVHLPSrr", {V::Movhlps});
+    vec("MOVLHPSrr", {V::Movlhps});
+    vec("MOVSSrm", {V::MovssLoad, 32, true});
+    vec("MOVSSrm_alt", {V::MovssLoad, 32, true});
+    vec("MOVSSmr", {V::MovssStore, 32});
+    vec("MOVSSrr", {V::MovssReg, 32});
+    vec("PEXTRWrri", {V::Pextrw, 16});
+    vec("PINSRWrri", {V::Pinsrw, 16});
+    vec("CMPSDrri", {V::Cmpsd});
+    vec("CMPSDrri_Int", {V::Cmpsd});
+    vec("CMPSDrmi", {V::Cmpsd, 64, true});
+    vec("CMPSDrmi_Int", {V::Cmpsd, 64, true});
+
     struct Names {
       std::string_view full, r8, r16, r32, r64;
     };
@@ -854,6 +951,10 @@ bool dragon::x86::X86IGNILLifter::liftExtendedForm(unsigned opc,
                                                    std::uint32_t &tmp) const {
   if (auto it = bmiOps_.find(opc); it != bmiOps_.end()) {
     liftBmi(mc, it->second, addr, out, tmp);
+    return true;
+  }
+  if (auto it = vecOps_.find(opc); it != vecOps_.end()) {
+    liftVec(mc, it->second, addr, out, tmp);
     return true;
   }
   // Early-return dispatch (no deep nesting) for the VMProtect-mutation forms.
@@ -1309,8 +1410,13 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     liftMulsdMem(*mc, addr, out, tempId);
   else if (opc == opMovsdRR_)
     liftMovsdRR(*mc, addr, out, tempId);
-  else if (opc == opMovsdLoad_)
+  else if (opc == opMovsdLoad_) {
     liftMovLoad(*mc, addr, out, tempId);
+    // movsd xmm, m64 zeroes bits 127:64 (movsd xmm, xmm keeps them).
+    if (auto d = toReg(mc->getOperand(0).getReg()))
+      if (auto hi = xmmHigh(*d))
+        out.append({ignil::Opcode::COPY, *hi, {ignil::Const{0, 64}}, addr});
+  }
   else if (opc == opMovsdStore_)
     liftMovStore(*mc, addr, out, tempId);
   else if (auto so = sseOps_.find(opc); so != sseOps_.end())
@@ -1337,12 +1443,22 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
       // reads see an honest "unknown" instead of a silently stale value
       // (this is what let a dropped mem-destination MOV/ADD/SUB/CMP corrupt
       // later flag reads before the dedicated lifters above existed).
+      // An XMM/YMM/ZMM destination clobbers both modelled halves (a YMM
+      // has no IGNIL register of its own, so toReg alone would clobber
+      // nothing and leave its low 128 bits stale).
+      auto clobber = [&](unsigned llvmReg) {
+        if (auto v = vecRegIndex_.find(llvmReg); v != vecRegIndex_.end()) {
+          emitUndef(regXmmLo_[v->second], addr, out);
+          emitUndef(regXmmHi_[v->second], addr, out);
+        } else if (auto dst = toReg(llvmReg)) {
+          emitUndef(*dst, addr, out);
+        }
+      };
       for (unsigned i = 0; i < desc.getNumDefs(); ++i) {
         const auto &defOp = mc->getOperand(i);
         if (!defOp.isReg())
           continue;
-        if (auto dst = toReg(defOp.getReg()))
-          emitUndef(*dst, addr, out);
+        clobber(defOp.getReg());
       }
       // The same goes for registers the instruction defines implicitly - the
       // accumulator of `mul`, RCX/RSI/RDI of a string op. They are not MCInst
@@ -1353,8 +1469,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
       for (const llvm::MCPhysReg implicitDef: desc.implicit_defs()) {
         if (implicitDef == llvmEflags_)
           definesFlags = true;
-        else if (auto dst = toReg(implicitDef))
-          emitUndef(*dst, addr, out);
+        else
+          clobber(implicitDef);
       }
       // EFLAGS is not an IGNIL register (the flags are separate ones), so it
       // needs spelling out: an unlifted flag-writing instruction ahead of a
@@ -1564,6 +1680,395 @@ void dragon::x86::X86IGNILLifter::liftBmi(const llvm::MCInst &mc, BmiKind kind,
   out.append({Op::COPY, defs[0], {result}, addr});
   if (writesFlags)
     emitArithFlags(addr, out, tmp, flags);
+}
+
+std::optional<dragon::ignil::Reg>
+dragon::x86::X86IGNILLifter::xmmHigh(const ignil::Reg &low) const {
+  if (low.width != 64)
+    return std::nullopt;
+  for (unsigned n = 0; n < 16; ++n)
+    if (regXmmLo_[n].width == 64 && regXmmLo_[n].offset == low.offset &&
+        regXmmHi_[n].width == 64)
+      return regXmmHi_[n];
+  return std::nullopt;
+}
+
+void dragon::x86::X86IGNILLifter::liftVec(const llvm::MCInst &mc, const VecOp &op,
+                                          std::uint64_t addr, ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  using V = VecKind;
+  using Opc = ignil::Opcode;
+  using ignil::Value;
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  struct Vec {
+    Value lo, hi;
+  };
+  auto emit = [&](Opc o, std::vector<Value> srcs, ignil::Width w) -> Value {
+    auto t = newTemp(tmp, w);
+    out.append({o, t, std::move(srcs), addr});
+    return t;
+  };
+  auto k = [](std::uint64_t v, ignil::Width w) {
+    return Value{ignil::Const{w == 64 ? v : v & ((1ull << w) - 1), w}};
+  };
+  auto vecIndex = [&](unsigned i) -> std::optional<unsigned> {
+    if (i >= mc.getNumOperands() || !mc.getOperand(i).isReg())
+      return std::nullopt;
+    auto it = vecRegIndex_.find(mc.getOperand(i).getReg());
+    if (it == vecRegIndex_.end() || regXmmHi_[it->second].width == 0)
+      return std::nullopt;
+    return it->second;
+  };
+  auto fail = [&](const char *why) {
+    logger_.log("Error liftVec in addr {:#x}: {}", addr, why);
+    if (instrInfo_->get(mc.getOpcode()).getNumDefs() != 0) {
+      if (auto n = vecIndex(0)) {
+        emitUndef(regXmmLo_[*n], addr, out);
+        emitUndef(regXmmHi_[*n], addr, out);
+      } else if (mc.getOperand(0).isReg()) {
+        if (auto r = toReg(mc.getOperand(0).getReg()))
+          emitUndef(*r, addr, out);
+      }
+    }
+    out.noteUnlifted(addr);
+  };
+  auto imm = [&](unsigned i) -> std::uint64_t {
+    return static_cast<std::uint64_t>(mc.getOperand(i).getImm()) & 0xff;
+  };
+  auto readReg = [&](unsigned n) -> Vec {
+    return {emit(Opc::COPY, {regXmmLo_[n]}, 64), emit(Opc::COPY, {regXmmHi_[n]}, 64)};
+  };
+  auto addrOf = [&](unsigned i) -> Value {
+    return emitAddress(mc, i, ptrWidth, addr, out, tmp);
+  };
+  auto plus8 = [&](Value ea) {
+    return emit(Opc::ADD, {ea, ignil::Const{8, ptrWidth}}, ptrWidth);
+  };
+  auto load128 = [&](Value ea) -> Vec {
+    return {emit(Opc::LOAD, {ea}, 64), emit(Opc::LOAD, {plus8(ea)}, 64)};
+  };
+  // Register or 128-bit memory source at operand i.
+  auto source = [&](unsigned i) -> std::optional<Vec> {
+    if (op.memSrc)
+      return load128(addrOf(i));
+    auto n = vecIndex(i);
+    if (!n)
+      return std::nullopt;
+    return readReg(*n);
+  };
+  auto write = [&](unsigned n, const Vec &v) {
+    out.append({Opc::COPY, regXmmLo_[n], {v.lo}, addr});
+    out.append({Opc::COPY, regXmmHi_[n], {v.hi}, addr});
+  };
+  // Lanes of e bits, lane 0 = bits e-1:0.
+  auto lanes = [&](const Vec &v, ignil::Width e) {
+    std::vector<Value> l;
+    const unsigned per = 64 / e;
+    for (const Value &half: {v.lo, v.hi})
+      for (unsigned i = 0; i < per; ++i) {
+        if (e == 64) {
+          l.push_back(half);
+          continue;
+        }
+        const Value sh = i ? emit(Opc::SHR, {half, k(i * e, 64)}, 64) : half;
+        l.push_back(emit(Opc::TRUNC, {sh}, e));
+      }
+    return l;
+  };
+  auto pack = [&](const std::vector<Value> &l, ignil::Width e) -> Vec {
+    const unsigned per = 64 / e;
+    Value halves[2];
+    for (unsigned h = 0; h < 2; ++h) {
+      if (e == 64) {
+        halves[h] = l[h];
+        continue;
+      }
+      Value acc;
+      for (unsigned i = 0; i < per; ++i) {
+        const Value z = emit(Opc::ZEXT, {l[h * per + i]}, 64);
+        const Value sh = i ? emit(Opc::SHL, {z, k(i * e, 64)}, 64) : z;
+        acc = i ? emit(Opc::OR, {acc, sh}, 64) : sh;
+      }
+      halves[h] = acc;
+    }
+    return {halves[0], halves[1]};
+  };
+  auto mask = [&](Value bit, ignil::Width w) { // 1-bit -> all ones / zero
+    return emit(Opc::NEG, {emit(Opc::ZEXT, {bit}, w)}, w);
+  };
+  auto notBit = [&](Value bit) { return emit(Opc::XOR, {bit, ignil::Const{1, 1}}, 1); };
+  const ignil::Width e = op.laneWidth;
+
+  switch (op.kind) {
+    case V::Store:
+    case V::MovHiStore:
+    case V::MovLoStore:
+    case V::MovssStore: { // op[0..4] = mem, op[5] = xmm
+      auto n = vecIndex(5);
+      if (!n)
+        return fail("no source");
+      const Value ea = addrOf(0);
+      if (op.kind == V::MovssStore) {
+        out.append({Opc::STORE, std::nullopt,
+                    {ea, emit(Opc::TRUNC, {regXmmLo_[*n]}, 32)}, addr});
+        return;
+      }
+      const Vec v = readReg(*n);
+      if (op.kind != V::MovHiStore)
+        out.append({Opc::STORE, std::nullopt, {ea, v.lo}, addr});
+      if (op.kind == V::Store)
+        out.append({Opc::STORE, std::nullopt, {plus8(ea), v.hi}, addr});
+      if (op.kind == V::MovHiStore)
+        out.append({Opc::STORE, std::nullopt, {ea, v.hi}, addr});
+      return;
+    }
+    case V::Pmovmskb:
+    case V::Pextrw: { // op[0] = GPR, op[1] = xmm (, op[2] = imm)
+      auto dst = toReg(mc.getOperand(0).getReg());
+      auto n = vecIndex(1);
+      if (!dst || !n)
+        return fail("bad operands");
+      Value r;
+      if (op.kind == V::Pextrw) {
+        r = emit(Opc::ZEXT, {lanes(readReg(*n), 16)[imm(2) & 7]}, 32);
+      } else {
+        const auto l = lanes(readReg(*n), 8);
+        for (unsigned j = 0; j < 16; ++j) {
+          const Value bit = emit(Opc::ZEXT, {emit(Opc::SHR, {l[j], k(7, 8)}, 8)}, 32);
+          const Value sh = j ? emit(Opc::SHL, {bit, k(j, 32)}, 32) : bit;
+          r = j ? emit(Opc::OR, {r, sh}, 32) : sh;
+        }
+      }
+      if (dst->width > 32)
+        r = emit(Opc::ZEXT, {r}, dst->width);
+      out.append({Opc::COPY, *dst, {r}, addr});
+      return;
+    }
+    case V::MovssLoad: { // op[0] = xmm, op[1..5] = mem
+      auto d = vecIndex(0);
+      if (!d)
+        return fail("no destination");
+      const Value v = emit(Opc::LOAD, {addrOf(1)}, 32);
+      write(*d, {emit(Opc::ZEXT, {v}, 64), k(0, 64)});
+      return;
+    }
+    case V::Pshufd:
+    case V::Pshuflw:
+    case V::Pshufhw: { // op[0] = xmm, op[1] = xmm | op[1..5] = mem, then imm
+      auto d = vecIndex(0);
+      auto src = source(1);
+      if (!d || !src)
+        return fail("bad operands");
+      const std::uint64_t sel = imm(mc.getNumOperands() - 1);
+      std::vector<Value> r;
+      if (op.kind == V::Pshufd) {
+        const auto l = lanes(*src, 32);
+        for (unsigned i = 0; i < 4; ++i)
+          r.push_back(l[(sel >> (2 * i)) & 3]);
+        write(*d, pack(r, 32));
+      } else {
+        const auto l = lanes(*src, 16);
+        const unsigned base = op.kind == V::Pshuflw ? 0 : 4;
+        r = l;
+        for (unsigned i = 0; i < 4; ++i)
+          r[base + i] = l[base + ((sel >> (2 * i)) & 3)];
+        write(*d, pack(r, 16));
+      }
+      return;
+    }
+    default:
+      break;
+  }
+
+  // Everything below has a tied destination: op[0] = op[1] = xmm.
+  auto d = vecIndex(0);
+  if (!d)
+    return fail("no destination");
+  const Vec a = readReg(*d);
+
+  switch (op.kind) {
+    case V::Add:
+    case V::Sub:
+    case V::CmpEq:
+    case V::CmpGt:
+    case V::UnpackLo:
+    case V::UnpackHi:
+    case V::Shufps:
+    case V::Shufpd: {
+      auto b = source(2);
+      if (!b)
+        return fail("no source");
+      if (op.kind == V::Shufpd) {
+        const std::uint64_t sel = imm(mc.getNumOperands() - 1);
+        write(*d, {(sel & 1) ? a.hi : a.lo, (sel & 2) ? b->hi : b->lo});
+        return;
+      }
+      if (op.kind == V::Shufps) {
+        const std::uint64_t sel = imm(mc.getNumOperands() - 1);
+        const auto la = lanes(a, 32), lb = lanes(*b, 32);
+        write(*d, pack({la[sel & 3], la[(sel >> 2) & 3], lb[(sel >> 4) & 3],
+                        lb[(sel >> 6) & 3]},
+                       32));
+        return;
+      }
+      const auto la = lanes(a, e), lb = lanes(*b, e);
+      const unsigned n = static_cast<unsigned>(la.size());
+      std::vector<Value> r;
+      if (op.kind == V::UnpackLo || op.kind == V::UnpackHi) {
+        const unsigned base = op.kind == V::UnpackLo ? 0 : n / 2;
+        for (unsigned i = 0; i < n / 2; ++i) {
+          r.push_back(la[base + i]);
+          r.push_back(lb[base + i]);
+        }
+      } else {
+        for (unsigned i = 0; i < n; ++i) {
+          if (op.kind == V::Add)
+            r.push_back(emit(Opc::ADD, {la[i], lb[i]}, e));
+          else if (op.kind == V::Sub)
+            r.push_back(emit(Opc::SUB, {la[i], lb[i]}, e));
+          else
+            r.push_back(mask(emit(op.kind == V::CmpEq ? Opc::EQ : Opc::SGT,
+                                  {la[i], lb[i]}, 1),
+                             e));
+        }
+      }
+      write(*d, pack(r, e));
+      return;
+    }
+    case V::ShiftImm:
+    case V::ShiftReg: {
+      const Opc shiftOp = op.shift == VecShift::Left    ? Opc::SHL
+                          : op.shift == VecShift::Right ? Opc::SHR
+                                                        : Opc::SAR;
+      const auto l = lanes(a, e);
+      std::vector<Value> r;
+      if (op.kind == V::ShiftImm) {
+        const std::uint64_t c = imm(2);
+        for (const Value &x: l) {
+          if (op.shift != VecShift::Arith && c >= e)
+            r.push_back(k(0, e));
+          else
+            r.push_back(emit(shiftOp, {x, k(std::min<std::uint64_t>(c, e - 1), e)}, e));
+        }
+      } else {
+        // The count is bits 63:0 of the source; >= e empties a logical
+        // lane and fills an arithmetic one with its sign.
+        Value count;
+        if (op.memSrc) {
+          count = emit(Opc::LOAD, {addrOf(2)}, 64);
+        } else {
+          auto s = vecIndex(2);
+          if (!s)
+            return fail("no count");
+          count = emit(Opc::COPY, {regXmmLo_[*s]}, 64);
+        }
+        const Value big = mask(emit(Opc::UGE, {count, k(e, 64)}, 1), 64);
+        const Value cap = k(op.shift == VecShift::Arith ? e - 1 : 0, 64);
+        Value amount = emit(Opc::OR, {emit(Opc::AND, {count, emit(Opc::NOT, {big}, 64)}, 64),
+                                      emit(Opc::AND, {cap, big}, 64)},
+                            64);
+        Value keep = emit(Opc::NOT, {big}, 64);
+        if (e < 64) {
+          amount = emit(Opc::TRUNC, {amount}, e);
+          keep = emit(Opc::TRUNC, {keep}, e);
+        }
+        for (const Value &x: l) {
+          Value v = emit(shiftOp, {x, amount}, e);
+          if (op.shift != VecShift::Arith)
+            v = emit(Opc::AND, {v, keep}, e);
+          r.push_back(v);
+        }
+      }
+      write(*d, pack(r, e));
+      return;
+    }
+    case V::ByteShiftLeft:
+    case V::ByteShiftRight: {
+      const std::uint64_t c = imm(2);
+      if (c > 15) {
+        write(*d, {k(0, 64), k(0, 64)});
+        return;
+      }
+      const std::uint64_t sh = 8 * c;
+      if (sh == 0) {
+        write(*d, a);
+        return;
+      }
+      const bool left = op.kind == V::ByteShiftLeft;
+      const Opc fwd = left ? Opc::SHL : Opc::SHR, back = left ? Opc::SHR : Opc::SHL;
+      // "near" is the half the bits move away from, "far" the one they enter.
+      const Value nearH = left ? a.lo : a.hi, farH = left ? a.hi : a.lo;
+      Value newNear, newFar;
+      if (sh < 64) {
+        newNear = emit(fwd, {nearH, k(sh, 64)}, 64);
+        newFar = emit(Opc::OR, {emit(fwd, {farH, k(sh, 64)}, 64),
+                                emit(back, {nearH, k(64 - sh, 64)}, 64)},
+                      64);
+      } else {
+        newNear = k(0, 64);
+        newFar = sh == 64 ? nearH : emit(fwd, {nearH, k(sh - 64, 64)}, 64);
+      }
+      write(*d, left ? Vec{newNear, newFar} : Vec{newFar, newNear});
+      return;
+    }
+    case V::MovHiLoad:
+    case V::MovLoLoad: {
+      const Value v = emit(Opc::LOAD, {addrOf(2)}, 64);
+      write(*d, op.kind == V::MovHiLoad ? Vec{a.lo, v} : Vec{v, a.hi});
+      return;
+    }
+    case V::Movhlps:
+    case V::Movlhps:
+    case V::MovssReg: {
+      auto s = vecIndex(2);
+      if (!s)
+        return fail("no source");
+      const Vec b = readReg(*s);
+      if (op.kind == V::Movhlps)
+        write(*d, {b.hi, a.hi});
+      else if (op.kind == V::Movlhps)
+        write(*d, {a.lo, b.lo});
+      else
+        write(*d, {emit(Opc::OR, {emit(Opc::AND, {a.lo, k(0xffffffff00000000ull, 64)}, 64),
+                                  emit(Opc::AND, {b.lo, k(0xffffffffull, 64)}, 64)},
+                        64),
+                   a.hi});
+      return;
+    }
+    case V::Pinsrw: { // op[2] = r32, op[3] = imm
+      auto g = toReg(mc.getOperand(2).getReg());
+      if (!g)
+        return fail("no source");
+      auto l = lanes(a, 16);
+      l[imm(3) & 7] = emit(Opc::TRUNC, {*g}, 16);
+      write(*d, pack(l, 16));
+      return;
+    }
+    case V::Cmpsd: {
+      Value b;
+      if (op.memSrc) {
+        b = emit(Opc::LOAD, {addrOf(2)}, 64);
+      } else {
+        auto s = vecIndex(2);
+        if (!s)
+          return fail("no source");
+        b = emit(Opc::COPY, {regXmmLo_[*s]}, 64);
+      }
+      const std::uint64_t pred = imm(mc.getNumOperands() - 1);
+      if (pred > 7)
+        return fail("AVX predicate");
+      const Value un = emit(Opc::FUNO, {a.lo, b}, 1);
+      const Value lt = emit(Opc::FLT, {a.lo, b}, 1);
+      const Value eq = emit(Opc::FEQ, {a.lo, b}, 1);
+      const Value le = emit(Opc::OR, {lt, eq}, 1);
+      const Value bits[8] = {eq, lt, le, un, notBit(eq), notBit(lt), notBit(le), notBit(un)};
+      write(*d, {mask(bits[pred & 7], 64), a.hi});
+      return;
+    }
+    default:
+      return fail("unhandled kind");
+  }
 }
 
 std::optional<llvm::MCInst> dragon::x86::X86IGNILLifter::rewriteThroughScratch(
@@ -2085,19 +2590,50 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
   if (!dst)
     return fail("no destination");
 
-  // The source operand: memory (low memWidth bits) or a register.
+  // The source operand: memory (low memWidth bits) or a register. The
+  // full-width kinds (logic, 128-bit moves) also take bits 127:64: the next
+  // 8 bytes of memory, or the source's XMMnH.
+  const bool fullWidth = op.kind == S::And || op.kind == S::Andn ||
+                         op.kind == S::Or || op.kind == S::Xor ||
+                         op.kind == S::Move;
+  const std::optional<ignil::Reg> dstHi = xmmHigh(*dst);
   ignil::Value src;
+  std::optional<ignil::Value> srcHi;
   if (op.memSrc) {
     auto ea = emitAddress(mc, srcIdx, ptrWidth, addr, out, tmp);
     const ignil::Width w =
             op.kind == S::Cvtsi2sd || op.kind == S::MovdTo ? op.memWidth : 64;
     src = emit(Opc::LOAD, {ea}, w);
+    if (fullWidth)
+      srcHi = emit(Opc::LOAD,
+                   {emit(Opc::ADD, {ea, ignil::Const{8, ptrWidth}}, ptrWidth)}, 64);
   } else {
     auto r = toReg(mc.getOperand(srcIdx).getReg());
     if (!r)
       return fail("no source");
     src = *r;
+    if (fullWidth)
+      if (auto h = xmmHigh(*r))
+        srcHi = emit(Opc::COPY, {*h}, 64);
   }
+  // Bits 127:64 of the destination for the full-width kinds: computed like
+  // the low half, or unknown if the source half could not be named.
+  auto writeHigh = [&](Opc o, bool invertDst) {
+    if (!dstHi)
+      return;
+    if (!srcHi) {
+      emitUndef(*dstHi, addr, out);
+      return;
+    }
+    if (o == Opc::COPY) {
+      out.append({Opc::COPY, *dstHi, {*srcHi}, addr});
+      return;
+    }
+    ignil::Value d = emit(Opc::COPY, {*dstHi}, 64);
+    if (invertDst)
+      d = emit(Opc::NOT, {d}, 64);
+    out.append({Opc::COPY, *dstHi, {emit(o, {d, *srcHi}, 64)}, addr});
+  };
 
   switch (op.kind) {
     case S::Comisd: {
@@ -2125,12 +2661,14 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
                                        : Opc::XOR;
       auto r = emit(o, {*dst, src}, dst->width);
       out.append({Opc::COPY, *dst, {r}, addr});
+      writeHigh(o, false);
       return;
     }
     case S::Andn: {
       auto r = emit(Opc::AND, {emit(Opc::NOT, {*dst}, dst->width), src},
                     dst->width);
       out.append({Opc::COPY, *dst, {r}, addr});
+      writeHigh(Opc::AND, true);
       return;
     }
     case S::Move:
@@ -2143,6 +2681,11 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
       else if (sw > dst->width)
         v = emit(Opc::TRUNC, {v}, dst->width);
       out.append({Opc::COPY, *dst, {v}, addr});
+      // movaps & co. copy bits 127:64; movq xmm, r64/m64/xmm zeroes them.
+      if (op.kind == S::Move)
+        writeHigh(Opc::COPY, false);
+      else if (dstHi)
+        out.append({Opc::COPY, *dstHi, {ignil::Const{0, 64}}, addr});
       return;
     }
     case S::MovdTo:
@@ -2154,6 +2697,8 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
       if (ignil::widthOf(v) < dst->width)
         v = emit(Opc::ZEXT, {v}, dst->width);
       out.append({Opc::COPY, *dst, {v}, addr});
+      if (dstHi) // movd xmm, r32/m32 zeroes bits 127:32
+        out.append({Opc::COPY, *dstHi, {ignil::Const{0, 64}}, addr});
       return;
     }
     case S::Addsd:

@@ -1601,6 +1601,17 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     const auto regs = undefined(*ib);
     REQUIRE(regs.count(dragon::x86::AX.offset) == 1);
   }
+  SECTION("vmovaps ymm0, [rbx] [c5 fc 28 03] - a YMM destination clobbers "
+          "both XMM halves") {
+    // YMM0 has no IGNIL register; mapping only through toReg clobbered
+    // nothing and left XMM0 holding its old value.
+    const auto *ib = lift({0xc5, 0xfc, 0x28, 0x03});
+    REQUIRE(ib != nullptr);
+    REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
+    const auto regs = undefined(*ib);
+    CHECK(regs.count(dragon::x86::kOffXMM0) == 1);
+    CHECK(regs.count(dragon::x86::kOffXMM0H) == 1);
+  }
   SECTION("what is lifted is not reported: nop, mul rbx, adc rax, rbx") {
     const auto *ib = lift({0x90, 0x48, 0xf7, 0xe3, 0x48, 0x11, 0xd8});
     REQUIRE(ib != nullptr);
@@ -2908,5 +2919,79 @@ TEST_CASE("X86 IGNIL lifting - ABM/BMI instructions", "[ignil][x86][x86_64]") {
                                       0x1000))
                 .unlifted()
                 .empty());
+}
+
+// XMM registers are two 64-bit halves, XMMn (bits 63:0) and XMMnH (127:64).
+// Each scalar instruction says what happens to the upper half, and packed
+// SSE is lifted on both halves. Expected values are Unicorn's.
+TEST_CASE("X86 IGNIL lifting - 128-bit XMM registers", "[ignil][x86][x86_64]") {
+  using dragon::ignil::Reg;
+  auto lo = [](unsigned n) { return Reg{dragon::x86::kOffXMM0 + 8 * n, 64, "XMM"}; };
+  auto hi = [](unsigned n) { return Reg{dragon::x86::kOffXMM0H + 8 * n, 64, "XMMH"}; };
+  constexpr std::uint64_t kA0 = 0x0706050403020100, kA1 = 0x0f0e0d0c0b0a0908;
+  constexpr std::uint64_t kB0 = 0x8899aabbccddeeff, kB1 = 0x0011223344556677;
+  std::vector<std::uint8_t> page(0x40, 0);
+  for (int i = 0; i < 8; ++i)
+    page[i] = static_cast<std::uint8_t>(0x40 + i); // qword at 0x200000
+  struct Case {
+    const char *name;
+    std::vector<std::uint8_t> bytes;
+    unsigned reg; // checked XMM register
+    std::uint64_t lo, hi;
+  };
+  const Case cases[] = {
+          {"movq xmm0, rax zeroes 127:64", {0x66, 0x48, 0x0f, 0x6e, 0xc0}, 0, 0x1234, 0},
+          {"movsd xmm0, [rbx] zeroes 127:64", {0xf2, 0x0f, 0x10, 0x03}, 0, 0x4746454443424140, 0},
+          {"pxor xmm0, xmm0", {0x66, 0x0f, 0xef, 0xc0}, 0, 0, 0},
+          {"movaps xmm1, xmm0 copies 127:64", {0x0f, 0x28, 0xc8}, 1, kA0, kA1},
+          {"punpcklbw xmm0, xmm1", {0x66, 0x0f, 0x60, 0xc1}, 0, 0xcc03dd02ee01ff00,
+           0x88079906aa05bb04},
+          {"pshufd xmm2, xmm1, 0x1b", {0x66, 0x0f, 0x70, 0xd1, 0x1b}, 2, 0x4455667700112233,
+           0xccddeeff8899aabb},
+          {"psrldq xmm0, 3", {0x66, 0x0f, 0x73, 0xd8, 0x03}, 0, 0x0a09080706050403,
+           0x0000000f0e0d0c0b},
+          {"paddd xmm0, xmm1", {0x66, 0x0f, 0xfe, 0xc1}, 0, 0x8f9fafbfcfdfefff,
+           0x0f1f2f3f4f5f6f7f},
+          {"movhlps xmm0, xmm1", {0x0f, 0x12, 0xc1}, 0, kB1, kA1},
+  };
+  auto seed = [&](dragon::ignil::SymbolicExecutor &e) {
+    e.mapMemory(0x200000, page);
+    e.setRegister(x86r::RAX, 0x1234);
+    e.setRegister(x86r::RBX, 0x200000);
+    e.setRegister(lo(0), kA0);
+    e.setRegister(hi(0), kA1);
+    e.setRegister(lo(1), kB0);
+    e.setRegister(hi(1), kB1);
+    e.setRegister(lo(2), 0x5555);
+    e.setRegister(hi(2), 0x6666);
+  };
+  for (const auto &c: cases) {
+    INFO(c.name);
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne(c.bytes, seed, ex, target);
+    CHECK(ex.evaluate(ex.readRegister(lo(c.reg))) == c.lo);
+    CHECK(ex.evaluate(ex.readRegister(hi(c.reg))) == c.hi);
+  }
+  {
+    // addsd keeps bits 127:64.
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne({0xf2, 0x0f, 0x58, 0xc1}, seed, ex, target);
+    CHECK(ex.evaluate(ex.readRegister(hi(0))) == kA1);
+  }
+  {
+    dragon::ignil::SymbolicExecutor ex; // pmovmskb eax, xmm1
+    std::uint64_t target = 0;
+    runOne({0x66, 0x0f, 0xd7, 0xc1}, seed, ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == 0xff);
+  }
+  {
+    dragon::ignil::SymbolicExecutor ex; // movups [rbx], xmm1 stores 16 bytes
+    std::uint64_t target = 0;
+    runOne({0x0f, 0x11, 0x0b}, seed, ex, target);
+    CHECK(ex.evaluate(ex.readMemory(0x200000, 64)) == kB0);
+    CHECK(ex.evaluate(ex.readMemory(0x200008, 64)) == kB1);
+  }
 }
 #endif // DRAGON_WITH_Z3

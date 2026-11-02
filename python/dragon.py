@@ -1380,6 +1380,24 @@ class x86:
     CF = (136, 8, 'CF'); PF = (137, 8, 'PF'); AF = (138, 8, 'AF'); ZF = (139, 8, 'ZF')
     SF = (140, 8, 'SF'); OF = (141, 8, 'OF'); DF = (142, 8, 'DF')
 
+    # XMM registers as two 64-bit halves: XMMn = bits 63:0, XMMnH = bits 127:64
+    XMM0 = (143, 64, 'XMM0'); XMM0H = (271, 64, 'XMM0H')
+    XMM1 = (151, 64, 'XMM1'); XMM1H = (279, 64, 'XMM1H')
+    XMM2 = (159, 64, 'XMM2'); XMM2H = (287, 64, 'XMM2H')
+    XMM3 = (167, 64, 'XMM3'); XMM3H = (295, 64, 'XMM3H')
+    XMM4 = (175, 64, 'XMM4'); XMM4H = (303, 64, 'XMM4H')
+    XMM5 = (183, 64, 'XMM5'); XMM5H = (311, 64, 'XMM5H')
+    XMM6 = (191, 64, 'XMM6'); XMM6H = (319, 64, 'XMM6H')
+    XMM7 = (199, 64, 'XMM7'); XMM7H = (327, 64, 'XMM7H')
+    XMM8 = (207, 64, 'XMM8'); XMM8H = (335, 64, 'XMM8H')
+    XMM9 = (215, 64, 'XMM9'); XMM9H = (343, 64, 'XMM9H')
+    XMM10 = (223, 64, 'XMM10'); XMM10H = (351, 64, 'XMM10H')
+    XMM11 = (231, 64, 'XMM11'); XMM11H = (359, 64, 'XMM11H')
+    XMM12 = (239, 64, 'XMM12'); XMM12H = (367, 64, 'XMM12H')
+    XMM13 = (247, 64, 'XMM13'); XMM13H = (375, 64, 'XMM13H')
+    XMM14 = (255, 64, 'XMM14'); XMM14H = (383, 64, 'XMM14H')
+    XMM15 = (263, 64, 'XMM15'); XMM15H = (391, 64, 'XMM15H')
+
 
 # -- AArch64 register descriptors -----------------------------------------------
 

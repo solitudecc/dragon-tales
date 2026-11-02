@@ -60,6 +60,17 @@ elif arch == A.ARM64:
     uc_mode, uc_arch, sp_name, flag_reg, width = UC_MODE_ARM, UC_ARCH_ARM64, 'SP', A64C.UC_ARM64_REG_NZCV, 64
 else:
     print('unsupported architecture'); sys.exit(0)
+
+# XMM registers (x86): seeded with random 128-bit values on both sides and
+# compared as their two 64-bit halves (XMMn = bits 63:0, XMMnH = 127:64).
+xmms = []
+if arch in (A.X86_64, A.X86_32):
+    xmms = [(i, getattr(dragon.x86, f'XMM{i}'), getattr(dragon.x86, f'XMM{i}H'),
+             getattr(X86C, f'UC_X86_REG_XMM{i}')) for i in range(16 if arch == A.X86_64 else 8)]
+def xmm_values(seed):
+    xr = random.Random(seed)
+    half = lambda: xr.getrandbits(46) if xr.random() < 0.5 else xr.getrandbits(64)
+    return [(half(), half()) for _ in xmms]
 MASK = (1 << width) - 1
 HEAP = 0x10000000 if width == 32 else 0x7f0000000000
 STACK = 0x20000000 if width == 32 else 0x7ff000000000
@@ -111,6 +122,11 @@ for b in blocks:
     insns = list(bb.instructions())
     while insns and (insns[-1].is_jump or insns[-1].is_return or insns[-1].is_trap):
         insns.pop()
+    # REALBLOCK_FILTER=text keeps only blocks with an operand containing it
+    # (e.g. xmm, to concentrate on SSE code).
+    if _os.environ.get('REALBLOCK_FILTER') and not any(
+            _os.environ['REALBLOCK_FILTER'] in i.operands for i in insns):
+        continue
     if not insns or any(i.is_call or i.is_jump or i.is_return or i.is_trap or
                         i.mnemonic in ('syscall', 'svc', 'int', 'cpuid', 'rdtsc',
                                        'xgetbv', 'rdrand', 'hlt', 'in', 'out')
@@ -168,6 +184,9 @@ for b in blocks:
         for n, _, ucr in regs:
             uc.reg_write(ucr, init[n])
         uc.reg_write(flag_reg, fl)
+        xv = xmm_values(b * 131 + trial + 7)
+        for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
+            uc.reg_write(ucx, (vhi << 64) | vlo)
         try:
             uc.emu_start(start, end, count=len(insns))
         except UcError:
@@ -184,6 +203,9 @@ for b in blocks:
             ex.set_register(reg, (fl >> bit) & 1)
         if uc_arch == UC_ARCH_X86:
             ex.set_register(X.DF, (fl >> 10) & 1)
+        for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
+            ex.set_register(lo, vlo)
+            ex.set_register(hi, vhi)
         for base, data in mapped.items():
             # the executor sees the memory as it was before the block ran
             ex.map_memory(base, data)
@@ -196,6 +218,12 @@ for b in blocks:
             got, want = ex.concrete_register(reg), uc.reg_read(ucr) & MASK
             if got is not None and got != want:
                 diffs.append(f'{n}: dragon={got:#x} unicorn={want:#x}')
+        for i, lo, hi, ucx in xmms:
+            full = uc.reg_read(ucx)
+            for name, reg, want in ((f'XMM{i}', lo, full & (2**64 - 1)), (f'XMM{i}H', hi, full >> 64)):
+                got = ex.concrete_register(reg)
+                if got is not None and got != want:
+                    diffs.append(f'{name}: dragon={got:#x} unicorn={want:#x}')
         fafter = uc.reg_read(flag_reg)
         for f, reg, bit in flags:
             got = ex.concrete_register(reg)

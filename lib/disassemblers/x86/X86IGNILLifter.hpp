@@ -875,6 +875,39 @@ class X86IGNILLifter {
     Mulx,                   // hi:lo = EDX/RDX * src, flags untouched
   };
   std::unordered_map<unsigned, BmiKind> bmiOps_;
+
+  /// Packed SSE on the two 64-bit halves of an XMM register (liftVec).
+  enum class VecKind : std::uint8_t {
+    Store,                  // movups/movaps/movdqu/... m128, xmm
+    Add, Sub, CmpEq, CmpGt, // per lane (laneWidth)
+    UnpackLo, UnpackHi,     // punpckl*/punpckh*, unpck[lh]p[sd]
+    Pshufd, Pshuflw, Pshufhw,
+    Shufps, Shufpd,
+    ShiftImm, ShiftReg,     // psll/psrl/psra by imm8 or by xmm[63:0]
+    ByteShiftLeft, ByteShiftRight, // pslldq/psrldq
+    Pmovmskb,
+    MovHiLoad, MovHiStore, MovLoLoad, MovLoStore, // movhp[sd]/movlp[sd]
+    Movhlps, Movlhps,
+    MovssLoad, MovssStore, MovssReg,
+    Pextrw, Pinsrw,
+    Cmpsd,
+  };
+  enum class VecShift : std::uint8_t { Left, Right, Arith };
+  struct VecOp {
+    VecKind kind;
+    ignil::Width laneWidth = 64;
+    bool memSrc = false; ///< the last source is a memory operand
+    VecShift shift = VecShift::Left;
+  };
+  std::unordered_map<unsigned, VecOp> vecOps_;
+  void liftVec(const llvm::MCInst &mc, const VecOp &op, std::uint64_t addr,
+               ignil::Block &out, std::uint32_t &tmp) const;
+  /// LLVM XMM/YMM/ZMM register -> index n of XMMn (for the high halves and
+  /// for clobbering both halves when an unlifted instruction writes one).
+  std::unordered_map<unsigned, unsigned> vecRegIndex_;
+  ignil::Reg regXmmLo_[16]{}, regXmmHi_[16]{};
+  /// The bits-127:64 register of an XMM low half (XMMn -> XMMnH).
+  [[nodiscard]] std::optional<ignil::Reg> xmmHigh(const ignil::Reg &low) const;
   void liftBmi(const llvm::MCInst &mc, BmiKind kind, std::uint64_t addr,
                ignil::Block &out, std::uint32_t &tmp) const;
   /// Scratch candidates: the LLVM register saved/restored and its 8/16/32/64-

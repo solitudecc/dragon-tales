@@ -64,6 +64,17 @@ elif arch == A.ARM64:
     pc_reg = A64C.UC_ARM64_REG_PC
 else:
     print('unsupported'); sys.exit(0)
+
+# XMM registers (x86): seeded with random 128-bit values on both sides and
+# compared as their two 64-bit halves (XMMn = bits 63:0, XMMnH = 127:64).
+xmms = []
+if arch in (A.X86_64, A.X86_32):
+    xmms = [(i, getattr(dragon.x86, f'XMM{i}'), getattr(dragon.x86, f'XMM{i}H'),
+             getattr(X86C, f'UC_X86_REG_XMM{i}')) for i in range(16 if arch == A.X86_64 else 8)]
+def xmm_values(seed):
+    xr = random.Random(seed)
+    half = lambda: xr.getrandbits(46) if xr.random() < 0.5 else xr.getrandbits(64)
+    return [(half(), half()) for _ in xmms]
 MASK = (1 << width) - 1
 HEAP = 0x10000000 if width == 32 else 0x7f0000000000
 STACK = 0x20000000 if width == 32 else 0x7ff000000000
@@ -142,6 +153,11 @@ for b in blocks:
     insns = list(bb.instructions())
     while insns and (insns[-1].is_jump or insns[-1].is_return or insns[-1].is_trap):
         insns.pop()
+    # REALBLOCK_FILTER=text keeps only blocks with an operand containing it
+    # (e.g. xmm, to concentrate on SSE code).
+    if _os.environ.get('REALBLOCK_FILTER') and not any(
+            _os.environ['REALBLOCK_FILTER'] in i.operands for i in insns):
+        continue
     if not insns or any(i.is_call or i.is_jump or i.is_return or i.is_trap or
                         i.mnemonic in ('syscall', 'svc', 'int', 'cpuid', 'rdtsc', 'xgetbv', 'rdrand', 'hlt')
                         or i.mnemonic.startswith(('rep', 'lock', 'f', 'cmpxchg')) for i in insns):
@@ -191,6 +207,9 @@ for b in blocks:
     for n, _, ucr in regs:
         uc.reg_write(ucr, init[n])
     uc.reg_write(flag_reg, fl)
+    xv = xmm_values(b * 131 + 7)
+    for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
+        uc.reg_write(ucx, (vhi << 64) | vlo)
     try:
         uc.emu_start(start, end, count=len(insns))
     except UcError:
@@ -232,12 +251,15 @@ for b in blocks:
         f.write(struct.pack('<Q', len(mapped)))
         for base, data in mapped.items():
             f.write(struct.pack('<Q', base) + data)
-        f.write(struct.pack('<Q', len(regs) + len(flags)))
+        f.write(struct.pack('<Q', len(regs) + len(flags) + 2 * len(xmms)))
         for (n, reg, _), (off, w) in zip(regs, gpr_regs):
             f.write(struct.pack('<QIQ', off, w, init[n]))
         for (fname, reg, bit), (off, w) in zip(flags, flag_regs):
             f.write(struct.pack('<QIQ', off, 1, (fl >> bit) & 1))
-        outs = gpr_regs + flag_regs
+        for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
+            f.write(struct.pack('<QIQ', lo[0], 8, vlo))
+            f.write(struct.pack('<QIQ', hi[0], 8, vhi))
+        outs = gpr_regs + flag_regs + [(r[0], 8) for _, lo, hi, _ in xmms for r in (lo, hi)]
         f.write(struct.pack('<Q', len(outs)))
         for off, w in outs:
             f.write(struct.pack('<QI', off, w))
@@ -278,10 +300,13 @@ for b in blocks:
         ex.set_register(reg, init[n])
     for fname, reg, bit in flags:
         ex.set_register(reg, (fl >> bit) & 1)
+    for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
+        ex.set_register(lo, vlo)
+        ex.set_register(hi, vhi)
     for base, data in mapped.items():
         ex.map_memory(base, data)
     if ex.run(blk).ok:
-        for _, reg, _ in list(regs) + list(flags):
+        for reg in [r for _, r, _ in list(regs) + list(flags)] + [r for _, lo, hi, _ in xmms for r in (lo, hi)]:
             if ex.concrete_register(reg) is None:
                 undef_offsets.add(reg[0])
     diffs = []
@@ -292,6 +317,12 @@ for b in blocks:
         v = got.get(('R', reg[0]))
         if v is not None and (v & MASK) != want:
             diffs.append(f'{n}: llvm={v & MASK:#x} unicorn={want:#x}')
+    for i, lo, hi, ucx in xmms:
+        full = uc.reg_read(ucx)
+        for name, reg, want in ((f'XMM{i}', lo, full & (2**64 - 1)), (f'XMM{i}H', hi, full >> 64)):
+            v = got.get(('R', reg[0]))
+            if reg[0] not in undef_offsets and v is not None and v != want:
+                diffs.append(f'{name}: llvm={v:#x} unicorn={want:#x}')
     fafter = uc.reg_read(flag_reg)
     # Deliberate: after an x86 shift by more than one, OF is architecturally
     # undefined and dragon models it like a 1-bit shift (emitGatedShiftFlags);
