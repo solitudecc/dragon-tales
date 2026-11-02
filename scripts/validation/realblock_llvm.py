@@ -270,6 +270,20 @@ for b in blocks:
         m = re.match(r'\s*(\w+):i\d+ = UNDEF\(\)', line)
         if m and hasattr(regmod, m.group(1)):
             undef_offsets.add(getattr(regmod, m.group(1))[0])
+    # A result *computed from* an UNDEF (`bsr ebx, eax; xor ebx, 31` with
+    # eax = 0) is just as free: run the block concretely through the
+    # SymbolicExecutor from the same state and skip what it leaves symbolic.
+    ex = dragon.SymbolicExecutor()
+    for n, reg, _ in regs:
+        ex.set_register(reg, init[n])
+    for fname, reg, bit in flags:
+        ex.set_register(reg, (fl >> bit) & 1)
+    for base, data in mapped.items():
+        ex.map_memory(base, data)
+    if ex.run(blk).ok:
+        for _, reg, _ in list(regs) + list(flags):
+            if ex.concrete_register(reg) is None:
+                undef_offsets.add(reg[0])
     diffs = []
     for (n, reg, ucr) in regs:
         if reg[0] in undef_offsets:
