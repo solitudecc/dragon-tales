@@ -153,3 +153,25 @@ LLVM 临时量保存原始整数位，使浮点结果能安全参与 V128 的拼
 
 剩余包含 PAC/AUT、AES/PMULL、向量算术和结构化访存、部分整数/系统指令；
 相应形式继续显式报告 UNDEF/unlifted。覆盖率提升不代表支持整个 A64 ISA。
+
+## 任务 3：SSE / SSSE3 / SSE4.1 与 FP32
+
+补齐任务列出的打包/饱和、乘法、平均/极值/SAD、字节重排/对齐、符号/绝对值、
+提取/插入、扩展、PTEST、blend，以及 FP32 标量/打包和 FP64 打包运算、平方根、
+极值、比较与转换。MIN/MAX 的 NaN 和 ±0 分支保留第二个操作数的原始位；
+CVTTSS/SD2SI 将越界或 NaN 转为整数 indefinite，转换前先防止 LLVM poison。
+缩窄内存源只读取架构规定的字节数。
+
+- 两组新增 C++ 测试包含 129 个整数与 35 个浮点 Unicorn 参考状态，旧版均失败；
+  新版通过 2648 个断言。全套 `ctest`：422/422。
+- `difftest_sse.py`：393 模板 × 60 输入，0 差异、0 未 lift；700 个活动浮点
+  NaN 结果保留未知，其他 lane 与保留位照常检查。
+- SQLite x64 O2：100 个真实块、252 次有效输入，优化前后各 0 差异；48 次
+  Unicorn fault 跳过。按原脚本，高地址内存 32 项、已知区域外写入 38 项不比对。
+- LLVM 编译后原生运行 100 个块，0 差异；另跳过高地址 46 块、Unicorn fault 23 次。
+- 28 个 x64 样本的未 lift 总数：2625 → 2508（包含先前 FP32 基础提交减少的 49 条，
+  本次再减少 68 条）。SQLite PE O2：295 → 285；Lua PE O0：194 → 192。
+- 最终 69 样本语料库回归将在全部任务的总验收中再次运行。
+
+指令边界行为参考 [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)，
+预期位模式以 Unicorn 独立执行结果为准。

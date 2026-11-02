@@ -120,6 +120,15 @@ Gotchas:
 - LLVM guest-memory accesses and external byte-packed register snapshots use
   alignment 1. A guest vector address or XMM snapshot offset need not have
   native alignment; stack allocas retain their own alignment.
+- SSE lane operations snapshot both sources before writing either XMM half.
+  PMOVSX/PMOVZX and scalar memory sources read only the architectural operand
+  width, so a valid operand at a mapped-page end does not overread. Saturating
+  integer ops widen before arithmetic and clamp before narrowing. MIN/MAX
+  return the second operand's raw bits for either NaN and for equal signed
+  zeros. CVTTSS2SI/CVTTSD2SI return integer indefinite for NaN/overflow; their
+  invalid source is replaced with zero *before* FP-to-int (avoiding LLVM
+  poison). Range checks use the truncated value to accept fractional inputs
+  just below the signed minimum whose toward-zero result is representable.
 - `Disassembler::AnalysisHints{entryPoints, readMemory}`: entry points are
   function + block starts and recursive-traversal roots; `readMemory` lets
   jump-table resolution read tables outside the analysed bytes.
@@ -166,7 +175,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 |---|---|
 | `difftest_x64.py` | ~810 single-instruction x86-64 templates vs Unicorn (regs, flags, memory), incl. memory-operand forms, every cc, high-byte registers, SP operands. Expected: 0 diff; the ~135 unlifted are memory-operand shifts/rotates/mul/bt*/shld (coverage, see backlog). `ONLY=text` filters. |
 | `difftest_a64.py` | 835 AArch64 templates, including scalar FP edges, SIMD moves and memory; compares all 32 V registers as 64-bit halves. Expected: 3 diffs = CALL/RET abstraction, 0 unlifted. `ONLY=text` filters. |
-| `difftest_sse.py` | 35 SSE templates vs Unicorn incl. NaN/±0/inf; NaN results counted as "unknown", not wrong. |
+| `difftest_sse.py` | 393 SSE/SSSE3/SSE4.1 templates x 60 inputs; includes saturation boundaries, FP32/64 exceptional values and conversions. Checks FP32 per lane, including untouched lanes; only active arithmetic NaN results may be unknown. `ONLY=text` filters. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
 | `slice_diff.py` | BackwardSlicer vs SymbolicExecutor on random blocks mixing 8/16/32/64-bit writes. |
 | `memory_slice_diff.py` | Stack-slot STORE/LOAD forwarding vs 448 Unicorn executions; 192 unique slices, 0 wrong. Includes disjoint/overlapping/unknown-alias stores and SP changes. |

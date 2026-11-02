@@ -99,9 +99,8 @@ class X86IGNILLifter {
   };
   std::unordered_map<unsigned, MemOperandOp> memOperandOps_;
 
-  // SSE instructions expressible on the modelled low 64 bits of an XMM
-  // register (liftSse). 128-bit stores are not among them: they write 16
-  // bytes, of which only 8 are modelled.
+  // Scalar and move SSE forms handled by liftSse. liftVec covers full-width
+  // stores and lane operations using both modelled 64-bit halves.
   enum class SseKind : std::uint8_t {
     Comisd,      // comisd/ucomisd: ZF/PF/CF from an IEEE compare
     And, Andn, Or, Xor, // andpd/andnpd/orpd/xorpd and the ps forms
@@ -892,6 +891,14 @@ class X86IGNILLifter {
     MovssLoad, MovssStore, MovssReg,
     Pextrw, Pinsrw,
     Cmpsd,
+    PackUnsigned, PackSigned,
+    AddSatUnsigned, SubSatUnsigned, AddSatSigned, SubSatSigned,
+    MulUnsignedDword, MulLow, MulHighSigned, MulHighUnsigned, MaddSigned,
+    Average, MinSigned, MinUnsigned, MaxSigned, MaxUnsigned, Sad,
+    ShuffleBytes, AlignBytes, Abs, Sign, Extract, Insert,
+    ExtendSigned, ExtendUnsigned, Test, Blend,
+    FloatAdd, FloatSub, FloatMul, FloatDiv, FloatMin, FloatMax, FloatSqrt,
+    FloatToInt, IntToFloat, FloatWiden, FloatNarrow, FloatCompareFlags, FloatCompareMask,
   };
   enum class VecShift : std::uint8_t { Left, Right, Arith };
   struct VecOp {
@@ -899,6 +906,9 @@ class X86IGNILLifter {
     ignil::Width laneWidth = 64;
     bool memSrc = false; ///< the last source is a memory operand
     VecShift shift = VecShift::Left;
+    ignil::Width sourceWidth = 0;
+    bool memDst = false;
+    bool scalar = false;
   };
   std::unordered_map<unsigned, VecOp> vecOps_;
   void liftVec(const llvm::MCInst &mc, const VecOp &op, std::uint64_t addr,

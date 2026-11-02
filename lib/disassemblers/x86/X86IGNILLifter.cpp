@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <span>
+#include <tuple>
 #include <vector>
 #include <optional>
 #include <string_view>
@@ -871,6 +872,90 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     vec("CMPSDrri_Int", {V::Cmpsd});
     vec("CMPSDrmi", {V::Cmpsd, 64, true});
     vec("CMPSDrmi_Int", {V::Cmpsd, 64, true});
+
+    vecRM("PACKUSWB", {V::PackUnsigned,16});
+    vecRM("PACKUSDW", {V::PackUnsigned,32});
+    vecRM("PACKSSWB", {V::PackSigned,16});
+    vecRM("PACKSSDW", {V::PackSigned,32});
+    for (auto [suffix,lw] : {std::pair{"B",8},std::pair{"W",16}}) {
+      vecRM(std::string("PADDUS")+suffix,{V::AddSatUnsigned,static_cast<ignil::Width>(lw)});
+      vecRM(std::string("PSUBUS")+suffix,{V::SubSatUnsigned,static_cast<ignil::Width>(lw)});
+      vecRM(std::string("PADDS")+suffix,{V::AddSatSigned,static_cast<ignil::Width>(lw)});
+      vecRM(std::string("PSUBS")+suffix,{V::SubSatSigned,static_cast<ignil::Width>(lw)});
+      vecRM(std::string("PAVG")+suffix,{V::Average,static_cast<ignil::Width>(lw)});
+    }
+    vecRM("PMULUDQ",{V::MulUnsignedDword,32});
+    vecRM("PMULLW",{V::MulLow,16});
+    vecRM("PMULLD",{V::MulLow,32});
+    vecRM("PMULHW",{V::MulHighSigned,16});
+    vecRM("PMULHUW",{V::MulHighUnsigned,16});
+    vecRM("PMADDWD",{V::MaddSigned,16});
+    vecRM("PSADBW",{V::Sad,8});
+    for (const auto &[suffix,lw] : kLanes) {
+      if (lw == 64) continue;
+      const std::string sfx(suffix);
+      vecRM("PMINS"+sfx,{V::MinSigned,lw});
+      vecRM("PMAXS"+sfx,{V::MaxSigned,lw});
+      vecRM("PMINU"+sfx,{V::MinUnsigned,lw});
+      vecRM("PMAXU"+sfx,{V::MaxUnsigned,lw});
+      vecRM("PABS"+sfx,{V::Abs,lw});
+      vecRM("PSIGN"+sfx,{V::Sign,lw});
+    }
+    vecRM("PSHUFB",{V::ShuffleBytes,8});
+    vec("PALIGNRrri",{V::AlignBytes,8});
+    vec("PALIGNRrmi",{V::AlignBytes,8,true});
+    vecRM("PTEST",{V::Test});
+    for (const auto &[name,lw] : {std::pair{"BLENDPS",32},std::pair{"BLENDPD",64},std::pair{"PBLENDW",16}}) {
+      vec(std::string(name)+"rri",{V::Blend,static_cast<ignil::Width>(lw)});
+      vec(std::string(name)+"rmi",{V::Blend,static_cast<ignil::Width>(lw),true});
+    }
+    for (const auto &[suffix,lw] : kLanes) {
+      const std::string sfx(suffix);
+      vec("PEXTR"+sfx+"rri",{V::Extract,lw});
+      VecOp extraction{V::Extract,lw}; extraction.memDst=true;
+      vec("PEXTR"+sfx+"mri",extraction);
+      vec("PINSR"+sfx+"rri",{V::Insert,lw});
+      vec("PINSR"+sfx+"rmi",{V::Insert,lw,true});
+    }
+    for (const auto &[from,fw] : kLanes)
+      for (const auto &[to,tw] : kLanes) {
+        if (fw >= tw) continue;
+        const std::string suffix=std::string(from)+std::string(to);
+        VecOp sx{V::ExtendSigned,tw}; sx.sourceWidth=fw;
+        VecOp zx{V::ExtendUnsigned,tw}; zx.sourceWidth=fw;
+        vecRM("PMOVSX"+suffix,sx); vecRM("PMOVZX"+suffix,zx);
+      }
+    auto floatRM = [&](const std::string &base,VecOp operation) {
+      for (const auto suffix : {"rr","rr_Int","r","r_Int"}) vec(base+suffix,operation);
+      operation.memSrc=true;
+      for (const auto suffix : {"rm","rm_Int","m","m_Int"}) vec(base+suffix,operation);
+    };
+    for (const auto &[suffix,width,scalar] :
+         {std::tuple{"SS",32,true},std::tuple{"SD",64,true},std::tuple{"PS",32,false},std::tuple{"PD",64,false}}) {
+      for (const auto &[name,kind] : {std::pair{"ADD",V::FloatAdd},std::pair{"SUB",V::FloatSub},
+           std::pair{"MUL",V::FloatMul},std::pair{"DIV",V::FloatDiv},std::pair{"MIN",V::FloatMin},
+           std::pair{"MAX",V::FloatMax},std::pair{"SQRT",V::FloatSqrt}}) {
+        VecOp operation{kind,static_cast<ignil::Width>(width)}; operation.scalar=scalar;
+        floatRM(std::string(name)+suffix,operation);
+      }
+      if (scalar) {
+        VecOp compare{V::FloatCompareFlags,static_cast<ignil::Width>(width)};
+        floatRM(std::string("COMI")+suffix,compare); floatRM(std::string("UCOMI")+suffix,compare);
+        VecOp toInt{V::FloatToInt,static_cast<ignil::Width>(width)};
+        floatRM(std::string("CVTT")+suffix+"2SI",toInt); floatRM(std::string("CVTT")+suffix+"2SI64",toInt);
+        for (const unsigned iw : {32u,64u}) {
+          VecOp fromInt{V::IntToFloat,static_cast<ignil::Width>(width)};
+          fromInt.sourceWidth=iw;
+          floatRM(std::string(iw == 64 ? "CVTSI642" : "CVTSI2")+suffix,fromInt);
+        }
+      }
+      VecOp maskOp{V::FloatCompareMask,static_cast<ignil::Width>(width)}; maskOp.scalar=scalar;
+      for (const auto tail : {"rri","rri_Int"}) vec(std::string("CMP")+suffix+tail,maskOp);
+      maskOp.memSrc=true;
+      for (const auto tail : {"rmi","rmi_Int"}) vec(std::string("CMP")+suffix+tail,maskOp);
+    }
+    floatRM("CVTPS2PD",{V::FloatWiden,64});
+    floatRM("CVTPD2PS",{V::FloatNarrow,32});
 
     struct Names {
       std::string_view full, r8, r16, r32, r64;
@@ -1802,9 +1887,152 @@ void dragon::x86::X86IGNILLifter::liftVec(const llvm::MCInst &mc, const VecOp &o
     return emit(Opc::NEG, {emit(Opc::ZEXT, {bit}, w)}, w);
   };
   auto notBit = [&](Value bit) { return emit(Opc::XOR, {bit, ignil::Const{1, 1}}, 1); };
+  auto choose = [&](Value condition,Value yes,Value no,ignil::Width width) {
+    const auto selected=mask(condition,width);
+    return emit(Opc::OR,{emit(Opc::AND,{yes,selected},width),
+                         emit(Opc::AND,{no,emit(Opc::NOT,{selected},width)},width)},width);
+  };
+  auto saturate = [&](Value value,ignil::Width width,ignil::Width result,bool signedResult) {
+    const auto minimum = signedResult ? ~((1ull << (result-1))-1) : 0;
+    const auto maximum = signedResult ? (1ull << (result-1))-1 : (1ull << result)-1;
+    value=choose(emit(Opc::SLT,{value,k(minimum,width)},1),k(minimum,width),value,width);
+    value=choose(emit(Opc::SGT,{value,k(maximum,width)},1),k(maximum,width),value,width);
+    return emit(Opc::TRUNC,{value},result);
+  };
   const ignil::Width e = op.laneWidth;
 
   switch (op.kind) {
+    case V::FloatToInt: {
+      const auto dst=toReg(mc.getOperand(0).getReg());
+      if (!dst) return fail("no integer destination");
+      Value value;
+      if (op.memSrc) value=emit(Opc::LOAD,{addrOf(1)},e);
+      else {
+        const auto src=vecIndex(1);
+        if (!src) return fail("no floating source");
+        value=regXmmLo_[*src];
+        if (e == 32) value=emit(Opc::TRUNC,{value},32);
+      }
+      const auto less=e == 32 ? Opc::FLT32 : Opc::FLT;
+      const auto unordered=e == 32 ? Opc::FUNO32 : Opc::FUNO;
+      const auto rounded=emit(e == 32 ? Opc::FTRUNC32 : Opc::FTRUNC,{value},e);
+      const auto fraction=e == 32 ? 23u : 52u;
+      const uint64_t bound=uint64_t((e == 32 ? 127 : 1023)+dst->width-1) << fraction;
+      const auto below=emit(less,{rounded,k(bound | (1ull << (e-1)),e)},1);
+      const auto above=notBit(emit(less,{rounded,k(bound,e)},1));
+      const auto bad=emit(Opc::OR,{emit(unordered,{value,value},1),emit(Opc::OR,{below,above},1)},1);
+      const auto safe=choose(bad,k(0,e),value,e);
+      const auto integer=emit(e == 32 ? Opc::FPTOSI32 : Opc::FPTOSI,{safe},dst->width);
+      out.append({Opc::COPY,*dst,{choose(bad,k(1ull << (dst->width-1),dst->width),integer,dst->width)},addr});
+      return;
+    }
+    case V::IntToFloat: {
+      const auto dst=vecIndex(0);
+      if (!dst) return fail("no floating destination");
+      const Vec previous=readReg(*dst);
+      Value value;
+      if (op.memSrc) value=emit(Opc::LOAD,{addrOf(2)},op.sourceWidth);
+      else {
+        const auto src=toReg(mc.getOperand(2).getReg());
+        if (!src) return fail("no integer source");
+        value=*src;
+      }
+      value=emit(e == 32 ? Opc::SITOFP32 : Opc::SITOFP,{value},e);
+      if (e == 32) value=emit(Opc::OR,{emit(Opc::AND,{previous.lo,k(0xffffffff00000000ull,64)},64),emit(Opc::ZEXT,{value},64)},64);
+      write(*dst,{value,previous.hi}); return;
+    }
+    case V::FloatWiden: case V::FloatNarrow: {
+      const auto dst=vecIndex(0);
+      if (!dst) return fail("no conversion destination");
+      std::optional<Vec> src;
+      if (op.kind == V::FloatWiden && op.memSrc)
+        src=Vec{emit(Opc::LOAD,{addrOf(1)},64),k(0,64)};
+      else src=source(1);
+      if (!src) return fail("no conversion source");
+      const auto inputs=lanes(*src,op.kind == V::FloatWiden ? 32 : 64);
+      std::vector<Value> result;
+      for (unsigned i=0;i<2;++i) result.push_back(emit(op.kind == V::FloatWiden ? Opc::FPEXT : Opc::FPTRUNC,{inputs[i]},e));
+      if (op.kind == V::FloatNarrow) { result.push_back(k(0,32)); result.push_back(k(0,32)); }
+      write(*dst,pack(result,e)); return;
+    }
+    case V::FloatCompareFlags: {
+      const auto first=vecIndex(0);
+      if (!first) return fail("no first compare source");
+      Value left=regXmmLo_[*first],right;
+      if (op.memSrc) right=emit(Opc::LOAD,{addrOf(1)},e);
+      else {
+        const auto second=vecIndex(1);
+        if (!second) return fail("no second compare source");
+        right=regXmmLo_[*second];
+      }
+      if (e == 32) { left=emit(Opc::TRUNC,{left},32); if (!op.memSrc) right=emit(Opc::TRUNC,{right},32); }
+      const auto unordered=emit(e == 32 ? Opc::FUNO32 : Opc::FUNO,{left,right},1);
+      const auto equal=emit(e == 32 ? Opc::FEQ32 : Opc::FEQ,{left,right},1);
+      const auto less=emit(e == 32 ? Opc::FLT32 : Opc::FLT,{left,right},1);
+      out.append({Opc::ZEXT,regZF_,{emit(Opc::OR,{unordered,equal},1)},addr});
+      out.append({Opc::ZEXT,regCF_,{emit(Opc::OR,{unordered,less},1)},addr});
+      out.append({Opc::ZEXT,regPF_,{unordered},addr});
+      for (const auto flag : {regAF_,regSF_,regOF_}) out.append({Opc::COPY,flag,{k(0,8)},addr});
+      return;
+    }
+    case V::FloatSqrt:
+      if (!op.scalar) {
+        const auto dst=vecIndex(0); const auto src=source(1);
+        if (!dst || !src) return fail("bad packed sqrt operands");
+        std::vector<Value> result;
+        for (const auto value : lanes(*src,e)) result.push_back(emit(e == 32 ? Opc::FSQRT32 : Opc::FSQRT,{value},e));
+        write(*dst,pack(result,e)); return;
+      }
+      break;
+    case V::Extract: {
+      auto index=vecIndex(op.memDst ? 5 : 1);
+      if (!index) return fail("no vector source");
+      const auto values=lanes(readReg(*index),e);
+      Value value=values[imm(mc.getNumOperands()-1) & (128/e-1)];
+      if (op.memDst) out.append({Opc::STORE,std::nullopt,{addrOf(0),value},addr});
+      else {
+        const auto dst=toReg(mc.getOperand(0).getReg());
+        if (!dst) return fail("no GPR destination");
+        if (dst->width != e) value=emit(Opc::ZEXT,{value},dst->width);
+        out.append({Opc::COPY,*dst,{value},addr});
+      }
+      return;
+    }
+    case V::Abs:
+    case V::ExtendSigned:
+    case V::ExtendUnsigned: {
+      const auto dst=vecIndex(0);
+      if (!dst) return fail("no vector destination");
+      const bool extend=op.kind != V::Abs;
+      const ignil::Width input=extend ? op.sourceWidth : e;
+      std::optional<Vec> src;
+      if (extend && op.memSrc) {
+        const auto width=static_cast<ignil::Width>(128/e*input);
+        Value bits=emit(Opc::LOAD,{addrOf(1)},width);
+        if (width < 64) bits=emit(Opc::ZEXT,{bits},64);
+        src=Vec{bits,k(0,64)};
+      } else src=source(1);
+      if (!src) return fail("no vector source");
+      const auto values=lanes(*src,input);
+      std::vector<Value> result;
+      for (unsigned i=0;i<128/e;++i)
+        result.push_back(extend ? emit(op.kind == V::ExtendSigned ? Opc::SEXT : Opc::ZEXT,{values[i]},e)
+          : choose(emit(Opc::SLT,{values[i],k(0,e)},1),emit(Opc::NEG,{values[i]},e),values[i],e));
+      write(*dst,pack(result,e));
+      return;
+    }
+    case V::Test: {
+      const auto first=vecIndex(0); const auto second=source(1);
+      if (!first || !second) return fail("bad PTEST inputs");
+      const Vec a=readReg(*first), b=*second;
+      const auto both=emit(Opc::OR,{emit(Opc::AND,{a.lo,b.lo},64),emit(Opc::AND,{a.hi,b.hi},64)},64);
+      const auto missing=emit(Opc::OR,{emit(Opc::AND,{emit(Opc::NOT,{a.lo},64),b.lo},64),
+                                     emit(Opc::AND,{emit(Opc::NOT,{a.hi},64),b.hi},64)},64);
+      out.append({Opc::ZEXT,regZF_,{emit(Opc::EQ,{both,k(0,64)},1)},addr});
+      out.append({Opc::ZEXT,regCF_,{emit(Opc::EQ,{missing,k(0,64)},1)},addr});
+      for (const auto flag : {regPF_,regAF_,regSF_,regOF_}) out.append({Opc::COPY,flag,{k(0,8)},addr});
+      return;
+    }
     case V::Store:
     case V::MovHiStore:
     case V::MovLoStore:
@@ -1892,6 +2120,147 @@ void dragon::x86::X86IGNILLifter::liftVec(const llvm::MCInst &mc, const VecOp &o
   const Vec a = readReg(*d);
 
   switch (op.kind) {
+    case V::FloatAdd: case V::FloatSub: case V::FloatMul: case V::FloatDiv:
+    case V::FloatMin: case V::FloatMax: case V::FloatSqrt: case V::FloatCompareMask: {
+      std::optional<Vec> b;
+      const unsigned sourceIndex=op.kind == V::FloatSqrt
+                                  ? mc.getNumOperands()-(op.memSrc ? 5 : 1) : 2;
+      if (op.scalar && op.memSrc) {
+        Value bits=emit(Opc::LOAD,{addrOf(sourceIndex)},e);
+        if (e == 32) bits=emit(Opc::ZEXT,{bits},64);
+        b=Vec{bits,k(0,64)};
+      } else b=source(sourceIndex);
+      if (!b) return fail("no floating source");
+      const auto left=lanes(a,e),right=lanes(*b,e);
+      auto result=left;
+      const auto predicate=op.kind == V::FloatCompareMask ? imm(mc.getNumOperands()-1) : 0;
+      if (predicate > 7) return fail("unsupported floating predicate");
+      for (unsigned i=0;i<(op.scalar ? 1 : 128/e);++i) {
+        const auto x=left[i],y=right[i];
+        Opc code;
+        switch (op.kind) {
+          case V::FloatAdd: code=e == 32 ? Opc::FADD32 : Opc::FADD; break;
+          case V::FloatSub: code=e == 32 ? Opc::FSUB32 : Opc::FSUB; break;
+          case V::FloatMul: code=e == 32 ? Opc::FMUL32 : Opc::FMUL; break;
+          case V::FloatDiv: code=e == 32 ? Opc::FDIV32 : Opc::FDIV; break;
+          case V::FloatSqrt: result[i]=emit(e == 32 ? Opc::FSQRT32 : Opc::FSQRT,{y},e); continue;
+          case V::FloatMin: case V::FloatMax: {
+            const auto comparison=e == 32 ? Opc::FLT32 : Opc::FLT;
+            // Ordered comparisons are false for NaN and equal signed zeros:
+            // all those cases must return the second operand's raw bits.
+            const auto takeFirst=emit(comparison,op.kind == V::FloatMin ? std::vector<Value>{x,y} : std::vector<Value>{y,x},1);
+            result[i]=choose(takeFirst,x,y,e); continue;
+          }
+          case V::FloatCompareMask: {
+            const auto un=emit(e == 32 ? Opc::FUNO32 : Opc::FUNO,{x,y},1);
+            const auto lt=emit(e == 32 ? Opc::FLT32 : Opc::FLT,{x,y},1);
+            const auto eq=emit(e == 32 ? Opc::FEQ32 : Opc::FEQ,{x,y},1);
+            const auto le=emit(Opc::OR,{lt,eq},1);
+            const Value conditions[]={eq,lt,le,un,notBit(eq),notBit(lt),notBit(le),notBit(un)};
+            result[i]=mask(conditions[predicate],e); continue;
+          }
+          default: return fail("unexpected floating operation");
+        }
+        result[i]=emit(code,{x,y},e);
+      }
+      write(*d,pack(result,e)); return;
+    }
+    case V::Insert: {
+      Value value;
+      if (op.memSrc) value=emit(Opc::LOAD,{addrOf(2)},e);
+      else {
+        const auto src=toReg(mc.getOperand(2).getReg());
+        if (!src) return fail("no insertion source");
+        value=src->width == e ? Value{*src} : emit(Opc::TRUNC,{*src},e);
+      }
+      auto result=lanes(a,e);
+      result[imm(mc.getNumOperands()-1) & (128/e-1)]=value;
+      write(*d,pack(result,e)); return;
+    }
+    case V::PackUnsigned: case V::PackSigned:
+    case V::AddSatUnsigned: case V::SubSatUnsigned: case V::AddSatSigned: case V::SubSatSigned:
+    case V::MulUnsignedDword: case V::MulLow: case V::MulHighSigned: case V::MulHighUnsigned: case V::MaddSigned:
+    case V::Average: case V::MinSigned: case V::MinUnsigned: case V::MaxSigned: case V::MaxUnsigned:
+    case V::Sad: case V::ShuffleBytes: case V::AlignBytes: case V::Sign: case V::Blend: {
+      const auto b=source(2);
+      if (!b) return fail("no vector source");
+      const auto la=lanes(a,e), lb=lanes(*b,e);
+      std::vector<Value> result;
+      ignil::Width resultWidth=e;
+      if (op.kind == V::PackUnsigned || op.kind == V::PackSigned) {
+        resultWidth=e/2;
+        for (const auto &values : {la,lb})
+          for (auto value : values) result.push_back(saturate(value,e,resultWidth,op.kind == V::PackSigned));
+      } else if (op.kind == V::MulUnsignedDword) {
+        resultWidth=64;
+        for (unsigned i : {0u,2u}) result.push_back(emit(Opc::MUL,{emit(Opc::ZEXT,{la[i]},64),emit(Opc::ZEXT,{lb[i]},64)},64));
+      } else if (op.kind == V::MaddSigned) {
+        resultWidth=32;
+        for (unsigned i=0;i<la.size();i+=2) {
+          Value products[2];
+          for (unsigned j=0;j<2;++j) products[j]=emit(Opc::MUL,{emit(Opc::SEXT,{la[i+j]},32),emit(Opc::SEXT,{lb[i+j]},32)},32);
+          result.push_back(emit(Opc::ADD,{products[0],products[1]},32));
+        }
+      } else if (op.kind == V::Sad) {
+        resultWidth=64;
+        for (unsigned h=0;h<2;++h) {
+          Value sum=k(0,64);
+          for (unsigned i=h*8;i<(h+1)*8;++i) {
+            const auto below=emit(Opc::ULT,{la[i],lb[i]},1);
+            const auto distance=choose(below,emit(Opc::SUB,{lb[i],la[i]},8),emit(Opc::SUB,{la[i],lb[i]},8),8);
+            sum=emit(Opc::ADD,{sum,emit(Opc::ZEXT,{distance},64)},64);
+          }
+          result.push_back(sum);
+        }
+      } else if (op.kind == V::AlignBytes) {
+        const auto offset=imm(mc.getNumOperands()-1);
+        for (unsigned i=0;i<16;++i) {
+          const auto index=offset+i;
+          result.push_back(index < 16 ? lb[index] : index < 32 ? la[index-16] : k(0,8));
+        }
+      } else for (unsigned i=0;i<la.size();++i) {
+        const auto x=la[i], y=lb[i];
+        switch (op.kind) {
+          case V::AddSatUnsigned: case V::SubSatUnsigned: case V::AddSatSigned: case V::SubSatSigned: {
+            const bool sign=op.kind == V::AddSatSigned || op.kind == V::SubSatSigned;
+            const bool add=op.kind == V::AddSatUnsigned || op.kind == V::AddSatSigned;
+            const auto extension=sign ? Opc::SEXT : Opc::ZEXT;
+            const auto wide=static_cast<ignil::Width>(e*2);
+            const auto value=emit(add ? Opc::ADD : Opc::SUB,{emit(extension,{x},wide),emit(extension,{y},wide)},wide);
+            result.push_back(saturate(value,wide,e,sign)); break;
+          }
+          case V::MulLow: result.push_back(emit(Opc::MUL,{x,y},e)); break;
+          case V::MulHighSigned: case V::MulHighUnsigned: {
+            const auto extension=op.kind == V::MulHighSigned ? Opc::SEXT : Opc::ZEXT;
+            const auto wide=static_cast<ignil::Width>(e*2);
+            const auto value=emit(Opc::MUL,{emit(extension,{x},wide),emit(extension,{y},wide)},wide);
+            result.push_back(emit(Opc::TRUNC,{emit(Opc::SHR,{value,k(e,wide)},wide)},e)); break;
+          }
+          case V::Average: {
+            const auto wide=static_cast<ignil::Width>(e*2);
+            const auto sum=emit(Opc::ADD,{emit(Opc::ZEXT,{x},wide),emit(Opc::ZEXT,{y},wide)},wide);
+            result.push_back(emit(Opc::TRUNC,{emit(Opc::SHR,{emit(Opc::ADD,{sum,k(1,wide)},wide),k(1,wide)},wide)},e)); break;
+          }
+          case V::MinSigned: case V::MinUnsigned: case V::MaxSigned: case V::MaxUnsigned: {
+            const bool sign=op.kind == V::MinSigned || op.kind == V::MaxSigned;
+            const bool minimum=op.kind == V::MinSigned || op.kind == V::MinUnsigned;
+            result.push_back(choose(emit(sign ? Opc::SLT : Opc::ULT,{x,y},1),minimum ? x : y,minimum ? y : x,e)); break;
+          }
+          case V::Sign:
+            result.push_back(choose(emit(Opc::EQ,{y,k(0,e)},1),k(0,e),
+                             choose(emit(Opc::SLT,{y,k(0,e)},1),emit(Opc::NEG,{x},e),x,e),e)); break;
+          case V::Blend: result.push_back((imm(mc.getNumOperands()-1) >> i) & 1 ? y : x); break;
+          case V::ShuffleBytes: {
+            const auto index=emit(Opc::AND,{y,k(15,8)},8);
+            Value selected=k(0,8);
+            for (unsigned j=0;j<16;++j) selected=choose(emit(Opc::EQ,{index,k(j,8)},1),la[j],selected,8);
+            result.push_back(choose(emit(Opc::EQ,{emit(Opc::AND,{y,k(128,8)},8),k(0,8)},1),selected,k(0,8),8)); break;
+          }
+          default: return fail("unexpected integer operation");
+        }
+      }
+      write(*d,pack(result,resultWidth)); return;
+    }
     case V::Add:
     case V::Sub:
     case V::CmpEq:
