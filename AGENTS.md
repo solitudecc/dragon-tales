@@ -227,6 +227,9 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 ## 6. Backlog (suggested order)
 
+Ready-to-paste task prompts for other agents (shared preamble + one prompt per
+item, with a status table to update when a task is done): `docs/agent-tasks.md`.
+
 1. **Stack memory tracking in the slicer** (store→load through `[sp, #N]`):
    the last AArch64 table reloads its base from the stack. The disjoint-store
    rule in `memoryState` (same base value + non-overlapping constant offsets)
