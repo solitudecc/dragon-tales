@@ -23,6 +23,7 @@ cfg = dragon.Configuration(
     strategy = dragon.Strategy.LINEAR_SWEEP,  # default
     cpu      = '',                            # default — LLVM "generic" baseline
     features = '',                            # default — no extra features
+    calling_convention = dragon.CallingConvention.DEFAULT,
 )
 
 print(cfg)          # <Configuration syntax=0 strategy=0>
@@ -164,6 +165,38 @@ graph = dis.analyze(code, base_address=0x1000)
 
 Use `disassemble()` when you only want the listing; use `analyze()` whenever a
 later step needs blocks, functions or IGNIL.
+
+### Entry points and external memory
+
+`AnalysisHints` owns a copied list of entry points, which become function and
+block starts and recursive traversal roots. Entries outside the supplied code
+buffer are ignored. An optional `read_memory(address, size)` callable returns
+exactly `size` bytes (a bytes-like object), or `None` for an unavailable range.
+
+```python
+def read_table(address, size):
+    if table_address <= address and address + size <= table_address + len(table):
+        offset = address - table_address
+        return table[offset:offset + size]
+    return None
+
+with dragon.AnalysisHints(entry_points=[0x1000, 0x1100],
+                          read_memory=read_table) as hints:
+    graph = dis.analyze(code, base_address=0x1000, hints=hints)
+# graph remains valid after hints are closed
+```
+
+Both `entry_points` and `read_memory` are writable properties. The hints keep
+their reader alive, and the callback is used only during analysis. Callback
+exceptions are propagated after the native call returns; incorrect byte counts
+raise `ValueError`. Access after explicitly closing hints raises
+`ReferenceError`.
+
+`Configuration.calling_convention` is readable and writable:
+`CallingConvention.DEFAULT`, `SYSV`, or `WIN64`. Set it before constructing the
+disassembler, which copies the configuration. It controls recovered argument
+registers and the signature attached to lifted LLVM functions. Image loading
+chooses Win64 automatically for x86-64 PE when the setting is DEFAULT.
 
 ### Trace lifting
 

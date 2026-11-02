@@ -11,7 +11,7 @@
 | 4 | x87 浮点（分阶段） | 待做 |
 | 5 | 剥离符号的二进制的函数入口识别 | 待做 |
 | 6 | 切片器的栈内存跟踪 | 待做 |
-| 7 | C shim / Python 暴露 AnalysisHints、callingConvention | 待做 |
+| 7 | C shim / Python 暴露 AnalysisHints、callingConvention | 已完成（2026-11-02；403/403 ctest） |
 
 **分配建议**
 - 可以并行：任务 1、2、5、6、7 基本互不冲突。

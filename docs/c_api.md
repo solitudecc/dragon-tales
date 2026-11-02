@@ -78,6 +78,8 @@ int on = dragon_config_logging(config);       // query
 | `dragon_config_features(c)` | Get current feature string |
 | `dragon_config_set_logging(c, enabled)` | Enable (`1`) or disable (`0`) diagnostics to `stderr` |
 | `dragon_config_logging(c)` | Get the current logging flag |
+| `dragon_config_set_calling_convention(c, cc)` | Set `DRAGON_CC_DEFAULT`, `DRAGON_CC_SYSV`, or `DRAGON_CC_WIN64`; returns 1 on success, 0 for invalid arguments |
+| `dragon_config_calling_convention(c)` | Get the convention (copied into the disassembler and graph) |
 
 ---
 
@@ -116,6 +118,35 @@ dragon_graph_each_instruction(graph, print_insn, NULL);
 
 dragon_graph_destroy(graph);
 ```
+
+### Analysis hints
+
+`dragon_disasm_analyze_with_hints` adds entry points (also recursive traversal
+roots) and an optional external-memory reader. Entries outside the code buffer
+are ignored. The hints own a copy of the entry array. A memory reader returns
+1 after filling **all** requested bytes, or 0 when the range is unavailable.
+Its function pointer and `user` data must remain valid during the synchronous
+analysis call; the resulting graph does not borrow them.
+
+```c
+dragon_analysis_hints_t* hints = dragon_analysis_hints_create();
+uint64_t entries[] = {0x1000, 0x1100};
+if (!hints || !dragon_analysis_hints_set_entries(hints, entries, 2)) {
+    /* allocation / argument failure */
+}
+// Optional: dragon_analysis_hints_set_memory_reader(hints, reader, user);
+char error[256];
+dragon_graph_t* graph = dragon_disasm_analyze_with_hints(
+    dis, code, sizeof(code), 0x1000, hints, error, sizeof(error));
+dragon_analysis_hints_destroy(hints);
+if (!graph) { /* error contains a NUL-terminated diagnostic */ }
+```
+
+`dragon_analysis_hints_entry_count` and `dragon_analysis_hints_entry` inspect
+the copied entries. Passing NULL/0 to `set_entries` clears the list; passing a
+NULL reader to `set_memory_reader` clears the callback. Setters and the indexed
+entry accessor return 1 on success, 0 on failure. NULL hints in the analysis
+call select the default behavior. The caller destroys the returned graph.
 
 ### Instruction flags
 

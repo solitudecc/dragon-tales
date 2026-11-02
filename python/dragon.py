@@ -94,6 +94,12 @@ class Strategy:
     RECURSIVE_TRAVERSAL = 1
 
 
+class CallingConvention:
+    DEFAULT = 0
+    SYSV = 1
+    WIN64 = 2
+
+
 # -- Borrowed views ------------------------------------------------------------
 
 class _View:
@@ -432,8 +438,11 @@ class Configuration:
             "+m,+a,+c"    -- RISC-V multiply, atomics, compressed
     """
 
+    _ptr = None
+
     def __init__(self, syntax=Syntax.INTEL, strategy=Strategy.LINEAR_SWEEP,
-                 cpu='', features='', logging=False):
+                 cpu='', features='', logging=False,
+                 calling_convention=CallingConvention.DEFAULT):
         self._ptr = lib.dragon_config_create(syntax, strategy)
         if self._ptr == ffi.NULL:
             raise RuntimeError('failed to create configuration')
@@ -443,6 +452,7 @@ class Configuration:
             lib.dragon_config_set_features(self._ptr, features.encode())
         if logging:
             lib.dragon_config_set_logging(self._ptr, 1)
+        self.calling_convention = calling_convention
 
     def __del__(self):
         if self._ptr:
@@ -490,11 +500,119 @@ class Configuration:
     def logging(self, value):
         lib.dragon_config_set_logging(self._ptr, 1 if value else 0)
 
+    @property
+    def calling_convention(self):
+        if self._ptr is None:
+            raise ReferenceError('Configuration has been closed')
+        return lib.dragon_config_calling_convention(self._ptr)
+
+    @calling_convention.setter
+    def calling_convention(self, value):
+        if self._ptr is None:
+            raise ReferenceError('Configuration has been closed')
+        if value not in (CallingConvention.DEFAULT, CallingConvention.SYSV,
+                         CallingConvention.WIN64):
+            raise ValueError('invalid calling convention')
+        if not lib.dragon_config_set_calling_convention(self._ptr, value):
+            raise ValueError('invalid calling convention')
+
     def __repr__(self):
         cpu_part = f' cpu={self.cpu!r}' if self.cpu else ''
         feat_part = f' features={self.features!r}' if self.features else ''
         log_part = ' logging=True' if self.logging else ''
         return f'<Configuration syntax={self.syntax} strategy={self.strategy}{cpu_part}{feat_part}{log_part}>'
+
+
+# -- Analysis hints ------------------------------------------------------------
+
+class AnalysisHints(_View):
+    """Entry points and an optional read_memory(address, size) callback.
+
+    The reader returns exactly size bytes, or None for an unmapped range.
+    It is kept alive until replaced or the hints are closed. Analysis uses
+    hints synchronously; returned graphs do not borrow them. Reader exceptions
+    are re-raised by analyze(), after the native call returns safely.
+    """
+
+    def __init__(self, entry_points=(), read_memory=None):
+        self._bind(lib.dragon_analysis_hints_create(), None)
+        self._reader = None
+        self._callback = None
+        self._errors = []
+        if self._raw == ffi.NULL:
+            self._raw = None
+            raise MemoryError('failed to create analysis hints')
+        self.entry_points = entry_points
+        self.read_memory = read_memory
+
+    def __del__(self):
+        if self._raw:
+            lib.dragon_analysis_hints_destroy(self._raw)
+        self._raw = None
+        self._callback = None
+        self._reader = None
+
+    def __enter__(self):
+        self._ptr
+        return self
+
+    def __exit__(self, *_):
+        self.__del__()
+
+    @property
+    def entry_points(self):
+        ptr = self._ptr
+        out = ffi.new('uint64_t *')
+        entries = []
+        for index in range(lib.dragon_analysis_hints_entry_count(ptr)):
+            if not lib.dragon_analysis_hints_entry(ptr, index, out):
+                raise RuntimeError('failed to read entry point')
+            entries.append(out[0])
+        return entries
+
+    @entry_points.setter
+    def entry_points(self, values):
+        ptr = self._ptr
+        entries = list(values)
+        data = ffi.new('uint64_t[]', entries)
+        if not lib.dragon_analysis_hints_set_entries(ptr, data, len(entries)):
+            raise RuntimeError('failed to set entry points')
+
+    @property
+    def read_memory(self):
+        self._ptr
+        return self._reader
+
+    @read_memory.setter
+    def read_memory(self, reader):
+        ptr = self._ptr
+        if reader is not None and not callable(reader):
+            raise TypeError('read_memory must be callable or None')
+        callback = ffi.NULL
+        if reader is not None:
+            errors = self._errors
+
+            @ffi.callback('int(uint64_t, uint8_t *, size_t, void *)', error=0)
+            def callback(address, out, size, _):
+                if errors:
+                    return 0
+                try:
+                    data = reader(address, size)
+                    if data is None:
+                        return 0
+                    data = memoryview(data).tobytes()
+                    if len(data) != size:
+                        raise ValueError('read_memory must return exactly size bytes or None')
+                    ffi.memmove(out, data, size)
+                    return 1
+                except BaseException as error:
+                    errors.append(error)
+                    return 0
+
+        if not lib.dragon_analysis_hints_set_memory_reader(ptr, callback, ffi.NULL):
+            raise RuntimeError('failed to set memory reader')
+        self._reader, self._callback = reader, callback
+        self._errors.clear()
 
 
 # -- Disassembler --------------------------------------------------------------
@@ -533,11 +651,31 @@ class Disassembler:
             raise RuntimeError('disassembly failed — unsupported architecture or invalid input')
         return Graph(ptr)
 
-    def analyze(self, bytes_data, base_address=0x0):
+    def analyze(self, bytes_data, base_address=0x0, hints=None):
         """Disassemble and run architecture-specific analysis (block and function
         discovery). Returns a fully populated Graph. Raises RuntimeError on failure."""
         buf = ffi.from_buffer(bytes_data)
-        ptr = lib.dragon_disasm_analyze(self._ptr, buf, len(bytes_data), base_address)
+        if self._ptr is None:
+            raise ReferenceError('Disassembler has been closed')
+        if hints is None:
+            ptr = lib.dragon_disasm_analyze(self._ptr, buf, len(bytes_data), base_address)
+        else:
+            if not isinstance(hints, AnalysisHints):
+                raise TypeError('hints must be AnalysisHints or None')
+            hints_ptr = hints._ptr
+            callback_ref = hints._callback  # keep cffi trampoline alive during native call
+            hints._errors.clear()
+            error = ffi.new('char[1024]')
+            ptr = lib.dragon_disasm_analyze_with_hints(
+                self._ptr, buf, len(bytes_data), base_address, hints_ptr, error, 1024)
+            if hints._errors:
+                if ptr != ffi.NULL:
+                    lib.dragon_graph_destroy(ptr)
+                failure = hints._errors[0]
+                hints._errors.clear()
+                raise failure
+            if ptr == ffi.NULL:
+                raise RuntimeError(ffi.string(error).decode(errors='replace'))
         if ptr == ffi.NULL:
             raise RuntimeError('analysis failed — unsupported architecture or invalid input')
         return Graph(ptr)

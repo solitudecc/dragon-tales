@@ -107,6 +107,15 @@ Gotchas:
   `switch`. An unresolved indirect jump has no successors.
 - `Configuration::callingConvention` (Default/SysV/Win64) drives argument
   recovery; `disassembleImage` picks Win64 for x86-64 PE.
+- C/Python expose this as `dragon_config_*calling_convention` /
+  `Configuration.calling_convention`. `dragon_analysis_hints_t` owns copied
+  entries and borrows a synchronous full-range memory reader; Python
+  `AnalysisHints(entry_points, read_memory)` keeps the callback alive.
+  `Disassembler.analyze(..., hints=...)` propagates callback exceptions only
+  after native analysis returns and frees any intermediate graph. Returned
+  graphs do not borrow hints. Closing hints invalidates their Python access.
+  C-shim tests use a separate `dragon_c_tests` target to avoid duplicate LLVM
+  command-line option registration with the main suite's static LLVM linkage.
 
 ## 4. Validation tools (`scripts/validation/`)
 
@@ -247,8 +256,8 @@ item, with a status table to update when a task is done): `docs/agent-tasks.md`.
    of D/Q registers — note a 64-bit write to a V register must zero its upper
    half, which the current 32-bit-only zero-extension rule does not do),
    `clz`, `rbit`. Validate each with the difftests and add templates.
-4. Expose `AnalysisHints` and `callingConvention` through the C shim and
-   Python (today only C++ and `disassembleImage` use them).
+4. C shim/Python analysis hints and calling conventions are exposed; regression
+   tests: `tests/TestCAnalysisHints.cpp`, `tests/python/test_analysis_hints.py`.
 5. Extend the speculative resolver to ARM when useful. Failed hypotheses remain
    unresolved; never publish partial target sets or skip the final recheck.
 6. Design questions, not bugs (ask the owner before changing): CALL/RET

@@ -29,6 +29,12 @@
       DRAGON_SYNTAX_ATT   = 1,
   } dragon_syntax_t;
 
+  typedef enum {
+      DRAGON_CC_DEFAULT = 0,
+      DRAGON_CC_SYSV,
+      DRAGON_CC_WIN64,
+  } dragon_calling_convention_t;
+
   // -- Opaque handles ------------------------------------------------------------
 
   typedef struct dragon_config      dragon_config_t;
@@ -36,6 +42,7 @@
   typedef struct dragon_disasm      dragon_disasm_t;
   typedef struct dragon_block       dragon_block_t;
   typedef struct dragon_function    dragon_function_t;
+  typedef struct dragon_analysis_hints dragon_analysis_hints_t;
 
   // dragon_instruction_t is a pointer INTO the graph listing - no destroy needed,
   // valid as long as the owning graph is alive.
@@ -63,6 +70,29 @@
   // Enable (1) or disable (0) diagnostic logging to stderr.
   void dragon_config_set_logging(dragon_config_t* c, int enabled);
   int  dragon_config_logging(const dragon_config_t* c);
+
+  // Setter returns 1 on success, 0 for NULL config or an invalid enum.
+  int dragon_config_set_calling_convention(dragon_config_t* c,
+                                            dragon_calling_convention_t cc);
+  dragon_calling_convention_t dragon_config_calling_convention(const dragon_config_t* c);
+
+  // Analysis hints own a copy of entry points. The memory reader and its user
+  // data are borrowed and must remain alive during analyze_with_hints (only).
+  // Reader must fill all len bytes and return 1, or return 0 for unmapped data.
+  typedef int (*dragon_memory_reader_t)(uint64_t address, uint8_t* out,
+                                        size_t len, void* user);
+  dragon_analysis_hints_t* dragon_analysis_hints_create(void);
+  void dragon_analysis_hints_destroy(dragon_analysis_hints_t* h);
+  // Setters/accessors return 1 on success and 0 on invalid arguments/failure.
+  int dragon_analysis_hints_set_entries(dragon_analysis_hints_t* h,
+                                         const uint64_t* entries, size_t count);
+  size_t dragon_analysis_hints_entry_count(const dragon_analysis_hints_t* h);
+  int dragon_analysis_hints_entry(const dragon_analysis_hints_t* h,
+                                   size_t index, uint64_t* out);
+  // NULL reader clears the callback.
+  int dragon_analysis_hints_set_memory_reader(dragon_analysis_hints_t* h,
+                                              dragon_memory_reader_t reader,
+                                              void* user);
 
   // -- Graph ---
 
@@ -107,6 +137,13 @@
                                          const uint8_t* bytes,
                                          size_t len,
                                          uint64_t base_address);
+
+  // NULL hints means defaults. Hints and callback are consulted synchronously;
+  // the returned graph does not borrow them. Returns NULL on failure, with an
+  // optional NUL-terminated error (at most err_cap bytes including NUL).
+  dragon_graph_t* dragon_disasm_analyze_with_hints(dragon_disasm_t* d,
+      const uint8_t* bytes, size_t len, uint64_t base_address,
+      const dragon_analysis_hints_t* hints, char* err, size_t err_cap);
 
   // -- Loader --------------------------------------------------------------------
 

@@ -142,6 +142,70 @@ int dragon_config_logging(const dragon_config_t *c) {
   return c && c->config.logging ? 1 : 0;
 }
 
+static_assert(static_cast<int>(dragon::CallingConvention::Default) == DRAGON_CC_DEFAULT);
+static_assert(static_cast<int>(dragon::CallingConvention::SysV) == DRAGON_CC_SYSV);
+static_assert(static_cast<int>(dragon::CallingConvention::Win64) == DRAGON_CC_WIN64);
+
+int dragon_config_set_calling_convention(dragon_config_t *c,
+                                         dragon_calling_convention_t cc) {
+  if (!c || (cc != DRAGON_CC_DEFAULT && cc != DRAGON_CC_SYSV && cc != DRAGON_CC_WIN64))
+    return 0;
+  c->config.callingConvention = static_cast<dragon::CallingConvention>(cc);
+  return 1;
+}
+
+dragon_calling_convention_t dragon_config_calling_convention(const dragon_config_t *c) {
+  return c ? static_cast<dragon_calling_convention_t>(c->config.callingConvention)
+           : DRAGON_CC_DEFAULT;
+}
+
+struct dragon_analysis_hints {
+  dragon::Disassembler::AnalysisHints hints;
+};
+
+dragon_analysis_hints_t *dragon_analysis_hints_create(void) {
+  try { return new dragon_analysis_hints{}; }
+  catch (...) { return nullptr; }
+}
+
+void dragon_analysis_hints_destroy(dragon_analysis_hints_t *h) { delete h; }
+
+int dragon_analysis_hints_set_entries(dragon_analysis_hints_t *h,
+                                       const uint64_t *entries, size_t count) {
+  if (!h || (!entries && count)) return 0;
+  try {
+    std::vector<uint64_t> copy;
+    if (count) copy.assign(entries, entries + count);
+    h->hints.entryPoints = std::move(copy);
+    return 1;
+  } catch (...) { return 0; }
+}
+
+size_t dragon_analysis_hints_entry_count(const dragon_analysis_hints_t *h) {
+  return h ? h->hints.entryPoints.size() : 0;
+}
+
+int dragon_analysis_hints_entry(const dragon_analysis_hints_t *h,
+                                 size_t index, uint64_t *out) {
+  if (!h || !out || index >= h->hints.entryPoints.size()) return 0;
+  *out = h->hints.entryPoints[index];
+  return 1;
+}
+
+int dragon_analysis_hints_set_memory_reader(dragon_analysis_hints_t *h,
+                                            dragon_memory_reader_t reader,
+                                            void *user) {
+  if (!h) return 0;
+  try {
+    if (reader)
+      h->hints.readMemory = [reader, user](uint64_t address, std::span<uint8_t> out) {
+        return reader(address, out.data(), out.size(), user) == 1;
+      };
+    else h->hints.readMemory = {};
+    return 1;
+  } catch (...) { return 0; }
+}
+
 // -- dragon_asm_t - full definition
 struct dragon_asm {
   dragon::Assembler assembler;
@@ -312,6 +376,27 @@ static void set_err(char *err, size_t cap, const std::string &msg) {
   size_t n = std::min(cap - 1, msg.size());
   std::memcpy(err, msg.data(), n);
   err[n] = '\0';
+}
+
+dragon_graph_t *dragon_disasm_analyze_with_hints(dragon_disasm_t *d,
+    const uint8_t *bytes, size_t len, uint64_t base_address,
+    const dragon_analysis_hints_t *hints, char *err, size_t err_cap) {
+  set_err(err, err_cap, "");
+  if (!d || !bytes || !d->disassembler.isValid()) {
+    set_err(err, err_cap, "invalid disassembler or bytes");
+    return nullptr;
+  }
+  try {
+    auto g = std::make_unique<dragon::Graph>(d->arch, d->config);
+    // Snapshot before entering user code: a callback may mutate/close hints.
+    const auto snapshot = hints ? hints->hints : dragon::Disassembler::AnalysisHints{};
+    d->disassembler.disassemble({bytes, len}, base_address, *g,
+                                snapshot);
+    return reinterpret_cast<dragon_graph_t *>(g.release());
+  } catch (const std::exception &e) {
+    set_err(err, err_cap, e.what());
+  } catch (...) { set_err(err, err_cap, "analysis failed"); }
+  return nullptr;
 }
 
 dragon_loader_t *dragon_load_file(const char *path, char *err, size_t cap) {
