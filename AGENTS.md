@@ -13,6 +13,12 @@ The repository owner communicates in Chinese; reply to them in Chinese.
 
 ## 1. Ground rules
 
+The full correctness rules - validation layers and their blind spots, rules for
+test harnesses (prove they catch errors, edge-value inputs, the only allowed
+exclusions, never loosen a check to pass), what to do when the reference
+disagrees, known deliberate differences, reporting - are in
+`docs/correctness.md`. Read it before changing any semantics.
+
 - **Never give wrong semantics.** An instruction the lifter cannot express is
   lifted as UNDEF for everything it defines and recorded in
   `ignil::Block::unlifted()`. A partial or approximate lift that can produce a
