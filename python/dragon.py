@@ -803,6 +803,9 @@ class IGNILOpcode:
     FCEIL32 = 66
     FTRUNC = 67
     FTRUNC32 = 68
+    LABEL = 69
+    LOCALJMP = 70
+    LOCALCJMP = 71
 
     @staticmethod
     def name(opcode_int):

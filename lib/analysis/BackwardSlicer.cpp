@@ -23,6 +23,16 @@ namespace dragon {
 
 namespace {
 
+std::optional<std::pair<int,int>> localRange(const ignil::Block &block) {
+  std::optional<std::pair<int,int>> range;
+  for (int i=0;i<static_cast<int>(block.ops().size());++i)
+    if (ignil::isLocalControl(block.ops()[i].opcode)) {
+      if (!range) range=std::pair{i,i};
+      else range->second=i;
+    }
+  return range;
+}
+
 struct SuccessorInfo {
   std::vector<std::uint64_t> known;
   bool hasIndirect = false;
@@ -284,6 +294,7 @@ std::optional<slice::Expr> BackwardSlicer::storedValue(
   for (int i = beforeIdx - 1; i >= 0; --i) {
     if (--preds.memoryBudget < 0) return std::nullopt;
     const auto &op = block.ops()[i];
+    if (ignil::isLocalControl(op.opcode)) return std::nullopt;
     if (op.opcode == ignil::Opcode::CALL) return std::nullopt;
     if (op.opcode != ignil::Opcode::STORE) continue;
     if (op.srcs.size() != 2) return std::nullopt;
@@ -386,6 +397,7 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                                        const ignil::Block &block, int beforeIdx,
                                        const Graph &graph, PredMap &preds,
                                        int depth) const {
+  const auto local=localRange(block);
   return std::visit(
           utils::overloaded{
                   // Constants are trivially resolved.
@@ -407,8 +419,11 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                       // temporal since we use SSA, there is where the temporal
                       // has been defined.
                       if (const auto *dt = std::get_if<ignil::Temp>(&*op.dst)) {
-                        if (dt->id == t.id)
+                        if (dt->id == t.id) {
+                          if (local && i>=local->first && i<=local->second)
+                            return slice::Expr{slice::Undef{t.width}};
                           return buildFromOp(op, block, i, graph, preds, depth);
+                        }
                       }
                     }
                     // Not defined in this block - temps never cross blocks,
@@ -456,7 +471,18 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
   const std::uint32_t rs = r.offset, re = r.offset + byteCount(r.width);
 
   const auto &ops = block.ops();
+  const auto local=localRange(block);
   for (int i = beforeIdx - 1; i >= 0; --i) {
+    if (local && beforeIdx>local->first && i>=local->first && i<=local->second) {
+      for (int j=local->first;j<=local->second;++j)
+        if (ops[j].dst)
+          if (const auto *written=std::get_if<ignil::Reg>(&*ops[j].dst)) {
+            const auto start=written->offset,end=start+clobberBytes(*written,regFile);
+            if (start<re && rs<end) return slice::Expr{slice::Undef{r.width}};
+          }
+      i=local->first; // unchanged register: resume in the linear prefix
+      continue;
+    }
     const ignil::Op &op = ops[i];
     if (!op.dst)
       continue;

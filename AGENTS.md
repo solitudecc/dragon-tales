@@ -129,6 +129,21 @@ Gotchas:
   invalid source is replaced with zero *before* FP-to-int (avoiding LLVM
   poison). Range checks use the truncated value to accept fractional inputs
   just below the signed minimum whose toward-zero result is representable.
+- `LABEL` / `LOCALJMP` / `LOCALCJMP` use `Op::aux` for block-local labels.
+  They model runtime REP loops without creating fake machine instructions or
+  CFG addresses. Temp definitions must dominate uses; loop-carried state is
+  held in registers, which LLVM promotes to PHIs. A trace retains local flow.
+  Symbolic execution requires uniquely determined local conditions and stops
+  with an explicit error after 100000 local operations; it never guesses a
+  symbolic repeat count. Linear IGNIL optimizers preserve these blocks and
+  slicing keeps linear prefixes/suffixes and registers untouched by the local
+  region; loop-written values and memory crossing the region stay unknown.
+- MOVS/STOS/LODS/CMPS/SCAS use DF, architectural element width and address
+  width (including ECX/ESI/EDI in x64 addr32). REP checks zero before any
+  memory access or architectural write; REPE/REPNE comparisons check ZF
+  after each subtraction. Each iteration reads memory before writes, so
+  overlapping copies retain sequential hardware behavior. FS/GS source bases
+  remain unmodelled and are explicitly recorded as unlifted.
 - `Disassembler::AnalysisHints{entryPoints, readMemory}`: entry points are
   function + block starts and recursive-traversal roots; `readMemory` lets
   jump-table resolution read tables outside the analysed bytes.
@@ -173,7 +188,8 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 
 | Script | What it checks |
 |---|---|
-| `difftest_x64.py` | ~810 single-instruction x86-64 templates vs Unicorn (regs, flags, memory), incl. memory-operand forms, every cc, high-byte registers, SP operands. Expected: 0 diff; the ~135 unlifted are memory-operand shifts/rotates/mul/bt*/shld (coverage, see backlog). `ONLY=text` filters. |
+| `difftest_x64.py` | 992 x64 templates incl. runtime string/REP forms: 986 match, 0 diff, 6 existing unlifted (16-bit push/pop and LEA; listed below). Compares GPRs, flags and memory; string cases also vary/compare DF. `ONLY=text` filters. |
+| `difftest_strings.py` | 165 forms / 3960 Unicorn executions: i386, x64, x64 addr32; counts 0/1/2/5, DF 0/1, overlap and comparison exits. All registers/flags and the complete data buffer must match; no unknown outputs allowed. |
 | `difftest_a64.py` | 835 AArch64 templates, including scalar FP edges, SIMD moves and memory; compares all 32 V registers as 64-bit halves. Expected: 3 diffs = CALL/RET abstraction, 0 unlifted. `ONLY=text` filters. |
 | `difftest_sse.py` | 393 SSE/SSSE3/SSE4.1 templates x 60 inputs; includes saturation boundaries, FP32/64 exceptional values and conversions. Checks FP32 per lane, including untouched lanes; only active arithmetic NaN results may be unknown. `ONLY=text` filters. |
 | `opt_equiv.py` | IGNIL `simplify()`/`dead_store_eliminate()` preserve semantics on random blocks (`CONTROL=1` adds a deliberately unsound variant to prove the check bites). |
@@ -258,6 +274,11 @@ lifting in the x86/ARM resolvers (sqlite x64 36 s -> 11 s, python3 570 s ->
 stores (were silently dropped), ELF non-SHF_ALLOC sections answering
 address lookups at 0 (`Section::mapped`), PE imports without/with a bad ILT, non-UTF-8
 names in Python.
+
+The full x64 instruction difftest has six existing unsupported forms:
+`push ax`, `pop ax`, `push word ptr [rbx + 8]`, `pop word ptr [rbx + 8]`,
+`push sp`, and `lea ax, [rbx + rsi*2 + 3]`. Each was independently reproduced
+against the saved pre-task shared libraries; they are not REP regressions.
 
 2026-11-02 recheck of the current corpus2 files found two existing exceptions,
 confirmed with the unchanged `e0224b9` implementation (plus API bindings) and

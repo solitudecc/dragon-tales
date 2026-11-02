@@ -1183,6 +1183,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   if (!mc)
     return;
 
+  if (liftString(insn,out,tempId)) return;
+
   unsigned opc = mc->getOpcode();
   std::uint64_t addr = insn.address();
 
@@ -4064,6 +4066,91 @@ void dragon::x86::X86IGNILLifter::liftJcc(const llvm::MCInst &mc,
               std::nullopt,
               {cond, ignil::Const{taken, 64}, ignil::Const{fallthrough, 64}},
               addr});
+}
+
+bool dragon::x86::X86IGNILLifter::liftString(const Instruction &insn,
+    ignil::Block &out,std::uint32_t &tmp) const {
+  const auto *mc=insn.mcInst();
+  const auto name=instrInfo_->getName(mc->getOpcode());
+  enum class Kind { Move,Store,Load,Compare,Scan };
+  std::optional<Kind> kind;
+  ignil::Width width=0;
+  for (const auto &[prefix,operation] : {std::pair{"MOVS",Kind::Move},std::pair{"STOS",Kind::Store},
+       std::pair{"LODS",Kind::Load},std::pair{"CMPS",Kind::Compare},std::pair{"SCAS",Kind::Scan}})
+    for (const auto &[suffix,bits] : {std::pair{'B',8},std::pair{'W',16},std::pair{'L',32},std::pair{'Q',64}})
+      if (name == std::string(prefix)+suffix) { kind=operation; width=bits; }
+  if (!kind) return false;
+  using O=ignil::Opcode;
+  using ignil::Value;
+  const auto address=insn.address();
+  const bool is64=architecture_ == Architecture::X86_64;
+  const auto pointerReg=toReg(mc->getOperand(0).getReg());
+  const ignil::Width aw=pointerReg ? pointerReg->width :
+      hasAddressSizePrefix(insn) ? (is64 ? 32 : 16) : (is64 ? 64 : 32);
+  const ignil::Reg source{kOffRSI,aw,"string.source"},destination{kOffRDI,aw,"string.destination"},
+                   counter{kOffRCX,aw,"string.count"};
+  const auto accumulator=width == 8 ? regAL_ : width == 16 ? regAX_ : width == 32 ? regEAX_ : regRAX_;
+  unsigned repetition=0;
+  bool unknownSegment=false;
+  for (auto byte : insn.bytes()) {
+    if (byte == 0xf2 || byte == 0xf3) repetition=byte;
+    else if (byte == 0x64 || byte == 0x65) unknownSegment=true;
+    else if (byte == 0x26 || byte == 0x2e || byte == 0x36 || byte == 0x3e) unknownSegment=false;
+    else if (byte == 0x66 || byte == 0x67 || byte == 0xf0 || (is64 && byte >= 0x40 && byte <= 0x4f)) {}
+    else break;
+  }
+  const bool readSource=*kind == Kind::Move || *kind == Kind::Load || *kind == Kind::Compare;
+  const bool useDestination=*kind != Kind::Load;
+  const bool compare=*kind == Kind::Compare || *kind == Kind::Scan;
+  if (unknownSegment && readSource) out.noteUnlifted(address); // FS/GS base is outside this register model.
+  auto emit=[&](O code,std::vector<Value> values,ignil::Width bits) {
+    auto result=newTemp(tmp,bits); out.append({code,result,std::move(values),address}); return result;
+  };
+  auto constant=[](uint64_t value,ignil::Width bits) -> Value {
+    return ignil::Const{bits >= 64 ? value : value & ((1ull << bits)-1),bits};
+  };
+  std::uint32_t header=0,done=0;
+  if (repetition) {
+    header=tmp++; done=tmp++;
+    out.append({O::LABEL,std::nullopt,{},address,header});
+    const auto empty=emit(O::EQ,{counter,constant(0,aw)},1);
+    out.append({O::LOCALCJMP,std::nullopt,{empty},address,done});
+  }
+  // All source reads happen before writes, including when source/destination
+  // overlap. Each REP iteration repeats these loads with the updated pointers.
+  const auto direction=emit(O::NEQ,{regDF_,constant(0,8)},1);
+  const auto mask=emit(O::NEG,{emit(O::ZEXT,{direction},aw)},aw);
+  const auto positive=constant(width/8,aw),negative=constant(-uint64_t(width/8),aw);
+  const auto stride=emit(O::OR,{emit(O::AND,{mask,negative},aw),
+                              emit(O::AND,{emit(O::NOT,{mask},aw),positive},aw)},aw);
+  Value left=accumulator;
+  if (readSource) {
+    const Value pointer=unknownSegment ? Value{emit(O::UNDEF,{},aw)} : Value{source};
+    left=emit(O::LOAD,{pointer},width);
+  }
+  if (*kind == Kind::Move || *kind == Kind::Store)
+    out.append({O::STORE,std::nullopt,{destination,left},address});
+  else if (*kind == Kind::Load) out.append({O::COPY,accumulator,{left},address});
+  else {
+    const auto right=emit(O::LOAD,{destination},width);
+    const auto result=emit(O::SUB,{left,right},width);
+    emitArithFlags(address,out,tmp,{{X86Flag::CF,cfSubBorrow(left,right,address)},
+      {X86Flag::PF,pfParity(result,address)},{X86Flag::AF,afNibbleCarry(left,right,result,address)},
+      {X86Flag::ZF,zfEqZero(result,address)},{X86Flag::SF,sfSignBit(result,address)},
+      {X86Flag::OF,ofSubOverflow(left,right,result,address)}});
+  }
+  if (readSource) out.append({O::COPY,source,{emit(O::ADD,{source,stride},aw)},address});
+  if (useDestination) out.append({O::COPY,destination,{emit(O::ADD,{destination,stride},aw)},address});
+  if (repetition) {
+    out.append({O::COPY,counter,{emit(O::SUB,{counter,constant(1,aw)},aw)},address});
+    if (compare) {
+      const auto stop=emit(repetition == 0xf3 ? O::EQ : O::NEQ,{regZF_,constant(0,8)},1);
+      out.append({O::LOCALCJMP,std::nullopt,{stop},address,done});
+    }
+    out.append({O::LOCALJMP,std::nullopt,{},address,header});
+    out.append({O::LABEL,std::nullopt,{},address,done});
+  }
+  return true;
 }
 
 bool dragon::x86::X86IGNILLifter::hasAddressSizePrefix(

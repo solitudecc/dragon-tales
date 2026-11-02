@@ -200,6 +200,22 @@ round nearest ties-even; float-to-int truncates toward zero and requires a
 representable result. ISA-specific saturation or indefinite values belong in
 the instruction lifter. The C and Python enums preserve all older values.
 
+`LABEL`, `LOCALJMP`, and `LOCALCJMP` express control flow inside a machine
+instruction. `Op::aux` is a block-local label ID; `LABEL` and `LOCALJMP` have
+no operands, while `LOCALCJMP` consumes one 1-bit condition and falls through
+when false. This lets REP use its runtime count while machine CFG addresses
+remain unchanged. Values carried across iterations live in registers; Temp
+definitions must dominate their uses. LLVM emits ordinary local basic blocks
+and can promote register allocas to PHIs. Trace lifting preserves these local
+branches while discarding already-resolved external machine branches.
+
+The symbolic executor follows uniquely determined local conditions, including
+conditions proved by path constraints. An unresolved condition or more than
+100000 local control operations returns an explicit execution error. The
+linear IGNIL optimizers leave such blocks unchanged. Backward slicing retains
+linear prefixes/suffixes and registers untouched by the local region, while
+loop-written values and memory crossing that region remain unknown.
+
 #### 1f. Utility declarations
 
 ```cpp

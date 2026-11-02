@@ -110,6 +110,7 @@ def undefined_flags(text, regs):
 
 
 def run_case(text, rng, setup):
+    is_string=bool(re.fullmatch(r'(?:addr32 )?(?:(?:rep|repe|repne) )?(?:movs|stos|lods|cmps|scas)[bwdq]',text.split('#')[0].strip()))
     code = bytes.fromhex(text.split('#')[1]) if '#' in text else bytes(asm.assemble(text))
     if not code:
         return 'asmfail', None
@@ -131,6 +132,7 @@ def run_case(text, rng, setup):
     if re.match(r'sh[lr]d (ax|word ptr \[rbx \+ 8\]), \w+, cl', text):
         regs[1] = rng.randrange(0, 17)   # count > 16: result undefined
     eflags = 0x2 | sum(rng.getrandbits(1) << b for _, b in FLAGS)
+    if is_string: eflags |= rng.getrandbits(1)<<10
     page = bytes(rng.getrandbits(8) for _ in range(DATA_SIZE))
 
     uc = UC
@@ -141,7 +143,7 @@ def run_case(text, rng, setup):
         uc.reg_write(r, v)
     uc.reg_write(UC_X86_REG_EFLAGS, eflags)
     try:
-        uc.emu_start(CODE, CODE + len(code), count=1)
+        uc.emu_start(CODE, CODE + len(code), count=1000 if is_string else 1)
     except UcError:
         return 'fault', None          # e.g. #DE on div: not a lifter question
     exp = [uc.reg_read(r) for r in UC_GPR]
@@ -154,11 +156,14 @@ def run_case(text, rng, setup):
         ex.set_register(reg, v)
     for f, b in FLAGS:
         ex.set_register(getattr(X, f), (eflags >> b) & 1)
-    ex.set_register(X.DF, 0)
+    ex.set_register(X.DF, (eflags>>10)&1)
     ex.map_memory(DATA, page)
     res = ex.run(blk)
 
     diffs = []
+    if is_string:
+        if not res.complete: diffs.append('incomplete local-loop execution')
+        if ex.concrete_register(X.DF) != (exp_fl>>10)&1: diffs.append('DF mismatch')
     insn = insns[0]
     if insn.is_jump:
         taken = None
@@ -322,6 +327,17 @@ T = [t for t in T if not t[0].startswith(('nop', 'cmpxchg_skip'))]
 
 rng = random.Random(4321)
 summary = defaultdict(list)
+for operation in ('movs','stos','lods','cmps','scas'):
+    for suffix in ('b','w','d','q'):
+        for prefix in ('','rep ','repne '):
+            instruction=prefix+operation+suffix
+            setup={'RCX':lambda r:r.choice([0,1,2,5]),'RSI':BASE,
+                   'RDI':lambda r:BASE+r.choice([-8,0,8])}
+            T.append((instruction,setup))
+            raw=b'\x67'+bytes(asm.assemble(instruction))
+            addr_setup={'RCX':lambda r:0xdeadbeef00000000|r.choice([0,1,2,5]),
+                        'RSI':0xcafebabe00000000|BASE,'RDI':0xfeedface00000000|(BASE+8)}
+            T.append(('addr32 '+instruction+' #'+raw.hex(),addr_setup))
 import gc
 for n_case, (text, setup) in enumerate(T):
     if ONLY and ONLY not in text:

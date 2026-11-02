@@ -379,6 +379,9 @@
       DRAGON_IGNIL_FCEIL32 = 66,
       DRAGON_IGNIL_FTRUNC = 67,
       DRAGON_IGNIL_FTRUNC32 = 68,
+      DRAGON_IGNIL_LABEL = 69,
+      DRAGON_IGNIL_LOCALJMP = 70,
+      DRAGON_IGNIL_LOCALCJMP = 71,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").

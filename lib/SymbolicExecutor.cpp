@@ -1279,7 +1279,41 @@ RunResult SymbolicExecutor::run(const std::vector<Op> &ops) {
   RunResult result;
   result.ownedContext_ = ownedCtx_;
 
-  for (const Op &op : ops) {
+  auto failure = [&](ExecStatus status,const std::string &message) {
+    result.status=status; result.exit=ExitKind::Error; result.error=message;
+    return result;
+  };
+  std::map<std::uint32_t,std::size_t> labels;
+  for (std::size_t i=0;i<ops.size();++i) {
+    const auto &op=ops[i];
+    if (op.opcode == Opcode::LABEL &&
+        (op.dst || !op.srcs.empty() || !labels.emplace(op.aux,i).second))
+      return failure(ExecStatus::MalformedOp,"invalid or duplicate local label");
+  }
+  for (const auto &op : ops)
+    if ((op.opcode == Opcode::LOCALJMP || op.opcode == Opcode::LOCALCJMP) &&
+        (op.dst || !labels.contains(op.aux) ||
+         op.srcs.size() != (op.opcode == Opcode::LOCALCJMP ? 1u : 0u) ||
+         (op.opcode == Opcode::LOCALCJMP && widthOf(op.srcs[0]) != 1)))
+      return failure(ExecStatus::MalformedOp,"invalid local branch");
+  std::size_t localSteps=0;
+  for (std::size_t pc=0;pc<ops.size();++pc) {
+    const Op &op=ops[pc];
+    if (isLocalControl(op.opcode)) {
+      ++result.stats.opsExecuted;
+      if (++localSteps > 100000)
+        return failure(ExecStatus::UnsupportedOp,"local control-flow execution budget exhausted");
+      if (op.opcode == Opcode::LABEL) continue;
+      bool taken=true;
+      if (op.opcode == Opcode::LOCALCJMP) {
+        const auto condition=evaluate(eval(op.srcs[0]));
+        if (!condition)
+          return failure(ExecStatus::UnsupportedOp,"local branch condition is not uniquely determined");
+        taken=*condition != 0;
+      }
+      if (taken) pc=labels.at(op.aux); // next iteration starts after the label
+      continue;
+    }
     const ExecStatus status = step(op, result);
     ++result.stats.opsExecuted;
 

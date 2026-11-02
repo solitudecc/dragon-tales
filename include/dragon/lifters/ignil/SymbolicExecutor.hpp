@@ -84,6 +84,8 @@ struct SymbolicOptions {
   /// liftTrace() splices many basic blocks together and its interior
   /// terminators must be stepped over, not stopped at. Successors are still
   /// recorded either way.
+  /// Intra-instruction local branches are always followed. Their conditions
+  /// must be uniquely determined; 100000 local operations bound one run.
   bool stopAtTerminator = true;
 };
 

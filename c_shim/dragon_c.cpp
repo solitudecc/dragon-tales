@@ -848,6 +848,9 @@ static_assert(static_cast<int>(dragon::ignil::Opcode::FCEIL) == DRAGON_IGNIL_FCE
 static_assert(static_cast<int>(dragon::ignil::Opcode::FCEIL32) == DRAGON_IGNIL_FCEIL32);
 static_assert(static_cast<int>(dragon::ignil::Opcode::FTRUNC) == DRAGON_IGNIL_FTRUNC);
 static_assert(static_cast<int>(dragon::ignil::Opcode::FTRUNC32) == DRAGON_IGNIL_FTRUNC32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::LABEL) == DRAGON_IGNIL_LABEL);
+static_assert(static_cast<int>(dragon::ignil::Opcode::LOCALJMP) == DRAGON_IGNIL_LOCALJMP);
+static_assert(static_cast<int>(dragon::ignil::Opcode::LOCALCJMP) == DRAGON_IGNIL_LOCALCJMP);
 
 const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
   return dragon::ignil::opcodeName(

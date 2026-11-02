@@ -105,6 +105,7 @@ std::string dragon::ignil::toString(const Op &op) {
   if (op.opcode == Opcode::OPAQUE)
     s += std::format("<{}:{}>", opaqueKindName(opaqueKindOf(op.aux)),
                      opaqueIndexOf(op.aux));
+  if (isLocalControl(op.opcode)) s += std::format("<{}>",op.aux);
   s += "(";
   for (std::size_t i = 0; i < op.srcs.size(); ++i) {
     if (i)

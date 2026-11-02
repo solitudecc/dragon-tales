@@ -191,7 +191,14 @@ enum class Opcode : std::uint8_t {
   FFLOOR, FFLOOR32,
   FCEIL, FCEIL32,
   FTRUNC, FTRUNC32, // round to integral floating-point value, toward zero
+  // Intra-instruction control flow. aux identifies a LABEL within this block;
+  // LOCALCJMP takes srcs[0] when true, otherwise continues to the next op.
+  LABEL, LOCALJMP, LOCALCJMP,
 };
+
+[[nodiscard]] constexpr bool isLocalControl(Opcode opcode) {
+  return opcode == Opcode::LABEL || opcode == Opcode::LOCALJMP || opcode == Opcode::LOCALCJMP;
+}
 
 /// The instructions OPAQUE models. Appended to, never reordered - the value
 /// is packed into Op::aux and crosses the C shim.
@@ -233,7 +240,7 @@ struct Op {
   // operation from enum
   Opcode opcode;
 
-  // Destination - optional absent for STORE, JMP, CJMP, CALL, RET
+  // Destination - absent for STORE, control flow, and local labels/branches
   std::optional<Value> dst;
 
   // Source operands (count and semantics depend on opcode)
@@ -244,8 +251,8 @@ struct Op {
   // this address. Zero for synthetic Ops.
   std::uint64_t address{};
 
-  // Opcode-specific payload; only OPAQUE uses it, as makeOpaqueAux(kind,
-  // resultIndex). Deliberately last: every existing Op is aggregate-built as
+  // Opcode-specific payload; OPAQUE uses makeOpaqueAux(kind,
+  // resultIndex); local control flow uses a label ID. Deliberately last: every existing Op is aggregate-built as
   // {opcode, dst, srcs, address}, and inserting a field before `address`
   // would silently feed the address into this one instead.
   std::uint32_t aux{};

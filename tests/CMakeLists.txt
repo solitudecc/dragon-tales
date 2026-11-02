@@ -28,6 +28,10 @@ if(DRAGON_USE_Z3)
     target_sources(dragon_tests PRIVATE lifters/TestIGNILFloat.cpp)
 endif()
 
+if(DRAGON_USE_UNICORN AND DRAGON_USE_Z3)
+    target_sources(dragon_tests PRIVATE semantic/TestX86Strings.cpp)
+endif()
+
 if(DRAGON_USE_UNICORN)
     target_sources(dragon_tests PRIVATE
         semantic/TestX86SemanticRoundTrip.cpp

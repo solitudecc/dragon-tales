@@ -103,7 +103,10 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     if (!ib)
       continue;
     TempMap temps{}; // fresh per block - Temp ids don't cross block boundaries
-    liftBlock(ib, llfn, &regFile, &temps, memPtr, regsPtr, bbMap.value());
+    if (!liftBlock(ib, llfn, &regFile, &temps, memPtr, regsPtr, bbMap.value())) {
+      llfn->eraseFromParent();
+      return false;
+    }
   }
   return true;
 }
@@ -213,21 +216,11 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(const ignil::Block &block,
   TempMap temps{};
   llvm::IRBuilder<> builder(entry);
   const std::map<std::uint64_t, llvm::BasicBlock *> noTargets;
-  bool sawRet = false;
-
-  for (const auto &op: block.ops()) {
-    // A linear, already-resolved trace has nothing left to branch on - the
-    // op sequence itself already *is* the path that was taken.
-    if (op.opcode == ignil::Opcode::JMP || op.opcode == ignil::Opcode::CJMP)
-      continue;
-    liftOp(op, regFile, temps, memPtr, regsPtr, builder, noTargets);
-    if (op.opcode == ignil::Opcode::RET) {
-      sawRet = true;
-      break; // liftOp's RET case already terminated the block
-    }
+  if (!liftOps(block.ops(),regFile,temps,memPtr,regsPtr,builder,noTargets,true)) {
+    llfn->eraseFromParent();
+    return false;
   }
-
-  if (!sawRet)
+  if (!builder.GetInsertBlock()->getTerminator())
     emitReturn(regFile, regsPtr, builder);
 
   return true;
@@ -251,23 +244,60 @@ dragon::llvmlifter::LLVMLifter::buildBlockMap(llvm::Function *llfn,
 
   return addrBlock;
 }
-void dragon::llvmlifter::LLVMLifter::liftBlock(
+bool dragon::llvmlifter::LLVMLifter::liftBlock(
         const ignil::Block *ib, llvm::Function *llfn, RegFile *regs,
         TempMap *temps, llvm::Value *memPtr, llvm::Value *regsPtr,
         const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap) {
   llvm::IRBuilder<> builder(bbMap.at(ib->startAddress()));
 
-  for (const auto &op: ib->ops()) {
-    if (builder.GetInsertBlock()->getTerminator())
-      break; // nothing executes after a branch or a return
-    liftOp(op, *regs, *temps, memPtr, regsPtr, builder, bbMap);
-  }
+  if (!liftOps(ib->ops(),*regs,*temps,memPtr,regsPtr,builder,bbMap,false))
+    return false;
   // A block that ends in a trap (ud2, hlt, brk) or an instruction without
   // semantics has no IGNIL terminator and no successor; LLVM still needs
   // one. Control does not continue past it.
   if (!builder.GetInsertBlock()->getTerminator())
     builder.CreateUnreachable();
+  return true;
 }
+bool dragon::llvmlifter::LLVMLifter::liftOps(
+        const std::vector<ignil::Op> &ops, RegFile &regs, TempMap &temps,
+        llvm::Value *memPtr, llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
+        const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap,bool trace) {
+  using O=ignil::Opcode;
+  std::map<std::uint32_t,llvm::BasicBlock *> labels;
+  auto *function=builder.GetInsertBlock()->getParent();
+  for (const auto &op : ops) if (op.opcode == O::LABEL) {
+    if (op.dst || !op.srcs.empty() || labels.contains(op.aux)) return false;
+    labels.emplace(op.aux,llvm::BasicBlock::Create(*ctx_,"local_"+std::to_string(op.aux),function));
+  }
+  for (const auto &op : ops)
+    if ((op.opcode == O::LOCALJMP || op.opcode == O::LOCALCJMP) &&
+        (op.dst || !labels.contains(op.aux) ||
+         op.srcs.size() != (op.opcode == O::LOCALCJMP ? 1u : 0u) ||
+         (op.opcode == O::LOCALCJMP && ignil::widthOf(op.srcs[0]) != 1))) return false;
+  for (const auto &op : ops) {
+    if (op.opcode == O::LABEL) {
+      auto *target=labels.at(op.aux);
+      if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(target);
+      builder.SetInsertPoint(target);
+      continue;
+    }
+    if (builder.GetInsertBlock()->getTerminator()) continue;
+    if (op.opcode == O::LOCALJMP) { builder.CreateBr(labels.at(op.aux)); continue; }
+    if (op.opcode == O::LOCALCJMP) {
+      auto *fallthrough=llvm::BasicBlock::Create(*ctx_,"local_next",function);
+      builder.CreateCondBr(resolve(op.srcs[0],regs,temps,builder),labels.at(op.aux),fallthrough);
+      builder.SetInsertPoint(fallthrough);
+      continue;
+    }
+    // A resolved machine trace drops its external branches, while preserving
+    // the internal loop belonging to each individual machine instruction.
+    if (trace && (op.opcode == O::JMP || op.opcode == O::CJMP)) continue;
+    liftOp(op,regs,temps,memPtr,regsPtr,builder,bbMap);
+  }
+  return true;
+}
+
 void dragon::llvmlifter::LLVMLifter::liftOp(
         const ignil::Op &op, RegFile &regs, TempMap &temps, llvm::Value *memPtr,
         llvm::Value *regsPtr, llvm::IRBuilder<> &builder,

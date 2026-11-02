@@ -44,13 +44,13 @@ if arch == A.X86_64:
     X = dragon.x86
     names = ['RAX', 'RCX', 'RDX', 'RBX', 'RSP', 'RBP', 'RSI', 'RDI'] + [f'R{i}' for i in range(8, 16)]
     regs = [(n, getattr(X, n), getattr(X86C, f'UC_X86_REG_{n}')) for n in names]
-    flags = [(f, getattr(X, f), b) for f, b in (('CF', 0), ('PF', 2), ('AF', 4), ('ZF', 6), ('SF', 7), ('OF', 11))]
+    flags = [(f, getattr(X, f), b) for f, b in (('CF', 0), ('PF', 2), ('AF', 4), ('ZF', 6), ('SF', 7), ('DF', 10), ('OF', 11))]
     uc_mode, uc_arch, sp_name, flag_reg, width = UC_MODE_64, UC_ARCH_X86, 'RSP', X86C.UC_X86_REG_EFLAGS, 64
 elif arch == A.X86_32:
     X = dragon.x86
     names = ['EAX', 'ECX', 'EDX', 'EBX', 'ESP', 'EBP', 'ESI', 'EDI']
     regs = [(n, getattr(X, n), getattr(X86C, f'UC_X86_REG_{n}')) for n in names]
-    flags = [(f, getattr(X, f), b) for f, b in (('CF', 0), ('PF', 2), ('AF', 4), ('ZF', 6), ('SF', 7), ('OF', 11))]
+    flags = [(f, getattr(X, f), b) for f, b in (('CF', 0), ('PF', 2), ('AF', 4), ('ZF', 6), ('SF', 7), ('DF', 10), ('OF', 11))]
     uc_mode, uc_arch, sp_name, flag_reg, width = UC_MODE_32, UC_ARCH_X86, 'ESP', X86C.UC_X86_REG_EFLAGS, 32
 elif arch == A.ARM64:
     R = dragon.arm
@@ -126,17 +126,17 @@ for b in blocks:
     insns = list(bb.instructions())
     while insns and (insns[-1].is_jump or insns[-1].is_return or insns[-1].is_trap):
         insns.pop()
-    # REALBLOCK_FILTER=text keeps only blocks with an operand containing it
+    # REALBLOCK_FILTER=text keeps only blocks containing the mnemonic or an operand
     # (e.g. xmm, to concentrate on SSE code).
     if _os.environ.get('REALBLOCK_FILTER') and not any(
-            _os.environ['REALBLOCK_FILTER'] in i.operands for i in insns):
+            _os.environ['REALBLOCK_FILTER'] in f'{i.mnemonic} {i.operands}' for i in insns):
         continue
     if not insns or any(i.is_call or i.is_jump or i.is_return or i.is_trap or
                         i.mnemonic in ('syscall', 'svc', 'int', 'cpuid', 'rdtsc',
                                        'xgetbv', 'rdrand', 'hlt', 'in', 'out')
-                        or i.mnemonic.startswith(('rep', 'lock', 'cmpxchg'))
+                        or i.mnemonic.startswith(('lock', 'cmpxchg'))
                         or (arch != A.ARM64 and i.mnemonic.startswith('f')) for i in insns):
-        stats['skipped (call/system/x87/rep)'] += 1
+        stats['skipped (call/system/x87)'] += 1
         continue
     code = b''.join(bytes(i.bytes) for i in insns)
     start, end = insns[0].address, insns[-1].address + insns[-1].size
@@ -153,8 +153,10 @@ for b in blocks:
     for trial in range(TRIALS):
         r = random.Random(b * 131 + trial)
         init = {n: reg_value(r) for n, _, _ in regs}
+        if uc_arch == UC_ARCH_X86 and any(i.mnemonic.startswith('rep') for i in insns):
+            init['RCX' if width==64 else 'ECX']=[0,1,2,5][trial%4]
         init[sp_name] = STACK + r.randrange(0x100, 0xf00, 16)
-        fl = r.getrandbits(32) if uc_arch == UC_ARCH_ARM64 else (r.getrandbits(32) & 0x8d5) | 2
+        fl = r.getrandbits(32) if uc_arch == UC_ARCH_ARM64 else (r.getrandbits(32) & 0xcd5) | 2
         if uc_arch == UC_ARCH_ARM64:
             fl &= 0xf0000000
         uc = Uc(uc_arch, uc_mode)
@@ -193,7 +195,7 @@ for b in blocks:
         for (i, lo, hi, ucx), (vlo, vhi) in zip(xmms, xv):
             uc.reg_write(ucx, (vhi << 64) | vlo)
         try:
-            uc.emu_start(start, end, count=len(insns))
+            uc.emu_start(start, end, count=100000 if any(i.mnemonic.startswith('rep') for i in insns) else len(insns), timeout=200000)
         except UcError:
             stats['trials faulted'] += 1
             continue

@@ -41,7 +41,9 @@ class LLVMLifter {
   /// RET, a synthetic `ret void` (with the usual register write-back) is
   /// appended so the function is always well-formed.
   ///
-  /// Returns false for an empty block.
+  /// Intra-instruction LABEL/LOCAL* branches remain runtime control flow,
+  /// including REP loops, even in an otherwise linear machine trace.
+  /// Returns false for an empty block or malformed local control flow.
   bool liftBlock(const ignil::Block &block, std::string_view name = "trace");
 
   // Run optimization passes in the recommended order.
@@ -113,7 +115,7 @@ class LLVMLifter {
                 const Graph &graph) const;
 
   // Translate one IGNIL block into its llvm::BasicBlock.
-  void liftBlock(const ignil::Block *ib, llvm::Function *llfn, RegFile *regs,
+  bool liftBlock(const ignil::Block *ib, llvm::Function *llfn, RegFile *regs,
                  TempMap *temps, llvm::Value *memPtr, llvm::Value *regsPtr,
                  const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap);
 
@@ -123,6 +125,10 @@ class LLVMLifter {
               llvm::Value *memPtr, llvm::Value *regsPtr,
               llvm::IRBuilder<> &builder,
               const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap);
+
+  bool liftOps(const std::vector<ignil::Op> &ops, RegFile &regs, TempMap &temps,
+               llvm::Value *memPtr, llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
+               const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap, bool trace);
 
   // Resolve an ignil::Value to a llvm::Value (load from alloca or
   // look up the temp SSA value).
