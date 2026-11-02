@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <format>
 #include <utility>
+#include "utils/FloatOps.hpp"
+#include <llvm/IR/Intrinsics.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
@@ -275,24 +277,19 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
   auto emit = [&](llvm::Value *val) {
     if (!op.dst)
       return;
+    // IGNIL temps and registers contain raw bits. Keeping float results as
+    // integers also lets ordinary TRUNC/ZEXT/bitwise ops consume them safely;
+    // LLVM folds redundant round-trip bitcasts in float-only chains.
+    if (val->getType()->isFloatingPointTy())
+      val = builder.CreateBitCast(val,llvm::IntegerType::get(*ctx_,
+                           val->getType()->getPrimitiveSizeInBits().getFixedValue()));
+    auto *resultType = llvm::IntegerType::get(*ctx_,ignil::widthOf(*op.dst));
+    if (val->getType() != resultType) val = builder.CreateZExtOrTrunc(val,resultType);
     if (const auto *t = std::get_if<ignil::Temp>(&*op.dst)) {
       // If it is a temporal value, it will be used
       // for SSA
       temps[t->id] = val;
     } else if (const auto *r = std::get_if<ignil::Reg>(&*op.dst)) {
-      auto *slotTy = llvm::IntegerType::get(*ctx_, r->width);
-      if (val->getType()->isDoubleTy()) {
-        // FADD/FSUB/FMUL/SITOFP produce a real `double`-typed value (kept
-        // that way rather than laundered through i64 at every step so
-        // Temp-to-Temp chains stay in LLVM's native float domain, giving
-        // its own float-aware constant folding/InstCombine the best shot
-        // at simplifying it) - reinterpret its bits back into the
-        // register's integer slot, the same width-64-bits-either-way
-        // reinterpretation every XMM Reg already models.
-        val = builder.CreateBitCast(val, slotTy);
-      } else if (val->getType() != slotTy) {
-        val = builder.CreateZExt(val, slotTy);
-      }
       builder.CreateStore(val, regs.at(r->offset).at(r->width));
       mergeIntoParent(r->offset, r->width, val, regs, builder);
       syncOverlapping(r->offset, r->width, val, regs, builder);
@@ -321,23 +318,57 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       rhs = builder.CreateZExtOrTrunc(rhs, lhs->getType());
     return rhs;
   };
-  // FADD/FSUB/FMUL/FDIV/FPTOSI's operands are raw 64-bit slots (a Reg read,
-  // a Const, or a Temp chained from an earlier integer op) that need
-  // reinterpreting as `double` before real float arithmetic can run on
-  // them - unless the value is already `double` (a Temp already produced
-  // by a prior float op in the same chain), in which case it's used as-is
-  // rather than round-tripped through another bitcast.
-  auto asDouble = [&](llvm::Value *v) {
-    return v->getType()->isDoubleTy()
-                   ? v
-                   : builder.CreateBitCast(v, builder.getDoubleTy());
-  };
   // A 32-bit address is unsigned, but a GEP sign-extends its index.
   auto memAddress = [&](llvm::Value *addr) {
     auto *indexTy = module_->getDataLayout().getIndexType(memPtr->getType());
     return builder.CreateGEP(builder.getInt8Ty(), memPtr,
                              builder.CreateZExtOrBitCast(addr, indexTy));
   };
+
+  if (ignil::detail::floatBinaryOp(op.opcode)) {
+    auto *type = ignil::detail::floatBits(op.opcode) == 32 ? builder.getFloatTy() : builder.getDoubleTy();
+    auto asFloat = [&](llvm::Value *value) { return builder.CreateBitCast(value,type); };
+    auto *left = asFloat(r0()), *right = asFloat(r1());
+    switch (op.opcode) {
+      case ignil::Opcode::FADD: case ignil::Opcode::FADD32: emit(builder.CreateFAdd(left,right)); break;
+      case ignil::Opcode::FSUB: case ignil::Opcode::FSUB32: emit(builder.CreateFSub(left,right)); break;
+      case ignil::Opcode::FMUL: case ignil::Opcode::FMUL32: emit(builder.CreateFMul(left,right)); break;
+      case ignil::Opcode::FDIV: case ignil::Opcode::FDIV32: emit(builder.CreateFDiv(left,right)); break;
+      case ignil::Opcode::FLT: case ignil::Opcode::FLT32: emit(builder.CreateFCmpOLT(left,right)); break;
+      case ignil::Opcode::FEQ: case ignil::Opcode::FEQ32: emit(builder.CreateFCmpOEQ(left,right)); break;
+      default: emit(builder.CreateFCmpUNO(left,right)); break;
+    }
+    return;
+  }
+  if (ignil::detail::floatUnaryOp(op.opcode)) {
+    auto *type = ignil::detail::floatBits(op.opcode) == 32 ? builder.getFloatTy() : builder.getDoubleTy();
+    auto *source = r0();
+    switch (op.opcode) {
+      case ignil::Opcode::SITOFP: case ignil::Opcode::SITOFP32:
+        emit(builder.CreateSIToFP(source,type)); return;
+      case ignil::Opcode::UITOFP: case ignil::Opcode::UITOFP32:
+        emit(builder.CreateUIToFP(source,type)); return;
+      default: break;
+    }
+    auto *value = builder.CreateBitCast(source,type);
+    switch (op.opcode) {
+      case ignil::Opcode::FPTOSI: case ignil::Opcode::FPTOSI32:
+        emit(builder.CreateFPToSI(value,dstTy())); break;
+      case ignil::Opcode::FPTOUI: case ignil::Opcode::FPTOUI32:
+        emit(builder.CreateFPToUI(value,dstTy())); break;
+      case ignil::Opcode::FPEXT: emit(builder.CreateFPExt(value,builder.getDoubleTy())); break;
+      case ignil::Opcode::FPTRUNC: emit(builder.CreateFPTrunc(value,builder.getFloatTy())); break;
+      default: {
+        const auto intrinsic = op.opcode == ignil::Opcode::FSQRT || op.opcode == ignil::Opcode::FSQRT32 ? llvm::Intrinsic::sqrt
+                             : op.opcode == ignil::Opcode::FFLOOR || op.opcode == ignil::Opcode::FFLOOR32 ? llvm::Intrinsic::floor
+                             : op.opcode == ignil::Opcode::FCEIL || op.opcode == ignil::Opcode::FCEIL32 ? llvm::Intrinsic::ceil
+                             : llvm::Intrinsic::trunc;
+        emit(builder.CreateUnaryIntrinsic(intrinsic,value));
+        break;
+      }
+    }
+    return;
+  }
 
   switch (op.opcode) {
     // --- Data movement ---
@@ -346,10 +377,10 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       break;
 
     case ignil::Opcode::LOAD:
-      emit(builder.CreateLoad(dstTy(), memAddress(r0())));
+      emit(builder.CreateAlignedLoad(dstTy(), memAddress(r0()), llvm::Align(1)));
       break;
     case ignil::Opcode::STORE:
-      builder.CreateStore(r1(), memAddress(r0()));
+      builder.CreateAlignedStore(r1(), memAddress(r0()), llvm::Align(1));
       break;
 
     // --- Arithmetic ---
@@ -376,29 +407,6 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       break;
     case ignil::Opcode::UMOD:
       emit(builder.CreateURem(r0(), r1()));
-      break;
-
-    // --- Floating-point (IEEE754 double) ---
-    case ignil::Opcode::FADD:
-      emit(builder.CreateFAdd(asDouble(r0()), asDouble(r1())));
-      break;
-    case ignil::Opcode::FSUB:
-      emit(builder.CreateFSub(asDouble(r0()), asDouble(r1())));
-      break;
-    case ignil::Opcode::FMUL:
-      emit(builder.CreateFMul(asDouble(r0()), asDouble(r1())));
-      break;
-    case ignil::Opcode::FDIV:
-      emit(builder.CreateFDiv(asDouble(r0()), asDouble(r1())));
-      break;
-    case ignil::Opcode::FLT:
-      emit(builder.CreateFCmpOLT(asDouble(r0()), asDouble(r1())));
-      break;
-    case ignil::Opcode::FEQ:
-      emit(builder.CreateFCmpOEQ(asDouble(r0()), asDouble(r1())));
-      break;
-    case ignil::Opcode::FUNO:
-      emit(builder.CreateFCmpUNO(asDouble(r0()), asDouble(r1())));
       break;
 
     // --- Bitwise ---
@@ -439,14 +447,6 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       break;
     case ignil::Opcode::TRUNC:
       emit(builder.CreateTrunc(r0(), dstTy()));
-      break;
-
-    // --- Int <-> float conversion ---
-    case ignil::Opcode::SITOFP:
-      emit(builder.CreateSIToFP(r0(), builder.getDoubleTy()));
-      break;
-    case ignil::Opcode::FPTOSI:
-      emit(builder.CreateFPToSI(asDouble(r0()), dstTy()));
       break;
 
     // --- Comparisons (always produce i1) ---
@@ -620,7 +620,7 @@ void dragon::llvmlifter::LLVMLifter::emitReturn(RegFile &regs,
     auto *val = builder.CreateLoad(ty, slot);
     auto *ptr = builder.CreateGEP(builder.getInt8Ty(), regsPtr,
                                   builder.getInt32(offset));
-    builder.CreateStore(val, ptr);
+    builder.CreateAlignedStore(val, ptr, llvm::Align(1));
   }
   builder.CreateRetVoid();
 }
@@ -772,7 +772,7 @@ void dragon::llvmlifter::LLVMLifter::initializeRegistersFromParam(
     auto *bigTy = llvm::IntegerType::get(*ctx_, bigWidth);
     auto *ptr   = builder.CreateGEP(builder.getInt8Ty(), regsPtr,
                                     builder.getInt32(offset));
-    auto *val   = builder.CreateLoad(bigTy, ptr);
+    auto *val   = builder.CreateAlignedLoad(bigTy, ptr, llvm::Align(1));
     builder.CreateStore(val, bigSlot);
     for (auto &[width, slot] : widthMap) {
       if (width == bigWidth)

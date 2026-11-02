@@ -356,6 +356,29 @@
       DRAGON_IGNIL_FLT    = 43, // IEEE double <, ordered
       DRAGON_IGNIL_FEQ    = 44, // IEEE double ==, ordered
       DRAGON_IGNIL_FUNO   = 45, // either operand NaN
+      DRAGON_IGNIL_FADD32 = 46,
+      DRAGON_IGNIL_FSUB32 = 47,
+      DRAGON_IGNIL_FMUL32 = 48,
+      DRAGON_IGNIL_FDIV32 = 49,
+      DRAGON_IGNIL_SITOFP32 = 50,
+      DRAGON_IGNIL_FPTOSI32 = 51,
+      DRAGON_IGNIL_FLT32 = 52,
+      DRAGON_IGNIL_FEQ32 = 53,
+      DRAGON_IGNIL_FUNO32 = 54,
+      DRAGON_IGNIL_FPEXT = 55,
+      DRAGON_IGNIL_FPTRUNC = 56,
+      DRAGON_IGNIL_UITOFP = 57,
+      DRAGON_IGNIL_UITOFP32 = 58,
+      DRAGON_IGNIL_FPTOUI = 59,
+      DRAGON_IGNIL_FPTOUI32 = 60,
+      DRAGON_IGNIL_FSQRT = 61,
+      DRAGON_IGNIL_FSQRT32 = 62,
+      DRAGON_IGNIL_FFLOOR = 63,
+      DRAGON_IGNIL_FFLOOR32 = 64,
+      DRAGON_IGNIL_FCEIL = 65,
+      DRAGON_IGNIL_FCEIL32 = 66,
+      DRAGON_IGNIL_FTRUNC = 67,
+      DRAGON_IGNIL_FTRUNC32 = 68,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").

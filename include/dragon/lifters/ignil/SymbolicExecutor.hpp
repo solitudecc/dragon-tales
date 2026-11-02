@@ -592,8 +592,6 @@ class SymbolicExecutor {
                                Width dstWidth) const;
   [[nodiscard]] z3::expr shift(Opcode op, const z3::expr &lhs,
                                const z3::expr &rhs) const;
-  [[nodiscard]] z3::expr floatBinary(Opcode op, const z3::expr &lhs,
-                                     const z3::expr &rhs) const;
 
   /// Turn a possibly-symbolic address into concrete candidates. Returns
   /// nullopt when the address has more satisfying values than the bound

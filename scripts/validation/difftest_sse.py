@@ -17,6 +17,8 @@ CODE, DATA = 0x100000, 0x200000
 XMM_OFF = 143   # kOffXMM0, 8 bytes each (low half)
 UCX = [getattr(sys.modules['unicorn.x86_const'], f'UC_X86_REG_XMM{i}') for i in range(4)]
 SPECIAL = [0.0, -0.0, 1.0, -1.5, 3.25, float('inf'), float('-inf'), float('nan'), 1e300, -7.0]
+SPECIAL32 = [0,0x80000000,0x3f800000,0xbf800000,0x7f800000,0xff800000,
+             0x7fc00001,0x7f800001,1,0x7fffff,0x800000,0x7f7fffff]
 def rnd_double(rng):
     v = rng.choice(SPECIAL) if rng.random() < 0.5 else rng.uniform(-1e6, 1e6)
     return struct.unpack('<Q', struct.pack('<d', v))[0]
@@ -63,12 +65,15 @@ T += ['pmovmskb eax, xmm1', 'pmovmskb eax, xmm0', 'pextrw eax, xmm1, 5', 'pextrw
       'movss xmm0, dword ptr [rbx + 4]', 'movss dword ptr [rbx + 4], xmm1', 'movss xmm0, xmm1']
 T += [f'cmp{p}sd xmm0, xmm1' for p in ('eq', 'lt', 'le', 'unord', 'neq', 'nlt', 'nle', 'ord')]
 T += ['cmpltsd xmm2, qword ptr [rbx]', 'cmpnlesd xmm3, xmm0']
+T += ['cvtss2sd xmm0, xmm1','cvtss2sd xmm0, dword ptr [rbx]',
+      'cvtsd2ss xmm0, xmm1','cvtsd2ss xmm0, qword ptr [rbx]']
 SMALL_COUNT = ('psllq xmm0, xmm1', 'pslld xmm0, xmm1', 'psllw xmm2, xmm1', 'psrld xmm0, xmm1', 'psrlq xmm3, xmm1',
                'psrad xmm0, xmm1', 'psraw xmm2, xmm1')
 rng = random.Random(5)
 ok = diff = unl = 0
 nan_unknown = [0]
 for text in T:
+    if os.environ.get('ONLY') and os.environ['ONLY'] not in text: continue
     code = bytes(asm.assemble(text))
     blk = dis.lift_trace(dis.disassemble(code, CODE).instructions())
     if blk.unlifted():
@@ -87,6 +92,9 @@ for text in T:
             xmm[1] = (xmm[0] & m) | (xmm[1] & ~m & (2**64 - 1))
             hi[1] = (hi[0] & m) | (hi[1] & ~m & (2**64 - 1))
         page = b''.join(struct.pack('<Q', rnd_double(rng)) for _ in range(32))
+        if text.startswith('cvtss2sd'):
+            xmm[1] = (rng.getrandbits(32) << 32) | rng.choice(SPECIAL32)
+            page = struct.pack('<I',rng.choice(SPECIAL32)) + page[4:]
         rax = rng.getrandbits(64)
         uc = Uc(UC_ARCH_X86, UC_MODE_64); uc.mem_map(CODE, 0x1000); uc.mem_map(DATA, 0x1000)
         uc.mem_write(CODE, code); uc.mem_write(DATA, page)
@@ -105,13 +113,21 @@ for text in T:
         checks = [('RAX', ex.concrete_register(X.RAX), uc.reg_read(UC_X86_REG_RAX))]
         checks += [(f'XMM{i}', ex.concrete_register(xreg(i)), uc.reg_read(UCX[i]) & (2**64 - 1)) for i in range(4)]
         checks += [(f'XMM{i}H', ex.concrete_register(xhreg(i)), uc.reg_read(UCX[i]) >> 64) for i in range(4)]
+        if text.startswith('cvtsd2ss'):
+            checks.append(('XMM0[63:32]',ex.concrete_register((XMM_OFF+4,32,'XMM0[63:32]')),
+                           (uc.reg_read(UCX[0]) >> 32) & 0xffffffff))
         if 'comisd' in text:
             checks += [(f, ex.concrete_register(getattr(X, f)), (fl >> b) & 1) for f, b in (('ZF', 6), ('PF', 2), ('CF', 0), ('OF', 11), ('SF', 7), ('AF', 4))]
         checks += [(f'mem+{o}', ex.concrete_memory(DATA + o, 64), int.from_bytes(uc.mem_read(DATA + o, 8), 'little')) for o in (0, 8, 16, 24)]
         isnan = lambda v: (v >> 52) & 0x7ff == 0x7ff and v & ((1 << 52) - 1)
-        nan_unknown[0] += sum(1 for n, g, w in checks if g is None and n.startswith("XMM") and not n.endswith("H") and isnan(w))
-        wrong = [f'{n}: dragon={g if g is None else hex(g)} unicorn={hex(w)}' for n, g, w in checks if g != w and not (g is None and n.startswith("XMM") and not n.endswith("H") and isnan(w))]
+        nan_result = lambda n,g,w: g is None and n.startswith('XMM') and not n.endswith('H') and (
+            isnan(w) or (text.startswith('cvtsd2ss') and n == 'XMM0' and
+                         (w & 0x7f800000) == 0x7f800000 and (w & 0x7fffff)))
+        nan_unknown[0] += sum(1 for n,g,w in checks if nan_result(n,g,w))
+        wrong = [f'{n}: dragon={g if g is None else hex(g)} unicorn={hex(w)}'
+                 for n,g,w in checks if g != w and not nan_result(n,g,w)]
         if wrong: bad = wrong; break
     if bad: diff += 1; print('DIFF', text, bad[:3])
     else: ok += 1
 print(f'{ok} ok, {diff} diff, {unl} unlifted; NaN results left unknown: {nan_unknown[0]}')
+if diff or unl: sys.exit(1)

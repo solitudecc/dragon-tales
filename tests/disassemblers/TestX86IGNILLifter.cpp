@@ -2,6 +2,7 @@
 
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/ignil/IGNILSimplify.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
@@ -20,6 +21,42 @@
 #include <iostream>
 #include <set>
 #include <tuple>
+
+#ifdef DRAGON_WITH_Z3
+TEST_CASE("SSE scalar precision conversions preserve the untouched XMM bits", "[sse-convert][ignil][x86]") {
+  using namespace dragon;
+  const ignil::Reg xmm0{x86::kOffXMM0,64,"XMM0"}, xmm1{x86::kOffXMM0+8,64,"XMM1"},
+                   xmm0h{x86::kOffXMM0H,64,"XMM0H"};
+  struct Case { const char *text; uint64_t input, output; };
+  const Case cases[] = {
+    {"cvtss2sd xmm0, xmm1",0xaabbccdd3fc00000ull,0x3ff8000000000000ull},
+    {"cvtss2sd xmm0, dword ptr [rbx]",0x3f000001,0x3fe0000020000000ull},
+    {"cvtsd2ss xmm0, xmm1",0x3ff0000010000001ull,0x112233443f800001ull},
+    {"cvtsd2ss xmm0, qword ptr [rbx]",0x3ff8000000000000ull,0x112233443fc00000ull},
+  };
+  Assembler assembler{Architecture::X86_64,Configuration{}};
+  Disassembler dis{Architecture::X86_64,Configuration{}};
+  for (const auto &test : cases) {
+    INFO(test.text);
+    auto block = dis.liftTrace(dis.disassemble(assembler.assemble(test.text),0x1000));
+    REQUIRE(block.unlifted().empty());
+    ignil::SymbolicExecutor executor;
+    executor.setRegister(xmm0,0x1122334455667788ull);
+    executor.setRegister(xmm0h,0xfedcba9876543210ull);
+    executor.setRegister(xmm1,test.input);
+    executor.setRegister(x86::RBX,0x200000);
+    std::vector<uint8_t> bytes;
+    for (unsigned byte=0;byte<8;++byte) bytes.push_back(test.input >> (8*byte));
+    executor.mapMemory(0x200000,bytes);
+    REQUIRE(executor.run(block).ok());
+    CHECK(executor.evaluate(executor.readRegister(xmm0)) == test.output);
+    CHECK(executor.evaluate(executor.readRegister(xmm0h)) == 0xfedcba9876543210ull);
+    llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+    REQUIRE(lifter.liftBlock(block));
+    CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+  }
+}
+#endif
 #include <variant>
 #include <vector>
 

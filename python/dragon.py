@@ -780,6 +780,29 @@ class IGNILOpcode:
     OPAQUE = 42
     # IEEE754 double comparisons (1-bit): ordered <, ordered ==, unordered.
     FLT = 43; FEQ = 44; FUNO = 45
+    FADD32 = 46
+    FSUB32 = 47
+    FMUL32 = 48
+    FDIV32 = 49
+    SITOFP32 = 50
+    FPTOSI32 = 51
+    FLT32 = 52
+    FEQ32 = 53
+    FUNO32 = 54
+    FPEXT = 55
+    FPTRUNC = 56
+    UITOFP = 57
+    UITOFP32 = 58
+    FPTOUI = 59
+    FPTOUI32 = 60
+    FSQRT = 61
+    FSQRT32 = 62
+    FFLOOR = 63
+    FFLOOR32 = 64
+    FCEIL = 65
+    FCEIL32 = 66
+    FTRUNC = 67
+    FTRUNC32 = 68
 
     @staticmethod
     def name(opcode_int):

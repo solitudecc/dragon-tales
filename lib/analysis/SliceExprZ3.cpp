@@ -1,6 +1,7 @@
 #include <dragon/analysis/SliceExprZ3.hpp>
 
 #include "utils/Utils.hpp"
+#include "utils/FloatOps.hpp"
 
 #include <cassert>
 #include <format>
@@ -61,6 +62,8 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
             // First lower both sides from the expression
             z3::expr l = lower(*b.left);
             z3::expr r = lower(*b.right);
+            if (ignil::detail::floatBinaryOp(b.op))
+              return ignil::detail::floatBinary(b.op,l,r);
 
             // Operands must have the same width to operate
             // between them
@@ -133,6 +136,8 @@ z3::expr SliceExprZ3::lower(const Expr &e) const {
             z3::expr v = lower(*u.operand);
             unsigned srcW = v.get_sort().bv_size();
             unsigned dstW = u.resultWidth ? u.resultWidth : srcW;
+            if (ignil::detail::floatUnaryOp(u.op))
+              return ignil::detail::floatUnary(u.op,v,dstW);
 
             using Opc = ignil::Opcode;
             switch (u.op) {

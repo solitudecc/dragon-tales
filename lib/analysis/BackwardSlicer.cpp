@@ -6,6 +6,7 @@
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include "utils/Utils.hpp"
+#include "utils/FloatOps.hpp"
 
 #include <algorithm>
 #include <type_traits>
@@ -614,6 +615,18 @@ slice::Expr BackwardSlicer::buildFromOp(const ignil::Op &op,
     return sliceValue(op.srcs[i], block, opIdx, graph, preds, depth);
   };
 
+  if (ignil::detail::floatBinaryOp(op.opcode)) {
+    auto left = src(0), right = src(1);
+    return slice::Expr{slice::BinOp{op.opcode,
+        std::make_shared<slice::Expr>(std::move(left)),
+        std::make_shared<slice::Expr>(std::move(right))}};
+  }
+  if (ignil::detail::floatUnaryOp(op.opcode)) {
+    auto operand = src(0);
+    return slice::Expr{slice::UnaryOp{op.opcode,
+        std::make_shared<slice::Expr>(std::move(operand)),
+        op.dst ? ignil::widthOf(*op.dst) : ignil::Width{64}}};
+  }
   switch (op.opcode) {
     // Data movement - just forward the single source.
     case Opc::COPY:

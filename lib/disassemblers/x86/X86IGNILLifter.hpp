@@ -111,6 +111,7 @@ class X86IGNILLifter {
     MovdFrom,    // movd r32/m32, xmm (low 32 bits)
     Addsd, Subsd, Divsd, // memory forms and divsd reg
     Cvtsi2sd,    // cvtsi2sd xmm, m32/m64
+    Cvtss2sd, Cvtsd2ss,
   };
   struct SseOp {
     SseKind kind;

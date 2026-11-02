@@ -154,10 +154,8 @@ enum class Opcode : std::uint8_t {
   FMUL,
   FDIV,
 
-  // Int <-> float conversion (signed only - no x86 scalar SSE2 instruction
-  // exists for unsigned int<->double in the classic ISA this lifter
-  // targets, so no UITOFP/FPTOUI pair is declared; add one if a real
-  // target ever needs it).
+  // Signed int <-> float conversion. Unsigned and binary32 variants are
+  // appended below to preserve the existing C/Python opcode values.
   SITOFP, // dst(double, width 64) = (double)(signed)srcs[0]
   FPTOSI, // dst(int) = srcs[0], interpreted as double, truncated toward zero
 
@@ -179,6 +177,20 @@ enum class Opcode : std::uint8_t {
   FLT,  // srcs[0] <  srcs[1], ordered
   FEQ,  // srcs[0] == srcs[1], ordered (+0 == -0)
   FUNO, // srcs[0] or srcs[1] is NaN
+
+  // IEEE754 binary32, evaluated directly at 24-bit precision (RNE).
+  // Raw bit patterns remain integer slots. Comparisons return one bit.
+  FADD32, FSUB32, FMUL32, FDIV32,
+  SITOFP32, FPTOSI32,
+  FLT32, FEQ32, FUNO32,
+  FPEXT,   // binary32 -> binary64 (exact for finite values)
+  FPTRUNC, // binary64 -> binary32 (one RNE rounding)
+  UITOFP, UITOFP32,
+  FPTOUI, FPTOUI32, // float -> unsigned integer, toward zero
+  FSQRT, FSQRT32,
+  FFLOOR, FFLOOR32,
+  FCEIL, FCEIL32,
+  FTRUNC, FTRUNC32, // round to integral floating-point value, toward zero
 };
 
 /// The instructions OPAQUE models. Appended to, never reordered - the value

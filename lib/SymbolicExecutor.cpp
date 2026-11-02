@@ -1,4 +1,5 @@
 #include <dragon/lifters/ignil/SymbolicExecutor.hpp>
+#include "utils/FloatOps.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -87,7 +88,6 @@ bool isComparison(Opcode op) {
 }
 
 /// IEEE754 binary64, the only float format IGNIL models.
-z3::sort float64Sort(z3::context &ctx) { return ctx.fpa_sort(11, 53); }
 
 std::string hex(std::uint64_t v) {
   std::ostringstream os;
@@ -689,29 +689,10 @@ z3::expr SymbolicExecutor::shift(Opcode op, const z3::expr &lhs,
 
 z3::expr SymbolicExecutor::binary(Opcode op, const z3::expr &lhs,
                                   const z3::expr &rhs, Width dstWidth) const {
+  if (detail::floatBinaryOp(op))
+    return zeroCoerce(detail::floatBinary(op,lhs,rhs),dstWidth);
   if (op == Opcode::SHL || op == Opcode::SHR || op == Opcode::SAR)
     return zeroCoerce(shift(op, lhs, rhs), dstWidth);
-
-  if (op == Opcode::FADD || op == Opcode::FSUB || op == Opcode::FMUL ||
-      op == Opcode::FDIV)
-    return zeroCoerce(floatBinary(op, lhs, rhs), dstWidth);
-
-  if (op == Opcode::FLT || op == Opcode::FEQ || op == Opcode::FUNO) {
-    const z3::sort f64 = float64Sort(*ctx_);
-    const z3::expr a = zeroCoerce(lhs, 64).mk_from_ieee_bv(f64);
-    const z3::expr b = zeroCoerce(rhs, 64).mk_from_ieee_bv(f64);
-    // IEEE predicates, not SMT-LIB `=` (under which NaN == NaN and
-    // +0 != -0).
-    const z3::expr pred =
-            op == Opcode::FLT
-                    ? z3::to_expr(*ctx_, Z3_mk_fpa_lt(*ctx_, a, b))
-            : op == Opcode::FEQ
-                    ? z3::to_expr(*ctx_, Z3_mk_fpa_eq(*ctx_, a, b))
-                    : z3::to_expr(*ctx_, Z3_mk_fpa_is_nan(*ctx_, a)) ||
-                              z3::to_expr(*ctx_, Z3_mk_fpa_is_nan(*ctx_, b));
-    return zeroCoerce(z3::ite(pred, bvVal(*ctx_, 1, 1), bvVal(*ctx_, 0, 1)),
-                      dstWidth);
-  }
 
   // Widen both operands to a common width before computing, matching how
   // IGNILSimplify folds the same op on constants. For well-formed IGNIL every
@@ -764,6 +745,8 @@ z3::expr SymbolicExecutor::binary(Opcode op, const z3::expr &lhs,
 
 z3::expr SymbolicExecutor::unary(Opcode op, const z3::expr &src,
                                  Width dstWidth) const {
+  if (detail::floatUnaryOp(op))
+    return zeroCoerce(detail::floatUnary(op,src,dstWidth),dstWidth);
   switch (op) {
     case Opcode::NEG: {
       const Width w = std::max(dstWidth, bvWidth(src));
@@ -775,37 +758,9 @@ z3::expr SymbolicExecutor::unary(Opcode op, const z3::expr &src,
     }
     case Opcode::SEXT:
       return signCoerce(src, dstWidth);
-    case Opcode::SITOFP:
-      return z3::sbv_to_fpa(src, float64Sort(*ctx_)).mk_to_ieee_bv();
-    case Opcode::FPTOSI: {
-      // Truncate toward zero, which is what CVTTSD2SI and every C cast do -
-      // not the context's default round-to-nearest.
-      const z3::expr f = src.mk_from_ieee_bv(float64Sort(*ctx_));
-      const z3::expr rtz =
-              z3::to_expr(*ctx_, Z3_mk_fpa_round_toward_zero(*ctx_));
-      return z3::to_expr(*ctx_,
-                         Z3_mk_fpa_to_sbv(*ctx_, rtz, f, dstWidth));
-    }
     default: // COPY, ZEXT, TRUNC
       return zeroCoerce(src, dstWidth);
   }
-}
-
-z3::expr SymbolicExecutor::floatBinary(Opcode op, const z3::expr &lhs,
-                                       const z3::expr &rhs) const {
-  const z3::sort f64 = float64Sort(*ctx_);
-  const z3::expr a = zeroCoerce(lhs, 64).mk_from_ieee_bv(f64);
-  const z3::expr b = zeroCoerce(rhs, 64).mk_from_ieee_bv(f64);
-
-  z3::expr r = [&]() -> z3::expr {
-    switch (op) {
-      case Opcode::FADD: return a + b;
-      case Opcode::FSUB: return a - b;
-      case Opcode::FMUL: return a * b;
-      default: return a / b; // FDIV
-    }
-  }();
-  return r.mk_to_ieee_bv();
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,7 +1203,15 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::SEXT:
     case Opcode::TRUNC:
     case Opcode::SITOFP:
-    case Opcode::FPTOSI: {
+    case Opcode::FPTOSI:
+    case Opcode::SITOFP32: case Opcode::FPTOSI32:
+    case Opcode::FPEXT: case Opcode::FPTRUNC:
+    case Opcode::UITOFP: case Opcode::UITOFP32:
+    case Opcode::FPTOUI: case Opcode::FPTOUI32:
+    case Opcode::FSQRT: case Opcode::FSQRT32:
+    case Opcode::FFLOOR: case Opcode::FFLOOR32:
+    case Opcode::FCEIL: case Opcode::FCEIL32:
+    case Opcode::FTRUNC: case Opcode::FTRUNC32: {
       if (op.srcs.size() != 1)
         return ExecStatus::MalformedOp;
       const z3::expr src = eval(op.srcs[0]);
@@ -1290,7 +1253,9 @@ ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
     case Opcode::FDIV:
     case Opcode::FLT:
     case Opcode::FEQ:
-    case Opcode::FUNO: {
+    case Opcode::FUNO:
+    case Opcode::FADD32: case Opcode::FSUB32: case Opcode::FMUL32: case Opcode::FDIV32:
+    case Opcode::FLT32: case Opcode::FEQ32: case Opcode::FUNO32: {
       if (op.srcs.size() != 2)
         return ExecStatus::MalformedOp;
       const z3::expr lhs = eval(op.srcs[0]);

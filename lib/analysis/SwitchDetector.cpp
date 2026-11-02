@@ -48,6 +48,8 @@ static unsigned exprWidth(const Expr &e) {
         case Opc::EQ: case Opc::NEQ: case Opc::ULT: case Opc::ULE:
         case Opc::UGT: case Opc::UGE: case Opc::SLT: case Opc::SLE:
         case Opc::SGT: case Opc::SGE:
+        case Opc::FLT: case Opc::FEQ: case Opc::FUNO:
+        case Opc::FLT32: case Opc::FEQ32: case Opc::FUNO32:
           return 1;
         default:
           return std::max(n.left ? exprWidth(*n.left) : 0u,

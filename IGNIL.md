@@ -23,7 +23,7 @@ by VEX IR (angr/Valgrind), P-CODE (Ghidra), and BAP's BIL.
 |---|---|---|
 | Value representation | `std::variant<Const, Reg, Temp>` | Fixed set, value semantics, no heap per value |
 | Signedness | In the opcode, not the type | Convention from VEX, P-CODE, LLVM IR |
-| Floatness | In the opcode too - a `Const`/`Reg`/`Temp`'s bits are reinterpreted as `double` only by an `FADD`/`FSUB`/`FMUL`/`FDIV`/`SITOFP`/`FPTOSI` | Same rationale as signedness - no second `Value` variant, no type tag |
+| Floatness | In the opcode too: float operations reinterpret raw `Const`/`Reg`/`Temp` bits as IEEE binary32 or binary64 | Same rationale as signedness - no second `Value` variant, no type tag |
 | Register model | Offset + width in a register space | Handles sub-registers (EAX/RAX) naturally |
 | Temporaries | Per-block unique `uint32_t` id | SSA-style, no cross-block aliasing |
 | Block ownership | `Block` owns its `Op` sequence | Matches VEX IRSB, enables per-block analysis |
@@ -188,6 +188,17 @@ class Block {
   std::vector<Op> ops_;
 };
 ```
+
+The current opcode enum also appends binary32 `FADD32/FSUB32/FMUL32/FDIV32`,
+`SITOFP32/FPTOSI32`, and `FLT32/FEQ32/FUNO32`. These operate directly at
+binary32 precision; operands and results remain raw integer bits. `FPEXT`
+converts binary32 to binary64, `FPTRUNC` converts binary64 to binary32.
+`UITOFP`/`FPTOUI` and their `32` variants handle unsigned integer conversion.
+`FSQRT`, `FFLOOR`, `FCEIL`, `FTRUNC` and their `32` variants implement square
+root and integral rounding. Arithmetic and precision/int-to-float conversions
+round nearest ties-even; float-to-int truncates toward zero and requires a
+representable result. ISA-specific saturation or indefinite values belong in
+the instruction lifter. The C and Python enums preserve all older values.
 
 #### 1f. Utility declarations
 

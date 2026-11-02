@@ -825,6 +825,29 @@ static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOSI) == DRAGON_IGNIL_FP
 static_assert(static_cast<int>(dragon::ignil::Opcode::FLT)    == DRAGON_IGNIL_FLT);
 static_assert(static_cast<int>(dragon::ignil::Opcode::FEQ)    == DRAGON_IGNIL_FEQ);
 static_assert(static_cast<int>(dragon::ignil::Opcode::FUNO)   == DRAGON_IGNIL_FUNO);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FADD32) == DRAGON_IGNIL_FADD32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FSUB32) == DRAGON_IGNIL_FSUB32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FMUL32) == DRAGON_IGNIL_FMUL32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FDIV32) == DRAGON_IGNIL_FDIV32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::SITOFP32) == DRAGON_IGNIL_SITOFP32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOSI32) == DRAGON_IGNIL_FPTOSI32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FLT32) == DRAGON_IGNIL_FLT32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FEQ32) == DRAGON_IGNIL_FEQ32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FUNO32) == DRAGON_IGNIL_FUNO32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPEXT) == DRAGON_IGNIL_FPEXT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPTRUNC) == DRAGON_IGNIL_FPTRUNC);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UITOFP) == DRAGON_IGNIL_UITOFP);
+static_assert(static_cast<int>(dragon::ignil::Opcode::UITOFP32) == DRAGON_IGNIL_UITOFP32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOUI) == DRAGON_IGNIL_FPTOUI);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FPTOUI32) == DRAGON_IGNIL_FPTOUI32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FSQRT) == DRAGON_IGNIL_FSQRT);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FSQRT32) == DRAGON_IGNIL_FSQRT32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FFLOOR) == DRAGON_IGNIL_FFLOOR);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FFLOOR32) == DRAGON_IGNIL_FFLOOR32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FCEIL) == DRAGON_IGNIL_FCEIL);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FCEIL32) == DRAGON_IGNIL_FCEIL32);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FTRUNC) == DRAGON_IGNIL_FTRUNC);
+static_assert(static_cast<int>(dragon::ignil::Opcode::FTRUNC32) == DRAGON_IGNIL_FTRUNC32);
 
 const char *dragon_ignil_opcode_name(dragon_ignil_opcode_t op) {
   return dragon::ignil::opcodeName(

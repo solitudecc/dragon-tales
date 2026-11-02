@@ -12,6 +12,8 @@
 #include <dragon/analysis/SliceExprZ3.hpp>
 #endif
 
+#include "utils/FloatOps.hpp"
+
 namespace dragon::slice {
 namespace {
 using Opc = ignil::Opcode;
@@ -26,7 +28,8 @@ unsigned width(const Expr &e) {
                        std::is_same_v<T, Undef>) return n.width;
     else if constexpr (std::is_same_v<T, UnaryOp>)
       return n.resultWidth ? n.resultWidth : width(*n.operand);
-    else return comparison(n.op) ? 1 : std::max(width(*n.left), width(*n.right));
+    else return comparison(n.op) || ignil::detail::floatComparisonOp(n.op)
+                    ? 1 : std::max(width(*n.left), width(*n.right));
   });
 }
 std::optional<U64> constant(const Expr &e) {

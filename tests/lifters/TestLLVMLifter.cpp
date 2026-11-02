@@ -5,11 +5,37 @@
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/Instructions.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <vector>
+
+TEST_CASE("LLVM guest memory and register snapshots have byte alignment", "[llvm][alignment]") {
+  using namespace dragon;
+  ignil::Block block{0x1000};
+  const ignil::Temp value{0,128};
+  block.append({ignil::Opcode::LOAD,value,{ignil::Const{0x1003,64}},0x1000});
+  block.append({ignil::Opcode::STORE,std::nullopt,{ignil::Const{0x1013,64},value},0x1000});
+  // The x86 register snapshot also has byte-packed offsets (XMM0 = 143).
+  block.append({ignil::Opcode::COPY,ignil::Reg{143,64,"XMM0"},{ignil::Reg{143,64,"XMM0"}},0x1000});
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  REQUIRE(lifter.liftBlock(block));
+  unsigned external = 0;
+  for (const auto &function : lifter.module())
+    for (const auto &bb : function)
+      for (const auto &instruction : bb) {
+        const auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+        const auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+        const auto *pointer = load ? load->getPointerOperand() : store ? store->getPointerOperand() : nullptr;
+        if (!pointer || llvm::isa<llvm::AllocaInst>(pointer)) continue;
+        ++external;
+        CHECK((load ? load->getAlign() : store->getAlign()) == llvm::Align(1));
+      }
+  CHECK(external == 4);
+  CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+}
 
 // -----------------------------------------------------------------------
 // Helpers

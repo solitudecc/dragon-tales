@@ -97,6 +97,18 @@ Gotchas:
 - Float ops (FADD/FSUB/FMUL/FDIV/SITOFP/FPTOSI/FLT/FEQ/FUNO) treat 64-bit
   slots as IEEE doubles. A NaN *result* is left unknown by the executor (Z3
   does not fix NaN bit patterns).
+- Binary32 uses distinct `*32` arithmetic/comparison/conversion operations;
+  it never computes through binary64. `FPEXT` and `FPTRUNC` change precision,
+  `UITOFP` / `FPTOUI` provide unsigned conversion, and `FSQRT`, `FFLOOR`,
+  `FCEIL`, `FTRUNC` (with binary32 variants) provide unary operations.
+  Arithmetic and precision/int-to-float conversion use nearest ties-even;
+  float-to-int uses toward-zero. Instruction lifters must guard exceptional
+  integer conversions before evaluating them (LLVM otherwise produces poison).
+  `lib/utils/FloatOps.hpp` shares exact Z3 FPA semantics between the executor
+  and slice-expression lowerer; LLVM temps always hold raw integer bits.
+- LLVM guest-memory accesses and external byte-packed register snapshots use
+  alignment 1. A guest vector address or XMM snapshot offset need not have
+  native alignment; stack allocas retain their own alignment.
 - `Disassembler::AnalysisHints{entryPoints, readMemory}`: entry points are
   function + block starts and recursive-traversal roots; `readMemory` lets
   jump-table resolution read tables outside the analysed bytes.

@@ -592,6 +592,10 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
           {"CVTSI2SDrm", {S::Cvtsi2sd, true, false, 32}},
           {"CVTSI642SDrm_Int", {S::Cvtsi2sd, true, false, 64}},
           {"CVTSI642SDrm", {S::Cvtsi2sd, true, false, 64}},
+          {"CVTSS2SDrr_Int", {S::Cvtss2sd}}, {"CVTSS2SDrr", {S::Cvtss2sd}},
+          {"CVTSS2SDrm_Int", {S::Cvtss2sd,true,false,32}}, {"CVTSS2SDrm", {S::Cvtss2sd,true,false,32}},
+          {"CVTSD2SSrr_Int", {S::Cvtsd2ss}}, {"CVTSD2SSrr", {S::Cvtsd2ss}},
+          {"CVTSD2SSrm_Int", {S::Cvtsd2ss,true}}, {"CVTSD2SSrm", {S::Cvtsd2ss,true}},
   };
 
   std::unordered_map<std::string_view, unsigned> nameToOpc;
@@ -2584,7 +2588,8 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
   const bool tied = op.kind == S::And || op.kind == S::Andn ||
                     op.kind == S::Or || op.kind == S::Xor ||
                     op.kind == S::Addsd || op.kind == S::Subsd ||
-                    op.kind == S::Divsd || op.kind == S::Cvtsi2sd;
+                    op.kind == S::Divsd || op.kind == S::Cvtsi2sd ||
+                    op.kind == S::Cvtss2sd || op.kind == S::Cvtsd2ss;
   const unsigned srcIdx = tied ? 2 : 1;
   auto dst = toReg(mc.getOperand(0).getReg());
   if (!dst)
@@ -2602,7 +2607,7 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
   if (op.memSrc) {
     auto ea = emitAddress(mc, srcIdx, ptrWidth, addr, out, tmp);
     const ignil::Width w =
-            op.kind == S::Cvtsi2sd || op.kind == S::MovdTo ? op.memWidth : 64;
+            op.kind == S::Cvtsi2sd || op.kind == S::MovdTo || op.kind == S::Cvtss2sd ? op.memWidth : 64;
     src = emit(Opc::LOAD, {ea}, w);
     if (fullWidth)
       srcHi = emit(Opc::LOAD,
@@ -2713,6 +2718,17 @@ void dragon::x86::X86IGNILLifter::liftSse(const llvm::MCInst &mc,
     case S::Cvtsi2sd:
       out.append({Opc::SITOFP, *dst, {src}, addr});
       return;
+    case S::Cvtss2sd:
+      if (ignil::widthOf(src) != 32) src = emit(Opc::TRUNC,{src},32);
+      out.append({Opc::FPEXT,*dst,{src},addr});
+      return;
+    case S::Cvtsd2ss: {
+      auto result = emit(Opc::FPTRUNC,{src},32);
+      auto upper = emit(Opc::AND,{*dst,ignil::Const{0xffffffff00000000ull,64}},64);
+      auto low = emit(Opc::ZEXT,{result},64);
+      out.append({Opc::COPY,*dst,{emit(Opc::OR,{upper,low},64)},addr});
+      return;
+    }
   }
 }
 
