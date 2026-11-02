@@ -12,7 +12,7 @@
 | 5 | 剥离符号的二进制的函数入口识别 | 已完成（2026-11-02；412/412 ctest；300 次 fuzz 无崩溃） |
 | 6 | 切片器的栈内存跟踪 | 已完成（2026-11-02；407/407 ctest；跳转表 wrong=0） |
 | 7 | C shim / Python 暴露 AnalysisHints、callingConvention | 已完成（2026-11-02；403/403 ctest） |
-| 8 | LLVM Lift：跨函数控制流与调用边界（详见 docs/llvm-control-flow.md） | 待做 |
+| 8 | LLVM Lift：跨函数控制流与调用边界（详见 docs/llvm-control-flow.md） | 第 1 步完成，待契约确认；2–6 未开始，A/B 尚未修复 |
 
 **分配建议**
 - 可以并行：任务 1、2、5、6、7 基本互不冲突。

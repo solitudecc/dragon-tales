@@ -226,6 +226,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `memory_slice_diff.py` | Stack-slot STORE/LOAD forwarding vs 448 Unicorn executions; 192 unique slices, 0 wrong. Includes disjoint/overlapping/unknown-alias stores and SP changes. |
 | `loop_slice_diff.py` | Nested-join loop slices vs 128 Unicorn executions: invariants, differing writes, increments and cross-register copies. |
 | `guard_truth.py` | 27 CFGs vs 20,736 Unicorn executions: byte/word/dword guards, signedness, boolean holes, narrowing and masks. Also runs without Z3. |
+| `function_llvm_diff.py` | Minimal whole-function x64 native/Unicorn execution with branches, a loop and modelled external targets. Strict default remains red on A/B; `--assert-baseline` only verifies known defects plus passing controls. `--corrupt-output` is a negative control. See `docs/llvm-flow-step1-validation.md` for counts and Legacy CALL/RET normalizations. |
 | `llvm_diff.py` | LLVM-lifted code (compiled with `llc-21`, run natively) vs SymbolicExecutor. |
 | `analyze_bin.py BIN OBJDUMP` | Whole-binary report: objdump agreement, function recovery, empty functions, IGNIL coverage + top unlifted, indirect jumps, LLVM lift success. `STRATEGY=0/1`, `LLVM=0/1`. |
 | `table_truth.py BIN OBJDUMP STRATEGY` | i386 absolute jump tables: resolved targets vs the table in the image. |
@@ -373,6 +374,11 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 Known LLVM lowering gaps at call boundaries and out-of-function control flow, with
 the implementation plan: `docs/llvm-control-flow.md`.
+Step 1 has a proposed contract in `docs/llvm-execution-contract.md` and a minimal
+function-level oracle. Owner confirmation is required before lowering/API/design
+changes. A/B are still defects; two C++ normative checks use `[!shouldfail]`
+temporarily and are not semantic passes. A normal fixture-health test and native
+positive-control CTest prevent setup errors from being hidden by those markers.
 
 Ready-to-paste task prompts for other agents (shared preamble + one prompt per
 item, with a status table to update when a task is done): `docs/agent-tasks.md`.

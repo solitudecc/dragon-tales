@@ -16,6 +16,7 @@ add_executable(dragon_tests
         sigs/TestSignatureMatcher.cpp
         obfush/TestObfush.cpp
         lifters/TestLLVMLifter.cpp
+        lifters/TestLLVMFunctionFlow.cpp
         loader/TestLoader.cpp
 )
 
@@ -40,6 +41,9 @@ if(DRAGON_USE_UNICORN)
         toy-vm/TestToyVMHandlerRecovery.cpp
     )
 endif()
+
+target_compile_definitions(dragon_tests PRIVATE
+    DRAGON_FUNCTION_FLOW_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/llvm-function-flow.json")
 
 target_link_libraries(dragon_tests
         PRIVATE
@@ -143,6 +147,26 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - jump-table bounds follow the actual index"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)
+        # This small function-level control set retains machine branches,
+        # loops and a modelled call. A/B remain explicit standalone red cases.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            find_program(DRAGON_FLOW_LLC NAMES llc-21)
+            find_program(DRAGON_FLOW_OPT NAMES opt-21)
+            find_program(DRAGON_FLOW_CC NAMES gcc)
+            execute_process(COMMAND ${Python3_EXECUTABLE} -c "import unicorn"
+                            RESULT_VARIABLE _dragon_flow_unicorn_missing OUTPUT_QUIET ERROR_QUIET)
+            if(DRAGON_FLOW_LLC AND DRAGON_FLOW_OPT AND DRAGON_FLOW_CC AND _dragon_flow_unicorn_missing EQUAL 0)
+                add_test(NAME "Validation - LLVM whole-function positive controls"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_llvm_diff.py
+                        --case control_store --case control_branch --case control_loop --case control_call_zero
+                        --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/function-flow-controls)
+                set_tests_properties("Validation - LLVM whole-function positive controls" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
+            else()
+                message(STATUS "Function-flow execution controls need Python Unicorn plus llc-21/opt-21/gcc; standalone harness remains available")
+            endif()
+        endif()
     else()
         message(STATUS "Python cffi not found - Python API tests disabled")
     endif()

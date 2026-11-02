@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "architecture": "x86_64",
+  "entry": 4096,
+  "cases": [
+    {"id": "control_store", "code_hex": "c70307000000c3", "undefined_flags": [], "stubs": []},
+    {"id": "control_branch", "code_hex": "85ff7407c70307000000c3c70309000000c3", "undefined_flags": ["AF"], "stubs": []},
+    {"id": "control_loop", "code_hex": "b903000000ff03e2fcc3", "undefined_flags": [], "stubs": []},
+    {"id": "control_call_zero", "code_hex": "31c0e8f90f000085c07407b901000000890bc3", "undefined_flags": ["AF"], "stubs": [{"address": 8192, "code_hex": "b800000000c3", "rax": 0}]},
+    {"id": "A", "code_hex": "31c0e8f90f000085c07407b901000000890bc3", "undefined_flags": ["AF"], "known_defect": "call_state", "stubs": [{"address": 8192, "code_hex": "b801000000c3", "rax": 1}]},
+    {"id": "B", "code_hex": "85ff0f84f81f0000c70307000000c3", "undefined_flags": ["AF"], "known_defect": "conditional_exit", "stubs": [{"address": 12288, "code_hex": "c70309000000c3", "store": 9}]}
+  ]
+}

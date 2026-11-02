@@ -1,6 +1,8 @@
-# LLVM Lift：跨函数控制流与调用边界（待实现）
+# LLVM Lift：跨函数控制流与调用边界（实施中）
 
-状态：待做。派活方式见 `docs/agent-tasks.md`（任务 8）。开工前先读 `AGENTS.md`。
+状态：第 1 步的[状态与控制流契约草案](llvm-execution-contract.md)及最小函数级对拍已建立，
+**等待所有者确认；第 2–6 步尚未开始，降级代码未修改，A/B 仍失败**。
+[第 1 步验证记录](llvm-flow-step1-validation.md)。派活方式见 `docs/agent-tasks.md`（任务 8）。
 
 ## 背景：现在的问题
 
