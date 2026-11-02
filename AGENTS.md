@@ -82,8 +82,15 @@ Gotchas:
   of its 64-bit parent** (x86-64 EAX→RAX, AArch64 W→X); 8/16-bit writes merge.
   SymbolicExecutor, dead-store elimination, BackwardSlicer and LLVMLifter all
   follow this — keep it that way.
-- XMM registers are modelled as their **low 64 bits only**; AArch64 V
-  registers as 16 bytes. 128-bit x86 stores are therefore left unlifted.
+- An XMM register is **two 64-bit halves**: XMMn (bits 63:0, offset 143+8n,
+  the scalar-double lane) and XMMnH (bits 127:64, offset 271+8n). Every
+  instruction that writes an XMM states what happens to XMMnH (movq/movd/
+  movsd-load zero it, scalar arithmetic keeps it, packed ops compute it);
+  an unlifted instruction writing XMM/YMM/ZMM clobbers both halves. Bits
+  above 127 are not modelled. AArch64 V registers are 16 bytes.
+- x86 memory-operand forms of shifts/mul/bt*/shld/bsf/xadd/BMI are lifted
+  through their register form over a scratch GPR (`MemViaReg`,
+  `rewriteThroughScratch`): any fix to a register form fixes its memory form.
 - IGNIL CALL does not push a return address and RET has no operand (x86 and
   ARM alike) — a deliberate abstraction; difftests show 3 expected diffs on
   AArch64 `bl/blr/ret` because of it.
@@ -102,6 +109,13 @@ Gotchas:
   recovery; `disassembleImage` picks Win64 for x86-64 PE.
 
 ## 4. Validation tools (`scripts/validation/`)
+
+**Unicorn version.** Unicorn 2.1.4 (latest release, QEMU 5.0) is wrong on
+BZHI with an index >= the operand size and on BLSI's CF; the dev branch
+(commit 2a05c41, 2026-10-18) has the QEMU fixes and agrees with x86 code run
+under Rosetta. On the VM it is built into `~/ucdev` (run harnesses with
+`~/ucdev/bin/python3`). difftest_x64 probes the installed Unicorn and only
+compares those two instructions fully when it is fixed.
 
 Run on the VM from any directory; they import `python/dragon.py` relative to
 themselves. Binaries are passed as paths (`~/bench/...`).
@@ -224,14 +238,12 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
    FDEs (ELF), `.pdata` (PE x64), `.init_array`, and relocations pointing
    into code.
 3. **Lift coverage left** (`unlifted.py`): x87 (needs an FP-stack model);
-   x86 128-bit stores (`movups [m], xmm` — needs full 128-bit XMM modelling),
-   `cmpsd`/`cmpnlesd`, `punpck*`, `pshufd`, `bsr`, `tzcnt`, `popcnt`, `lzcnt`;
-   AArch64 FP (`fmov`, `fcmp/fcmpe`, `scvtf`, `fcvtzs`, `frintm`, `ldr/str`
+   `rep movs/stos` (needs a loop or a bounded expansion); rare SSE
+   (`packuswb`, `pmuludq`, `psubus*`, `cvtss2sd` - needs float32); AVX/VEX
+   forms; AArch64 FP (`fmov`, `fcmp/fcmpe`, `scvtf`, `fcvtzs`, `frintm`, `ldr/str`
    of D/Q registers — note a 64-bit write to a V register must zero its upper
    half, which the current 32-bit-only zero-extension rule does not do),
-   `clz`, `rbit`. x86 memory-operand shifts/rotates, `mul/imul/bt*/shld/
-   shrd/bsf/xadd` with a memory operand (difftest_x64 lists them as
-   unlifted). Validate each with the difftests and add templates.
+   `clz`, `rbit`. Validate each with the difftests and add templates.
 4. Expose `AnalysisHints` and `callingConvention` through the C shim and
    Python (today only C++ and `disassembleImage` use them).
 5. Extend the speculative resolver to ARM when useful. Failed hypotheses remain

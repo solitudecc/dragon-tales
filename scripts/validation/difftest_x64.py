@@ -44,6 +44,25 @@ def rand64(rng):
     return rng.choice(EDGES) if rng.random() < 0.35 else rng.getrandbits(64)
 
 
+def unicorn_bmi_fixed():
+    """Unicorn 2.1.4 (QEMU 5) gets BZHI with an index >= the operand size and
+    BLSI's CF wrong; its dev branch (2a05c41, 2026-10) has the QEMU fixes.
+    Probe: bzhi eax, ebx, ecx with ecx = 31 must leave CF = 0."""
+    uc = Uc(UC_ARCH_X86, UC_MODE_64)
+    uc.mem_map(0x1000, 0x1000)
+    uc.mem_write(0x1000, bytes.fromhex('c4e270f5c3'))
+    uc.reg_write(UC_X86_REG_RBX, 0x80919564)
+    uc.reg_write(UC_X86_REG_RCX, 31)
+    uc.emu_start(0x1000, 0x1005)
+    return uc.reg_read(UC_X86_REG_EFLAGS) & 1 == 0
+
+
+BMI_OK = unicorn_bmi_fixed()
+if not BMI_OK:
+    print('note: this Unicorn has the old BZHI/BLSI bugs - those comparisons are reduced '
+          '(build the dev branch for full coverage)')
+
+
 def undefined_flags(text, regs):
     """Flags the SDM leaves undefined for this instruction + input state."""
     m = text.split()[0]
@@ -77,13 +96,12 @@ def undefined_flags(text, regs):
         return {'OF', 'SF', 'PF', 'AF'}
     if m in ('andn', 'blsr', 'blsmsk'):
         return {'AF', 'PF'}
-    # Unicorn 2.1.4 (QEMU 5) gets BLSI's CF and BZHI with an index >= the
-    # operand size wrong (fixed in later QEMU); the C++ tests check both
-    # against x86 code run under Rosetta.
+    # With an old Unicorn (see unicorn_bmi_fixed) BLSI's CF and BZHI's flags
+    # are not compared; the C++ tests check both against Rosetta.
     if m == 'blsi':
-        return {'AF', 'PF', 'CF'}
+        return {'AF', 'PF'} if BMI_OK else {'AF', 'PF', 'CF'}
     if m == 'bzhi':
-        return {f for f, _ in FLAGS}
+        return {'AF', 'PF'} if BMI_OK else {f for f, _ in FLAGS}
     if m in ('bsf', 'bsr'):
         return {'CF', 'OF', 'SF', 'AF', 'PF'}
     if m in ('bt', 'bts', 'btr', 'btc'):
@@ -292,9 +310,12 @@ for a, b, c, p in (('eax', 'ebx', 'ecx', 'dword'), ('rax', 'rbx', 'rcx', 'qword'
           (f'andn {a}, {b}, {c}', {}), (f'andn {a}, {c}, {p} ptr [rbx + 8]', {}),
           (f'blsr {a}, {b}', sparse), (f'blsi {a}, {b}', sparse), (f'blsmsk {a}, {b}', sparse),
           (f'blsr {a}, {p} ptr [rbx + 8]', {}),
-          # index < operand size only (Unicorn is wrong above it, see undefined_flags)
-          (f'bzhi {a}, {b}, {c}', {'RCX': lambda r: r.randrange(0, 32)}),
-          (f'bzhi {a}, {p} ptr [rbx + 8], {c}', {'RCX': lambda r: (r.getrandbits(8) << 8) | r.randrange(0, 32)}),
+          # an old Unicorn is wrong for an index >= the operand size
+          (f'bzhi {a}, {b}, {c}', {'RCX': (lambda r: r.choice([0, 1, 31, 32, 63, 64, 65, 255, 256 + 3,
+                                                                 r.getrandbits(64)])) if BMI_OK
+                                   else (lambda r: r.randrange(0, 32))}),
+          (f'bzhi {a}, {p} ptr [rbx + 8], {c}', {'RCX': (lambda r: r.getrandbits(16)) if BMI_OK
+                                                  else (lambda r: (r.getrandbits(8) << 8) | r.randrange(0, 32))}),
           (f'mulx {c}, {a}, {b}', {}), (f'mulx {a}, {a}, {b}', {}), (f'mulx {c}, {a}, {p} ptr [rbx + 8]', {})]
 T += [('prefetcht0 byte ptr [rbx + 8]', {}), ('prefetchnta byte ptr [rax]', {}), ('prefetchw byte ptr [rbx]', {})]
 T = [t for t in T if not t[0].startswith(('nop', 'cmpxchg_skip'))]
