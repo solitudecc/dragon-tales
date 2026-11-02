@@ -5,7 +5,10 @@
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
 #include <array>
+#include <algorithm>
 #include <cmath>
+#include <span>
+#include <vector>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -597,7 +600,7 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     // nop in all its encodings: NOOP (90), NOOPW/NOOPL/NOOPQ - the multi-byte
     // `nop word ptr cs:[rax + rax]` alignment padding - and their register
     // forms. FNOP is the x87 one.
-    if (name.starts_with("NOOP") || name == "FNOP")
+    if (name.starts_with("NOOP") || name == "FNOP" || name.starts_with("PREFETCH"))
       nopOpcodes_.insert(i);
     if (auto op = classifyMemOperandOp(name))
       memOperandOps_.emplace(i, *op);
@@ -696,6 +699,102 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
                             AccForm{generic->second, reg, alu.tiedDst});
       }
   }
+
+  // Memory-operand forms lifted through their register form (MemViaReg).
+  {
+    auto llvmRegNamed = [&](std::string_view name) -> unsigned {
+      if (name.empty())
+        return 0;
+      for (unsigned i = 0; i < regInfo.getNumRegs(); ++i)
+        if (regInfo.getName(i) == name)
+          return i;
+      return 0;
+    };
+    auto add = [&](const std::string &memName, const std::string &regName,
+                   unsigned width, bool bitString, bool xadd) {
+      auto m = nameToOpc.find(memName);
+      auto r = nameToOpc.find(regName);
+      if (m == nameToOpc.end() || r == nameToOpc.end() ||
+          memOperandOps_.contains(m->second))
+        return;
+      memViaReg_.emplace(m->second,
+                         MemViaReg{r->second, static_cast<ignil::Width>(width),
+                                   bitString, xadd});
+    };
+    static constexpr std::pair<std::string_view, std::string_view> kShiftForms[] = {
+            {"m1", "r1"}, {"mi", "ri"}, {"mCL", "rCL"}};
+    static constexpr std::pair<std::string_view, std::string_view> kImulForms[] = {
+            {"rm", "rr"}, {"rmi", "rri"}, {"rmi8", "rri8"}};
+    for (const unsigned width: {8u, 16u, 32u, 64u}) {
+      const std::string w = std::to_string(width);
+      for (const std::string op: {"SHL", "SHR", "SAR", "ROL", "ROR", "RCL", "RCR"})
+        for (const auto &[m, r]: kShiftForms)
+          add(op + w + std::string(m), op + w + std::string(r), width, false, false);
+      for (const std::string op: {"MUL", "IMUL", "DIV", "IDIV"})
+        add(op + w + "m", op + w + "r", width, false, false);
+      for (const auto &[m, r]: kImulForms)
+        add("IMUL" + w + std::string(m), "IMUL" + w + std::string(r), width, false, false);
+      for (const std::string op: {"BT", "BTS", "BTR", "BTC"}) {
+        add(op + w + "mr", op + w + "rr", width, true, false);
+        add(op + w + "mi8", op + w + "ri8", width, false, false);
+      }
+      for (const std::string op: {"SHLD", "SHRD"}) {
+        add(op + w + "mri8", op + w + "rri8", width, false, false);
+        add(op + w + "mrCL", op + w + "rrCL", width, false, false);
+      }
+      for (const std::string op: {"BSF", "BSR", "TZCNT", "LZCNT", "POPCNT"})
+        add(op + w + "rm", op + w + "rr", width, false, false);
+      add("XADD" + w + "rm", "XADD" + w + "rr", width, false, true);
+      for (const std::string evex: {"", "_EVEX"}) {
+        for (const std::string op: {"POPCNT", "TZCNT", "LZCNT"})
+          add(op + w + "rm" + evex, op + w + "rr" + evex, width, false, false);
+        for (const std::string op:
+             {"SHLX", "SHRX", "SARX", "ANDN", "BLSR", "BLSI", "BLSMSK", "BZHI", "MULX"})
+          add(op + w + "rm" + evex, op + w + "rr" + evex, width, false, false);
+        add("RORX" + w + "mi" + evex, "RORX" + w + "ri" + evex, width, false, false);
+      }
+    }
+
+    using B = BmiKind;
+    static constexpr std::pair<std::string_view, BmiKind> kBmi[] = {
+            {"POPCNT", B::Popcnt}, {"TZCNT", B::Tzcnt}, {"LZCNT", B::Lzcnt},
+            {"SHLX", B::Shlx},     {"SHRX", B::Shrx},   {"SARX", B::Sarx},
+            {"ANDN", B::Andn},     {"BLSR", B::Blsr},   {"BLSI", B::Blsi},
+            {"BLSMSK", B::Blsmsk}, {"BZHI", B::Bzhi},   {"MULX", B::Mulx},
+            {"RORX", B::Rorx}};
+    for (const auto &[mnemonic, kind]: kBmi)
+      for (const std::string w: {"16", "32", "64"})
+        for (const std::string evex: {"", "_EVEX"}) {
+          const std::string name = std::string(mnemonic) + w +
+                                   (kind == B::Rorx ? "ri" : "rr") + evex;
+          if (auto it = nameToOpc.find(name); it != nameToOpc.end())
+            bmiOps_.emplace(it->second, kind);
+        }
+
+    struct Names {
+      std::string_view full, r8, r16, r32, r64;
+    };
+    static constexpr Names k64[] = {
+            {"R11", "R11B", "R11W", "R11D", "R11"}, {"R10", "R10B", "R10W", "R10D", "R10"},
+            {"R9", "R9B", "R9W", "R9D", "R9"},      {"R8", "R8B", "R8W", "R8D", "R8"},
+            {"R15", "R15B", "R15W", "R15D", "R15"}, {"R14", "R14B", "R14W", "R14D", "R14"},
+            {"R13", "R13B", "R13W", "R13D", "R13"}, {"R12", "R12B", "R12W", "R12D", "R12"},
+            {"RBX", "BL", "BX", "EBX", "RBX"},      {"RSI", "SIL", "SI", "ESI", "RSI"},
+            {"RDI", "DIL", "DI", "EDI", "RDI"}};
+    static constexpr Names k32[] = {
+            {"EBX", "BL", "BX", "EBX", ""}, {"EDX", "DL", "DX", "EDX", ""},
+            {"ECX", "CL", "CX", "ECX", ""}, {"EAX", "AL", "AX", "EAX", ""},
+            {"ESI", "", "SI", "ESI", ""},   {"EDI", "", "DI", "EDI", ""},
+            {"EBP", "", "BP", "EBP", ""}};
+    const bool is64 = architecture_ == Architecture::X86_64;
+    for (const Names &n: is64 ? std::span<const Names>(k64) : std::span<const Names>(k32)) {
+      ScratchReg c{llvmRegNamed(n.full),
+                   {llvmRegNamed(n.r8), llvmRegNamed(n.r16), llvmRegNamed(n.r32),
+                    llvmRegNamed(n.r64)}};
+      if (c.full != 0 && toReg(c.full))
+        scratchRegs_.push_back(c);
+    }
+  }
 }
 
 dragon::ignil::Block
@@ -753,6 +852,10 @@ bool dragon::x86::X86IGNILLifter::liftExtendedForm(unsigned opc,
                                                    std::uint64_t addr,
                                                    ignil::Block &out,
                                                    std::uint32_t &tmp) const {
+  if (auto it = bmiOps_.find(opc); it != bmiOps_.end()) {
+    liftBmi(mc, it->second, addr, out, tmp);
+    return true;
+  }
   // Early-return dispatch (no deep nesting) for the VMProtect-mutation forms.
   if (opc == opRol8ri_ || opc == opRol16ri_ || opc == opRol32ri_ ||
       opc == opRol64ri_) {
@@ -930,6 +1033,22 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
                   {ignil::Const{addr + insn.size(), 64}},
                   addr});
       break;
+    }
+  }
+
+  // Memory-operand forms lifted through their register form: from here on
+  // `mc` is that register form over a scratch register; the epilogue at the
+  // end of this function stores the result back and restores the scratch.
+  llvm::MCInst scratchForm;
+  std::optional<ScratchState> scratch;
+  if (auto it = memViaReg_.find(opc); it != memViaReg_.end()) {
+    ScratchState state;
+    if (auto rewritten = rewriteThroughScratch(*mc, it->second, addr, out,
+                                               tempId, state)) {
+      scratchForm = std::move(*rewritten);
+      mc = &scratchForm;
+      opc = it->second.regOpcode;
+      scratch = state;
     }
   }
 
@@ -1252,6 +1371,320 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
         out.noteUnlifted(addr);
     }
   }
+
+  if (scratch) {
+    if (scratch->storeBack) {
+      auto result = newTemp(tempId, scratch->view.width);
+      out.append({ignil::Opcode::COPY, result, {scratch->view}, addr});
+      out.append({ignil::Opcode::STORE, std::nullopt,
+                  {ignil::Value{scratch->ea}, ignil::Value{result}}, addr});
+    }
+    out.append({ignil::Opcode::COPY, scratch->full,
+                {ignil::Value{scratch->saved}}, addr});
+  }
+}
+
+void dragon::x86::X86IGNILLifter::liftBmi(const llvm::MCInst &mc, BmiKind kind,
+                                          std::uint64_t addr, ignil::Block &out,
+                                          std::uint32_t &tmp) const {
+  using Op = ignil::Opcode;
+  using B = BmiKind;
+  // op[0]=dst (MULX: op[0]=high, op[1]=low), then the sources.
+  const unsigned firstSrc = kind == B::Mulx ? 2 : 1;
+  std::vector<ignil::Reg> defs;
+  for (unsigned i = 0; i < firstSrc; ++i)
+    if (auto r = toReg(mc.getOperand(i).getReg()))
+      defs.push_back(*r);
+  auto srcReg = toReg(mc.getOperand(firstSrc).getReg());
+  if (defs.size() != firstSrc || !srcReg) {
+    logger_.log("Error liftBmi in addr {:#x} bad operands", addr);
+    for (const auto &d: defs)
+      emitUndef(d, addr, out);
+    out.noteUnlifted(addr);
+    return;
+  }
+  const ignil::Width w = defs[0].width;
+  const std::uint64_t W = w;
+  const std::uint64_t ones = W == 64 ? ~0ull : (1ull << W) - 1;
+  auto k = [&](std::uint64_t v) { return ignil::Const{v & ones, w}; };
+  auto bin = [&](Op op, ignil::Value a, ignil::Value b) {
+    auto t = newTemp(tmp, w);
+    out.append({op, t, {a, b}, addr});
+    return ignil::Value{t};
+  };
+  auto un = [&](Op op, ignil::Value a) {
+    auto t = newTemp(tmp, w);
+    out.append({op, t, {a}, addr});
+    return ignil::Value{t};
+  };
+  auto bit = [&](Op op, ignil::Value a, ignil::Value b) {
+    auto t = newTemp(tmp, 1);
+    out.append({op, t, {a, b}, addr});
+    return ignil::Value{t};
+  };
+  auto read = [&](ignil::Reg r) {
+    auto t = newTemp(tmp, r.width);
+    out.append({Op::COPY, t, {r}, addr});
+    return ignil::Value{t};
+  };
+  auto popcount = [&](ignil::Value x) {
+    x = bin(Op::SUB, x, bin(Op::AND, bin(Op::SHR, x, k(1)), k(0x5555555555555555)));
+    x = bin(Op::ADD, bin(Op::AND, x, k(0x3333333333333333)),
+            bin(Op::AND, bin(Op::SHR, x, k(2)), k(0x3333333333333333)));
+    x = bin(Op::AND, bin(Op::ADD, x, bin(Op::SHR, x, k(4))), k(0x0f0f0f0f0f0f0f0f));
+    return bin(Op::SHR, bin(Op::MUL, x, k(0x0101010101010101)), k(W - 8));
+  };
+  auto setFlag = [this, addr](ignil::Reg flag, ignil::Value v) -> FlagSetter {
+    return [flag, v, addr](ignil::Block &o, std::uint32_t &) {
+      o.append({Op::COPY, flag, {v}, addr});
+    };
+  };
+  const ignil::Value zero1 = ignil::Const{0, 1};
+
+  const ignil::Value src = read(*srcReg);
+  std::optional<ignil::Value> src2;
+  if (firstSrc + 1 < mc.getNumOperands()) {
+    const auto &op = mc.getOperand(firstSrc + 1);
+    if (op.isReg()) {
+      auto r = toReg(op.getReg());
+      if (!r) {
+        logger_.log("Error liftBmi in addr {:#x} bad operands", addr);
+        emitUndef(defs[0], addr, out);
+        out.noteUnlifted(addr);
+        return;
+      }
+      src2 = read(*r);
+    } else if (op.isImm()) {
+      src2 = k(static_cast<std::uint64_t>(op.getImm()));
+    }
+  }
+
+  ignil::Value result = src;
+  std::map<X86Flag, FlagSetter> flags;
+  bool writesFlags = true;
+  switch (kind) {
+    case B::Popcnt:
+      result = popcount(src);
+      flags = {{X86Flag::ZF, setFlag(regZF_, bit(Op::EQ, src, k(0)))},
+               {X86Flag::CF, setFlag(regCF_, zero1)}, {X86Flag::OF, setFlag(regOF_, zero1)},
+               {X86Flag::SF, setFlag(regSF_, zero1)}, {X86Flag::AF, setFlag(regAF_, zero1)},
+               {X86Flag::PF, setFlag(regPF_, zero1)}};
+      break;
+    case B::Tzcnt:
+    case B::Lzcnt: {
+      if (kind == B::Tzcnt) {
+        // (x & -x) - 1 has ones exactly below the lowest set bit; for x = 0
+        // it is all ones, giving w.
+        result = popcount(bin(Op::SUB, bin(Op::AND, src, un(Op::NEG, src)), k(1)));
+      } else {
+        ignil::Value s = src;
+        for (std::uint64_t sh = 1; sh < W; sh <<= 1)
+          s = bin(Op::OR, s, bin(Op::SHR, s, k(sh)));
+        result = bin(Op::SUB, k(W), popcount(s));
+      }
+      flags = {{X86Flag::CF, setFlag(regCF_, bit(Op::EQ, src, k(0)))},
+               {X86Flag::ZF, setFlag(regZF_, bit(Op::EQ, result, k(0)))}};
+      break;
+    }
+    case B::Shlx:
+    case B::Shrx:
+    case B::Sarx: {
+      const auto amount = bin(Op::AND, *src2, k(W - 1));
+      result = bin(kind == B::Shlx ? Op::SHL : kind == B::Shrx ? Op::SHR : Op::SAR,
+                   src, amount);
+      writesFlags = false;
+      break;
+    }
+    case B::Rorx: {
+      const auto amount = bin(Op::AND, *src2, k(W - 1));
+      const auto back = bin(Op::AND, bin(Op::SUB, k(W), amount), k(W - 1));
+      result = bin(Op::OR, bin(Op::SHR, src, amount), bin(Op::SHL, src, back));
+      writesFlags = false;
+      break;
+    }
+    case B::Andn:
+      result = bin(Op::AND, un(Op::NOT, src), *src2);
+      flags = {{X86Flag::ZF, zfEqZero(result, addr)}, {X86Flag::SF, sfSignBit(result, addr)},
+               {X86Flag::CF, setFlag(regCF_, zero1)}, {X86Flag::OF, setFlag(regOF_, zero1)}};
+      break;
+    case B::Blsr:
+    case B::Blsi:
+    case B::Blsmsk: {
+      const auto minus1 = bin(Op::SUB, src, k(1));
+      result = kind == B::Blsr  ? bin(Op::AND, src, minus1)
+               : kind == B::Blsi ? bin(Op::AND, src, un(Op::NEG, src))
+                                 : bin(Op::XOR, src, minus1);
+      const auto cf = bit(kind == B::Blsi ? Op::NEQ : Op::EQ, src, k(0));
+      flags = {{X86Flag::ZF, zfEqZero(result, addr)}, {X86Flag::SF, sfSignBit(result, addr)},
+               {X86Flag::CF, setFlag(regCF_, cf)}, {X86Flag::OF, setFlag(regOF_, zero1)}};
+      break;
+    }
+    case B::Bzhi: {
+      // n = src2[7:0]; n < w clears bits n.., otherwise src passes through.
+      const auto n = bin(Op::AND, *src2, k(0xff));
+      const auto inRange = bit(Op::ULT, n, k(W));
+      const auto keepLow = bin(Op::SUB, bin(Op::SHL, k(1), bin(Op::AND, n, k(W - 1))), k(1));
+      const auto rangeMask = un(Op::NEG, un(Op::ZEXT, inRange));
+      // mask = inRange ? keepLow : all ones
+      const auto mask = bin(Op::OR, bin(Op::AND, keepLow, rangeMask), un(Op::NOT, rangeMask));
+      result = bin(Op::AND, src, mask);
+      flags = {{X86Flag::ZF, zfEqZero(result, addr)}, {X86Flag::SF, sfSignBit(result, addr)},
+               {X86Flag::CF, setFlag(regCF_, bit(Op::UGE, n, k(W)))},
+               {X86Flag::OF, setFlag(regOF_, zero1)}};
+      break;
+    }
+    case B::Mulx: {
+      const ignil::Reg dx = W == 64 ? regRDX_ : regEDX_;
+      if (dx.width != w) {
+        for (const auto &d: defs)
+          emitUndef(d, addr, out);
+        out.noteUnlifted(addr);
+        return;
+      }
+      const auto wide = static_cast<ignil::Width>(2 * w);
+      auto ext = [&](ignil::Value v) {
+        auto t = newTemp(tmp, wide);
+        out.append({Op::ZEXT, t, {v}, addr});
+        return ignil::Value{t};
+      };
+      auto product = newTemp(tmp, wide);
+      out.append({Op::MUL, product, {ext(read(dx)), ext(src)}, addr});
+      auto lo = newTemp(tmp, w);
+      out.append({Op::TRUNC, lo, {ignil::Value{product}}, addr});
+      auto shifted = newTemp(tmp, wide);
+      out.append({Op::SHR, shifted, {ignil::Value{product}, ignil::Const{W, 8}}, addr});
+      auto hi = newTemp(tmp, w);
+      out.append({Op::TRUNC, hi, {ignil::Value{shifted}}, addr});
+      // Low first: with the same register for both, the high half wins.
+      out.append({Op::COPY, defs[1], {ignil::Value{lo}}, addr});
+      out.append({Op::COPY, defs[0], {ignil::Value{hi}}, addr});
+      return;
+    }
+  }
+  out.append({Op::COPY, defs[0], {result}, addr});
+  if (writesFlags)
+    emitArithFlags(addr, out, tmp, flags);
+}
+
+std::optional<llvm::MCInst> dragon::x86::X86IGNILLifter::rewriteThroughScratch(
+        const llvm::MCInst &mc, const MemViaReg &form, std::uint64_t addr,
+        ignil::Block &out, std::uint32_t &tmp, ScratchState &state) const {
+  constexpr unsigned kMem = 5; // base, scale, index, displacement, segment
+  const auto &memDesc = instrInfo_->get(mc.getOpcode());
+  const auto &regDesc = instrInfo_->get(form.regOpcode);
+  unsigned k = memDesc.getNumOperands();
+  for (unsigned i = 0; i < memDesc.getNumOperands(); ++i)
+    if (memDesc.operands()[i].OperandType == llvm::MCOI::OPERAND_MEMORY) {
+      k = i;
+      break;
+    }
+  if (k + kMem > mc.getNumOperands())
+    return std::nullopt;
+
+  // A scratch register that overlaps nothing the instruction names, reads
+  // or writes (operands, address registers, implicit RAX/RDX/CL).
+  std::vector<ignil::Reg> used;
+  for (unsigned i = 0; i < mc.getNumOperands(); ++i)
+    if (mc.getOperand(i).isReg())
+      if (auto r = toReg(mc.getOperand(i).getReg()))
+        used.push_back(*r);
+  for (const auto *desc: {&memDesc, &regDesc}) {
+    for (const llvm::MCPhysReg r: desc->implicit_uses())
+      if (auto ir = toReg(r))
+        used.push_back(*ir);
+    for (const llvm::MCPhysReg r: desc->implicit_defs())
+      if (auto ir = toReg(r))
+        used.push_back(*ir);
+  }
+  auto overlaps = [](const ignil::Reg &a, const ignil::Reg &b) {
+    return a.offset < b.offset + b.width / 8 && b.offset < a.offset + a.width / 8;
+  };
+  const unsigned wIdx = form.width == 8 ? 0 : form.width == 16 ? 1 : form.width == 32 ? 2 : 3;
+  const ScratchReg *pick = nullptr;
+  for (const ScratchReg &c: scratchRegs_) {
+    if (c.byWidth[wIdx] == 0 || !toReg(c.byWidth[wIdx]))
+      continue;
+    const ignil::Reg full = *toReg(c.full);
+    if (std::none_of(used.begin(), used.end(),
+                     [&](const ignil::Reg &u) { return overlaps(full, u); })) {
+      pick = &c;
+      break;
+    }
+  }
+  if (!pick)
+    return std::nullopt;
+  const unsigned viewLlvm = pick->byWidth[wIdx];
+
+  // The register form's operands: the memory group becomes the scratch view;
+  // a read-modify-write register form has one more operand, its tied
+  // destination, in front.
+  llvm::MCInst rewritten;
+  rewritten.setOpcode(form.regOpcode);
+  if (form.xadd) {
+    // XADD*rm: op[0]=SRC (def), op[1]=SRC (tied), op[2..6]=mem = DEST.
+    const llvm::MCOperand src = mc.getOperand(0);
+    rewritten.addOperand(llvm::MCOperand::createReg(viewLlvm));
+    rewritten.addOperand(src);
+    rewritten.addOperand(llvm::MCOperand::createReg(viewLlvm));
+    rewritten.addOperand(src);
+  } else {
+    std::vector<llvm::MCOperand> ops;
+    for (unsigned i = 0; i < k; ++i)
+      ops.push_back(mc.getOperand(i));
+    ops.push_back(llvm::MCOperand::createReg(viewLlvm));
+    for (unsigned i = k + kMem; i < mc.getNumOperands(); ++i)
+      ops.push_back(mc.getOperand(i));
+    if (regDesc.getNumOperands() == ops.size() + 1)
+      ops.insert(ops.begin(), llvm::MCOperand::createReg(viewLlvm));
+    if (regDesc.getNumOperands() != ops.size())
+      return std::nullopt;
+    for (const auto &op: ops)
+      rewritten.addOperand(op);
+  }
+  if (rewritten.getNumOperands() != regDesc.getNumOperands())
+    return std::nullopt;
+
+  const ignil::Width ptrWidth =
+          (architecture_ == Architecture::X86_64) ? 64 : 32;
+  ignil::Temp ea = emitAddress(mc, k, ptrWidth, addr, out, tmp);
+  if (form.bitString) {
+    // bt [m], reg: the signed bit offset selects the word at
+    // m + (offset >> log2(w)) * w/8; the register form then takes the
+    // offset modulo w, which is the bit inside that word.
+    auto offReg = toReg(mc.getOperand(k + kMem).getReg());
+    if (!offReg)
+      return std::nullopt; // nothing emitted that matters: ea is a temp
+    ignil::Value off = *offReg;
+    if (offReg->width < ptrWidth) {
+      auto t = newTemp(tmp, ptrWidth);
+      out.append({ignil::Opcode::SEXT, t, {off}, addr});
+      off = t;
+    }
+    unsigned bitShift = 0, byteShift = 0;
+    for (unsigned b = form.width; b > 1; b >>= 1)
+      ++bitShift;
+    for (unsigned b = form.width / 8; b > 1; b >>= 1)
+      ++byteShift;
+    auto words = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::SAR, words, {off, ignil::Const{bitShift, ptrWidth}}, addr});
+    auto delta = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::SHL, delta,
+                {ignil::Value{words}, ignil::Const{byteShift, ptrWidth}}, addr});
+    auto moved = newTemp(tmp, ptrWidth);
+    out.append({ignil::Opcode::ADD, moved, {ignil::Value{ea}, ignil::Value{delta}}, addr});
+    ea = moved;
+  }
+
+  const ignil::Reg full = *toReg(pick->full);
+  const ignil::Reg view = *toReg(viewLlvm);
+  auto saved = newTemp(tmp, full.width);
+  out.append({ignil::Opcode::COPY, saved, {full}, addr});
+  auto loaded = newTemp(tmp, form.width);
+  out.append({ignil::Opcode::LOAD, loaded, {ignil::Value{ea}}, addr});
+  out.append({ignil::Opcode::COPY, view, {ignil::Value{loaded}}, addr});
+
+  state = ScratchState{ea, saved, full, view, memDesc.mayStore()};
+  return rewritten;
 }
 
 

@@ -73,6 +73,17 @@ def undefined_flags(text, regs):
         return {'SF', 'ZF', 'AF', 'PF'}
     if m in ('div', 'idiv'):
         return {f for f, _ in FLAGS}
+    if m in ('tzcnt', 'lzcnt'):
+        return {'OF', 'SF', 'PF', 'AF'}
+    if m in ('andn', 'blsr', 'blsmsk'):
+        return {'AF', 'PF'}
+    # Unicorn 2.1.4 (QEMU 5) gets BLSI's CF and BZHI with an index >= the
+    # operand size wrong (fixed in later QEMU); the C++ tests check both
+    # against x86 code run under Rosetta.
+    if m == 'blsi':
+        return {'AF', 'PF', 'CF'}
+    if m == 'bzhi':
+        return {f for f, _ in FLAGS}
     if m in ('bsf', 'bsr'):
         return {'CF', 'OF', 'SF', 'AF', 'PF'}
     if m in ('bt', 'bts', 'btr', 'btc'):
@@ -267,6 +278,25 @@ T += [('inc ah', {}), ('dec bh', {}), ('neg ch', {}), ('not dh', {}), ('shl ah, 
       ('lea ax, [rbx + rsi*2 + 3]', {}), ('lea rax, [ebx + esi*8 - 4]', {}), ('xchg eax, eax', {}),
       ('xchg ax, bx', {}), ('mov eax, eax', {}), ('mov ax, ax', {}), ('movsxd rax, dword ptr [rbx + 8]', {}),
       ('cmpxchg_skip nop', {})]
+# ABM / BMI1 / BMI2, register and memory forms
+sparse = {'RBX': lambda r: r.choice([0, 1, 0x80, 0x8000, 1 << 31, 1 << 63, r.getrandbits(64),
+                                      r.getrandbits(64) & r.getrandbits(64) & r.getrandbits(64)])}
+for a, b, c, p in (('eax', 'ebx', 'ecx', 'dword'), ('rax', 'rbx', 'rcx', 'qword'), ('ax', 'bx', 'cx', 'word')):
+    for op in ('popcnt', 'tzcnt', 'lzcnt'):
+        T += [(f'{op} {a}, {b}', sparse), (f'{op} {a}, {p} ptr [rbx + 8]', {})]
+    if p == 'word':
+        continue
+    for op in ('shlx', 'shrx', 'sarx'):
+        T += [(f'{op} {a}, {b}, {c}', {}), (f'{op} {a}, {p} ptr [rbx + 8], {c}', {})]
+    T += [(f'rorx {a}, {b}, 5', {}), (f'rorx {a}, {p} ptr [rbx + 8], 0', {}),
+          (f'andn {a}, {b}, {c}', {}), (f'andn {a}, {c}, {p} ptr [rbx + 8]', {}),
+          (f'blsr {a}, {b}', sparse), (f'blsi {a}, {b}', sparse), (f'blsmsk {a}, {b}', sparse),
+          (f'blsr {a}, {p} ptr [rbx + 8]', {}),
+          # index < operand size only (Unicorn is wrong above it, see undefined_flags)
+          (f'bzhi {a}, {b}, {c}', {'RCX': lambda r: r.randrange(0, 32)}),
+          (f'bzhi {a}, {p} ptr [rbx + 8], {c}', {'RCX': lambda r: (r.getrandbits(8) << 8) | r.randrange(0, 32)}),
+          (f'mulx {c}, {a}, {b}', {}), (f'mulx {a}, {a}, {b}', {}), (f'mulx {c}, {a}, {p} ptr [rbx + 8]', {})]
+T += [('prefetcht0 byte ptr [rbx + 8]', {}), ('prefetchnta byte ptr [rax]', {}), ('prefetchw byte ptr [rbx]', {})]
 T = [t for t in T if not t[0].startswith(('nop', 'cmpxchg_skip'))]
 
 rng = random.Random(4321)

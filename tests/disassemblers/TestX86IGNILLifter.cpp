@@ -1579,18 +1579,18 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     return out;
   };
 
-  SECTION("popcnt eax, ebx [f3 0f b8 c3] - no lifter: EAX and the flags it "
+  SECTION("cmpxchg ebx, ecx [0f b1 cb] - no lifter: EAX and the flags it "
           "writes") {
-    // POPCNT has no lifter, so it stands in as an instruction whose results
-    // must fall back to UNDEF (both the destination register and the flags).
-    // (This used to be `adc eax, [rbp]`, lifted since.)
-    const auto *ib = lift({0xf3, 0x0f, 0xb8, 0xc3});
+    // CMPXCHG has no lifter, so it stands in as an instruction whose results
+    // must fall back to UNDEF (its implicit EAX and the flags). (This used
+    // to be `adc eax, [rbp]`, then `popcnt eax, ebx` - both lifted since.)
+    const auto *ib = lift({0x0f, 0xb1, 0xcb});
     REQUIRE(ib != nullptr);
     REQUIRE(ib->unlifted() == std::vector<std::uint64_t>{0x1000});
     const auto regs = undefined(*ib);
     REQUIRE(regs.count(dragon::x86::EAX.offset) == 1);
-    // POPCNT defines CF and OF (cleared); without this a `jc` after it would
-    // read the carry of whatever ran before.
+    // CMPXCHG defines CF and OF; without this a `jc` after it would read the
+    // carry of whatever ran before.
     REQUIRE(regs.count(dragon::x86::CF.offset) == 1);
     REQUIRE(regs.count(dragon::x86::OF.offset) == 1);
   }
@@ -1615,7 +1615,7 @@ TEST_CASE("IGNIL lifting - an unlifted instruction is recorded, and its "
     REQUIRE(hasOpcode(*ib, Opcode::UMOD));
   }
   SECTION("the optimisation passes carry the record over") {
-    const auto *ib = lift({0xf3, 0x0f, 0xb8, 0xc3}); // popcnt eax, ebx - unlifted
+    const auto *ib = lift({0x0f, 0xb1, 0xcb}); // cmpxchg ebx, ecx - unlifted
     REQUIRE(ib != nullptr);
     REQUIRE_FALSE(ib->unlifted().empty());
     const auto simplified = dragon::ignil::simplifyBlock(*ib);
@@ -2789,5 +2789,124 @@ TEST_CASE("X86 IGNIL lifting - push rsp / pop rsp", "[ignil][x86][x86_64]") {
            ex, target);
     CHECK(ex.evaluate(ex.readRegister(x86r::RSP)) == 0x1122334455667788);
   }
+}
+
+// Memory-operand forms of shifts, bit ops, multiplies and xadd are lifted
+// through their register form over a scratch register (MemViaReg). Values
+// are Unicorn's; the scratch register (R11 here) must come back unchanged.
+TEST_CASE("X86 IGNIL lifting - memory operands through the register form",
+          "[ignil][x86][x86_64]") {
+  constexpr std::uint64_t kM = 0x1122334455667788;
+  std::vector<std::uint8_t> page(0x100, 0);
+  for (int i = 0; i < 8; ++i)
+    page[8 + i] = static_cast<std::uint8_t>(kM >> (8 * i));
+  auto run = [&](const std::vector<std::uint8_t> &bytes,
+                 dragon::ignil::SymbolicExecutor &ex, std::uint64_t rax,
+                 std::uint64_t rcx) {
+    std::uint64_t target = 0;
+    runOne(bytes,
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.mapMemory(0x200000, page);
+             e.setRegister(x86r::RAX, rax);
+             e.setRegister(x86r::RBX, 0x200000);
+             e.setRegister(x86r::RCX, rcx);
+             e.setRegister(x86r::RDX, 0);
+             e.setRegister(x86r::R11, 0x5ca7c4);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::R11)) == 0x5ca7c4);
+  };
+  {
+    dragon::ignil::SymbolicExecutor ex; // shl dword ptr [rbx + 8], cl
+    run({0xd3, 0x63, 0x08}, ex, 0, 4);
+    CHECK(ex.evaluate(ex.readMemory(0x200008, 64)) == 0x1122334456677880);
+    CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == 1);
+  }
+  {
+    // bts dword ptr [rbx + 8], eax with eax = -1: the bit offset is signed
+    // and moves the address - bit 31 of the dword at rbx + 4.
+    dragon::ignil::SymbolicExecutor ex;
+    run({0x0f, 0xab, 0x43, 0x08}, ex, 0xffffffff, 0);
+    CHECK(ex.evaluate(ex.readMemory(0x200004, 32)) == 0x80000000);
+    CHECK(ex.evaluate(ex.readMemory(0x200008, 64)) == kM);
+    CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == 0);
+  }
+  {
+    dragon::ignil::SymbolicExecutor ex; // imul eax, dword ptr [rbx + 8], 100
+    run({0x6b, 0x43, 0x08, 0x64}, ex, 0, 0);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == 0x5c06b120);
+  }
+  {
+    // xadd qword ptr [rbx + 8], rbx: the address uses the old RBX.
+    dragon::ignil::SymbolicExecutor ex;
+    run({0x48, 0x0f, 0xc1, 0x5b, 0x08}, ex, 0, 0);
+    CHECK(ex.evaluate(ex.readMemory(0x200008, 64)) == 0x1122334455867788);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RBX)) == kM);
+  }
+  {
+    dragon::ignil::SymbolicExecutor ex; // mul qword ptr [rbx + 8]
+    run({0x48, 0xf7, 0x63, 0x08}, ex, 3, 0);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == 0x336699cd00336698);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RDX)) == 0);
+  }
+  {
+    dragon::ignil::SymbolicExecutor ex; // rorx rax, qword ptr [rbx + 8], 12
+    run({0xc4, 0xe3, 0xfb, 0xf0, 0x43, 0x08, 0x0c}, ex, 0, 0);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == 0x7881122334455667);
+  }
+}
+
+// ABM/BMI1/BMI2. Expected values: Unicorn, except BLSI's CF and BZHI with an
+// index >= the operand size, where Unicorn 2.1.4 (old QEMU) is wrong; those
+// come from x86-64 code run under Rosetta and agree with the Intel SDM.
+TEST_CASE("X86 IGNIL lifting - ABM/BMI instructions", "[ignil][x86][x86_64]") {
+  struct Case {
+    const char *name;
+    std::vector<std::uint8_t> bytes;
+    std::uint64_t rbx, rcx, rdx;
+    std::uint64_t rax, outRcx; // expected
+    int cf;                    // -1: not checked
+  };
+  const Case cases[] = {
+          {"tzcnt eax, ebx (0)", {0xf3, 0x0f, 0xbc, 0xc3}, 0, 0, 0, 32, 0, 1},
+          {"tzcnt eax, ebx", {0xf3, 0x0f, 0xbc, 0xc3}, 0x50, 0, 0, 4, 0, 0},
+          {"lzcnt rax, rbx", {0xf3, 0x48, 0x0f, 0xbd, 0xc3}, 1, 0, 0, 63, 0, 0},
+          {"popcnt ax, bx", {0x66, 0xf3, 0x0f, 0xb8, 0xc3}, 0xf0f1, 0, 0,
+           0xffffffffffff0009, 0, 0},
+          {"bzhi eax, ebx, ecx (31)", {0xc4, 0xe2, 0x70, 0xf5, 0xc3}, 0x80919564, 31, 0,
+           0x919564, 31, 0},
+          {"bzhi eax, ebx, ecx (38)", {0xc4, 0xe2, 0x70, 0xf5, 0xc3}, 0x80919564, 38, 0,
+           0x80919564, 38, 1},
+          {"bzhi eax, ebx, ecx (259)", {0xc4, 0xe2, 0x70, 0xf5, 0xc3}, 0xff, 259, 0, 7, 259, 0},
+          {"blsi eax, ebx", {0xc4, 0xe2, 0x78, 0xf3, 0xdb}, 0x80000000, 0, 0, 0x80000000, 0, 1},
+          {"blsi eax, ebx (0)", {0xc4, 0xe2, 0x78, 0xf3, 0xdb}, 0, 0, 0, 0, 0, 0},
+          {"shrx eax, ebx, ecx", {0xc4, 0xe2, 0x73, 0xf7, 0xc3}, 0x80, 35, 0, 0x10, 35, -1},
+          {"mulx rcx, rax, rbx", {0xc4, 0xe2, 0xfb, 0xf6, 0xcb}, 0x123456789, 0, 0x1122334455667788,
+           0x6c6c6c6bbd95afc8, 0x137e856c, -1},
+  };
+  for (const auto &c: cases) {
+    INFO(c.name);
+    dragon::ignil::SymbolicExecutor ex;
+    std::uint64_t target = 0;
+    runOne(c.bytes,
+           [&](dragon::ignil::SymbolicExecutor &e) {
+             e.setRegister(x86r::RAX, 0xffffffffffffffff);
+             e.setRegister(x86r::RBX, c.rbx);
+             e.setRegister(x86r::RCX, c.rcx);
+             e.setRegister(x86r::RDX, c.rdx);
+             e.setRegister(x86r::CF, 0);
+           },
+           ex, target);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RAX)) == c.rax);
+    CHECK(ex.evaluate(ex.readRegister(x86r::RCX)) == c.outRcx);
+    if (c.cf >= 0)
+      CHECK(ex.evaluate(ex.readRegister(x86r::CF)) == static_cast<std::uint64_t>(c.cf));
+  }
+  // A prefetch is a nop, not an unlifted memory access.
+  auto dis = makeDisassembler(dragon::Architecture::X86_64);
+  CHECK(dis.liftTrace(dis.disassemble(std::vector<std::uint8_t>{0x0f, 0x18, 0x4b, 0x08},
+                                      0x1000))
+                .unlifted()
+                .empty());
 }
 #endif // DRAGON_WITH_Z3

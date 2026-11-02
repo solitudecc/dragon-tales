@@ -14,6 +14,7 @@
 #include <string_view>
 #include <span>
 #include <utility>
+#include <vector>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -846,6 +847,57 @@ class X86IGNILLifter {
     bool tiedDst; ///< Generic form is (dst, src1=dst, imm) rather than (lhs, imm).
   };
   std::unordered_map<unsigned, AccForm> accForms_;
+
+  /// A memory-operand form whose register form is lifted (shifts/rotates,
+  /// mul/div, imul, bt*, shld/shrd, bsf/bsr/tzcnt/lzcnt/popcnt, xadd).
+  /// liftInstruction loads the operand into a scratch register the
+  /// instruction does not use, lifts the register form unchanged, stores the
+  /// result back if the form writes memory, and restores the scratch
+  /// register - so the memory form inherits the register form's
+  /// difftested semantics, flags included.
+  struct MemViaReg {
+    unsigned regOpcode;
+    ignil::Width width; ///< memory operand width in bits
+    bool bitString;     ///< BT*mr: the bit offset also moves the address
+    bool xadd;          ///< XADD*rm: register form is (DEST, SRC, DEST, SRC)
+  };
+  std::unordered_map<unsigned, MemViaReg> memViaReg_;
+
+  /// ABM/BMI1/BMI2 register forms (liftBmi); memory forms go through
+  /// memViaReg_.
+  enum class BmiKind : std::uint8_t {
+    Popcnt, Tzcnt, Lzcnt,   // dst = count(src)
+    Shlx, Shrx, Sarx,       // dst = src1 shift (src2 mod w), flags untouched
+    Rorx,                   // dst = src ror imm, flags untouched
+    Andn,                   // dst = ~src1 & src2
+    Blsr, Blsi, Blsmsk,     // lowest-set-bit reset / isolate / mask
+    Bzhi,                   // dst = src1 with bits >= src2[7:0] cleared
+    Mulx,                   // hi:lo = EDX/RDX * src, flags untouched
+  };
+  std::unordered_map<unsigned, BmiKind> bmiOps_;
+  void liftBmi(const llvm::MCInst &mc, BmiKind kind, std::uint64_t addr,
+               ignil::Block &out, std::uint32_t &tmp) const;
+  /// Scratch candidates: the LLVM register saved/restored and its 8/16/32/64-
+  /// bit views (0 where the mode has none).
+  struct ScratchReg {
+    unsigned full;
+    unsigned byWidth[4];
+  };
+  std::vector<ScratchReg> scratchRegs_;
+  struct ScratchState {
+    ignil::Temp ea;
+    ignil::Temp saved;
+    ignil::Reg full;
+    ignil::Reg view;
+    bool storeBack;
+  };
+  /// Builds the register form of `mc` over a free scratch register and emits
+  /// the prologue (address, save, load). nullopt (and nothing emitted) when
+  /// no scratch register is free or the operands do not match.
+  std::optional<llvm::MCInst>
+  rewriteThroughScratch(const llvm::MCInst &mc, const MemViaReg &form,
+                        std::uint64_t addr, ignil::Block &out,
+                        std::uint32_t &tmp, ScratchState &state) const;
   ignil::Reg regRBP_{}, regEBP_{}; // needed for leave decomposition
   // CL as a shift count; accumulator/data registers for CBW..CQO.
   ignil::Reg regCL_{}, regAL_{}, regAX_{}, regEAX_{}, regRAX_{}, regDX_{},
