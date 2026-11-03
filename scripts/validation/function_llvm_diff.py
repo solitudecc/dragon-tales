@@ -63,10 +63,12 @@ def initial(fixture, trial, entry):
         code = bytes.fromhex(stub['code_hex']); address = stub['address']; memory[address:address+len(code)] = code
     put(memory, STACK, SENTINEL)
     put(memory, DATA, [0, 1, 0xfffffffd, 0xffffffff, 0x7ffffffd, 0x80000000, 0xfffffffe, 0x7fffffff][trial%8], 4)
+    for target in fixture.get("missing_targets",[]):
+        if 0 <= target < MEM_SIZE: memory[target]=0x90  # same valid placeholder on both sides
     for name,value in fixture.get("set_gprs",{}).items(): put(regs,8*GPRS.index(name),value)
     return regs, memory
 
-def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=False):
+def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=False, stop_before_calls=True, skip_stub_returns=False):
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0, MEM_SIZE); uc.mem_write(0, bytes(memory))
     for i, name in enumerate(GPRS): uc.reg_write(getattr(U, 'UC_X86_REG_'+name), get(regs, i*8))
@@ -77,7 +79,8 @@ def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=F
     uc.reg_write(U.UC_X86_REG_FPTAG,get(regs,482,2)); uc.reg_write(U.UC_X86_REG_FPCW,get(regs,484,2)); uc.reg_write(U.UC_X86_REG_FPSW,get(regs,486,2))
     events = collections.Counter()
     targets = {stub['address'] for stub in fixture['stubs']}
-    ignored_calls=set();writes=[];stop_info=[];previous=[entry];block_visits=collections.Counter()
+    stub_ranges=[(stub["address"],stub["address"]+len(bytes.fromhex(stub["code_hex"]))) for stub in fixture["stubs"]]
+    ignored_calls=set();writes=[];stop_info=[];previous=[entry];previous_size=[0];block_visits=collections.Counter()
     def on_instruction(u, pc, size, data):
         if stop_before_control:
             block_visits[pc]+=1
@@ -86,12 +89,13 @@ def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=F
             if pc in fixture.get('unsupported_before',[]):
                 stop_info.extend([5,0,pc,pc,1,0,2]);u.emu_stop();return
             if pc in fixture.get("missing_targets",[]):
-                stop_info.extend([3,1,previous[0],pc,1,0,0]);u.emu_stop();return
-            if pc in call_sites or bytes(u.mem_read(pc,size)) == b"\xc3":
+                is_call=previous[0] in call_sites
+                stop_info.extend([3,2 if is_call else 1,previous[0],pc,1,previous[0]+previous_size[0] if is_call else 0,0]);u.emu_stop();return
+            if (stop_before_calls and pc in call_sites) or (bytes(u.mem_read(pc,size)) == b"\xc3" and not (skip_stub_returns and any(lo<=pc<hi for lo,hi in stub_ranges))):
                 stop_info.extend([5,2 if pc in call_sites else 3,pc,pc,1,0,2]);u.emu_stop();return
-            previous[0]=pc
+            previous[0]=pc;previous_size[0]=size
         if pc in targets: events.update([pc])
-        if pc in call_sites:
+        if pc in call_sites and not stop_before_control:
             sp=u.reg_read(U.UC_X86_REG_RSP);ignored_calls.update(range(sp-8,sp))
     uc.hook_add(UC_HOOK_CODE,on_instruction)
     uc.hook_add(UC_HOOK_MEM_WRITE,lambda u,access,address,size,value,data:writes.append((u.reg_read(U.UC_X86_REG_RIP),address,size)))
@@ -206,6 +210,11 @@ def compare(fixture, expected, actual, bad_ir, corrupt, *, include_pc=False):
     for name,off,size in FIELDS + ([("RIP",128,8)] if include_pc else []):
         if name in excluded_flags: continue
         got,want=get(got_regs,off,size),get(want_regs,off,size)
+        if name=='FPSW':
+            # Intel SDM FST/FSTP: only C0/C2/C3 (8/10/14) are undefined.
+            # Each fixture declares its exact mask; C1, TOP and exceptions stay checked.
+            mask=sum(1<<bit for bit in fixture.get('undefined_fpsw_bits',[]))
+            got &= ~mask;want &= ~mask
         if got!=want: diffs.append({'field':name,'got':hex(got),'expected':hex(want)})
     mem_diffs=[i for i,(got,want) in enumerate(zip(got_mem,want_mem)) if got!=want and i not in ignored]
     if mem_diffs:

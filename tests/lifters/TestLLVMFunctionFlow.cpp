@@ -48,10 +48,10 @@ TEST_CASE("LLVM function-flow baseline setup is valid", "[llvm][function-flow-se
 }
 
 // These are normative assertions, intentionally red on 0aa4b73. Catch's
-// !shouldfail keeps this staged baseline visible without calling the bad
-// semantics correct. Step 2 removes B's marker; step 3 removes A's marker.
+// Both markers have now been removed: Legacy safely refuses A/B; the V2
+// execution oracles additionally check their implemented control/state paths.
 // The independent native/Unicorn harness defaults to a nonzero exit for A/B.
-TEST_CASE("LLVM function-flow A must not discard an unknown callee return", "[llvm][function-flow][!shouldfail]") {
+TEST_CASE("LLVM function-flow A must not discard an unknown callee return", "[llvm][function-flow]") {
   using namespace dragon;
   Configuration config;config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
   Disassembler dis{Architecture::X86_64,config};Graph graph{Architecture::X86_64,config};
@@ -127,4 +127,36 @@ TEST_CASE("LLVM Legacy cannot treat an enumerated switch default as UB", "[llvm]
   llvmlifter::LLVMLifter lifter{Architecture::X86_64};
   CHECK_FALSE(lifter.lift(root,graph));
   CHECK(lifter.module().empty());
+}
+
+TEST_CASE("LLVM Legacy rejects a callee protocol without register state", "[llvm][call-state]") {
+  using namespace dragon;
+  Configuration config;config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
+  for (const auto &bytes:{fixture("A"),std::vector<std::uint8_t>{0xff,0xd0,0xc3}}) {
+    Disassembler dis{Architecture::X86_64,config};Graph graph{Architecture::X86_64,config};
+    dis.disassemble(bytes,0x1000,graph);Function root{&graph,0x1000};REQUIRE(root.isValid());
+    llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+    CHECK_FALSE(lifter.lift(root,graph));CHECK(lifter.module().empty());
+  }
+}
+
+TEST_CASE("LLVM Legacy trace refuses reachable stateful calls", "[llvm][call-state]") {
+  using namespace dragon;
+  ignil::Block block{0x1000};
+  block.append({ignil::Opcode::CALL,std::nullopt,{ignil::Const{0x2000,64}},0x1000});
+  block.append({ignil::Opcode::RET,std::nullopt,{},0x1005});
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  CHECK_FALSE(lifter.liftBlock(block));CHECK(lifter.module().empty());
+}
+
+TEST_CASE("LLVM Legacy trace keeps ignoring ordinary instructions after RET", "[llvm][call-state]") {
+  using namespace dragon;
+  ignil::Block block{0x1000};
+  block.append({ignil::Opcode::COPY,ignil::Reg{0,64,"RAX"},{ignil::Const{1,64}},0x1000});
+  block.append({ignil::Opcode::RET,std::nullopt,{},0x1001});
+  block.append({ignil::Opcode::CALL,std::nullopt,{ignil::Const{0x2000,64}},0x1002});
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  REQUIRE(lifter.liftBlock(block));
+  CHECK_FALSE(lifter.module().getFunction("fn_2000"));
+  CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
 }

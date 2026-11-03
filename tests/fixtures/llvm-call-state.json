@@ -1,0 +1,194 @@
+{
+  "schema": 1,
+  "architecture": "x86_64",
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "control_call_zero",
+      "code_hex": "31c0e8f90f000085c07407b901000000890bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b800000000c3",
+          "rax": 0
+        }
+      ]
+    },
+    {
+      "id": "A",
+      "code_hex": "31c0e8f90f000085c07407b901000000890bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "known_defect": "call_state",
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b801000000c3",
+          "rax": 1
+        }
+      ]
+    },
+    {
+      "id": "call_parameter",
+      "source": "mov ecx,5; call 0x2000; mov dword ptr [rbx],eax; ret",
+      "code_hex": "b905000000e8f60f00008903c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "89c8c3",
+          "copy_gpr": [
+            "RAX",
+            "RCX",
+            32
+          ]
+        }
+      ]
+    },
+    {
+      "id": "call_flags",
+      "source": "xor eax,eax; call 0x2000; adc eax,0; mov dword ptr [rbx],eax; ret",
+      "code_hex": "31c0e8f90f000083d0008903c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "f9c3",
+          "set_cf": 1
+        }
+      ]
+    },
+    {
+      "id": "call_nonabi",
+      "source": "xor r15d,r15d; call 0x2000; mov dword ptr [rbx],r15d; ret",
+      "code_hex": "4531ffe8f80f000044893bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "49bf1122334455667788c3",
+          "gpr_writes": {
+            "R15": 9833440827789222417
+          }
+        }
+      ]
+    },
+    {
+      "id": "call_vector_parameter",
+      "source": "pxor xmm0,xmm0; call 0x2000; movdqu xmmword ptr [rbx],xmm1; ret",
+      "code_hex": "660fefc0e8f70f0000f30f7f0bc3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "660f6fc8c3",
+          "copy_xmm": [
+            1,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "id": "call_vector_clobber",
+      "source": "pxor xmm15,xmm15; call 0x2000; movdqu xmmword ptr [rbx],xmm15; ret",
+      "code_hex": "66450fefffe8f60f0000f3440f7f3bc3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "66450f76ffc3",
+          "fill_xmm": 15
+        }
+      ]
+    },
+    {
+      "id": "call_x87_parameter",
+      "source": "fld1; call 0x2000; ret",
+      "code_hex": "d9e8e8f90f0000c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "db3bc3",
+          "x87_pop_store": true
+        }
+      ],
+      "undefined_fpsw_bits": [
+        8,
+        10,
+        14
+      ]
+    },
+    {
+      "id": "call_x87",
+      "source": "fld1; call 0x2000; fstp tbyte ptr [rbx]; ret",
+      "code_hex": "d9e8e8f90f0000db3bc3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "dbe3d9ebc3",
+          "x87_pi": true
+        }
+      ],
+      "undefined_fpsw_bits": [
+        8,
+        10,
+        14
+      ]
+    },
+    {
+      "id": "call_stack_parameter",
+      "source": "mov rax,rsp; call 0x2000; mov qword ptr [rbx],rax; ret",
+      "code_hex": "4889e0e8f80f0000488903c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "4889e0c3",
+          "copy_gpr": [
+            "RAX",
+            "RSP",
+            64
+          ]
+        }
+      ]
+    },
+    {
+      "id": "call_memory_parameter",
+      "source": "mov dword ptr [rbx],8; call 0x2000; mov dword ptr [rbx+4],eax; ret",
+      "code_hex": "c70308000000e8f50f0000894304c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "8b03c3",
+          "load_rax32": true
+        }
+      ]
+    },
+    {
+      "id": "call_resume",
+      "code_hex": "31c0e8f90f000085c07407b901000000890bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "known_defect": "call_state",
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b801000000c3",
+          "rax": 1
+        }
+      ],
+      "initially_missing": true
+    }
+  ]
+}

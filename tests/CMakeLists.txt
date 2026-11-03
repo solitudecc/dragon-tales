@@ -162,9 +162,15 @@ if(Python3_Interpreter_FOUND)
             if(DRAGON_FLOW_LLC AND DRAGON_FLOW_OPT AND DRAGON_FLOW_CC AND _dragon_flow_unicorn_missing EQUAL 0)
                 add_test(NAME "Validation - LLVM whole-function positive controls"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_llvm_diff.py
-                        --case control_store --case control_branch --case control_loop --case control_call_zero
+                        --case control_store --case control_branch --case control_loop
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-flow-controls)
+                add_test(NAME "Validation - LLVM V2 call state boundaries"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_call_diff.py
+                        --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/function-call-controls)
+                set_tests_properties("Validation - LLVM V2 call state boundaries" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
                 add_test(NAME "Validation - LLVM V2 dispatch prefixes"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_dispatch_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}

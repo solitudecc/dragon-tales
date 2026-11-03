@@ -105,6 +105,7 @@ TEST_CASE("LLVMLifter - lift() refuses a function with no blocks",
   const dragon::Function *real = findFunction(funcs, 0x1000);
   REQUIRE(real != nullptr);
   REQUIRE(real->isValid());
+  REQUIRE(llvml.setExecutionMode(dragon::llvmlifter::ExecutionMode::StatefulV2));
   REQUIRE(llvml.lift(*real, g));
 }
 
@@ -136,7 +137,7 @@ TEST_CASE("LLVMLifter - i386 addresses are zero-extended", "[llvm][lifter]") {
   REQUIRE(ir.find("sext") == std::string::npos);
 }
 
-TEST_CASE("LLVMLifter - an indirect call is through a pointer",
+TEST_CASE("LLVMLifter - Legacy refuses an indirect callee protocol",
           "[llvm][lifter]") {
   // call edx; ret
   const std::vector<std::uint8_t> bytes = {0xff, 0xd2, 0xc3};
@@ -145,8 +146,8 @@ TEST_CASE("LLVMLifter - an indirect call is through a pointer",
   REQUIRE(fn);
 
   dragon::llvmlifter::LLVMLifter llvml{dragon::Architecture::X86_32};
-  REQUIRE(llvml.lift(*fn, g));
-  REQUIRE_FALSE(llvm::verifyModule(llvml.module(), &llvm::errs()));
+  REQUIRE_FALSE(llvml.lift(*fn, g));
+  REQUIRE(llvml.module().empty());
 }
 
 TEST_CASE("LLVMLifter - IEEE double compares become fcmp",

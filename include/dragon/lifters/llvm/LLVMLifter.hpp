@@ -44,7 +44,7 @@ class LLVMLifter {
   /// still emits per-instruction, same as normal lifting - are dropped
   /// rather than translated, instead of producing `unreachable` (their
   /// fate under the Graph-based `lift()` when a target isn't in the
-  /// function). CALL is preserved as a real LLVM call. RET, if present,
+  /// function). Reachable CALL is rejected: the Legacy callee protocol has no register state. RET, if present,
   /// must be the block's true terminator - anything after it is ignored,
   /// matching how a real `ret` would end execution. If the block has no
   /// RET, a synthetic `ret void` (with the usual register write-back) is
@@ -170,7 +170,10 @@ class LLVMLifter {
 
   void emitExit(std::uint64_t reason, std::uint64_t kind, std::uint64_t sourcePC,
                 llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
-                llvm::IRBuilder<> &builder, std::uint64_t detail = 0);
+                llvm::IRBuilder<> &builder, std::uint64_t detail = 0, std::uint64_t returnPC = 0);
+  void emitExitAtValue(std::uint64_t reason, std::uint64_t kind, llvm::Value *sourcePC,
+                llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
+                llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC);
   void writeBackRegisters(RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
   void emitBudgetCheck(std::uint64_t pc, RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
   llvm::Value *memoryAddress(llvm::Value *address, std::uint64_t bytes, std::uint64_t pc,
@@ -178,6 +181,7 @@ class LLVMLifter {
   bool stateful() const { return mode_ == ExecutionMode::StatefulV2 && graph_; }
   ExecutionMode mode_ = ExecutionMode::Legacy;
   std::set<std::uint64_t> unsupportedAddresses_;
+  std::map<std::uint64_t,llvm::BasicBlock *> resumeEntries_;
   Architecture arch_;
   // The graph being lifted by lift(), null otherwise (liftBlock).
   const Graph *graph_ = nullptr;

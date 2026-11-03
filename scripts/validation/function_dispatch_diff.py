@@ -1,6 +1,6 @@
-"""Task 8 step 2: V2 state/dispatch prefixes vs Unicorn, O0 and O2.
+"""V2 state/dispatch prefixes vs Unicorn, O0 and O2.
 
-Stops BEFORE CALL/RET (currently Unsupported); this is not a full-function
+Stops BEFORE RET (currently Unsupported); x64 direct CALL uses Guest state. This is not a full-function
 success claim. PC, SP and every mapped byte are compared without Legacy
 normalizations. Missing target exits stop Unicorn before executing that target.
 """
@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import platform
+import re
 import struct
 import subprocess
 import sys
@@ -17,11 +18,11 @@ import tempfile
 
 import function_llvm_diff as base
 
-def compile_case(fixture, entry, level, work, args):
+def compile_case(fixture, entry, level, work, args, model_factory=None):
     lifter=base.dragon.LLVMLifter(base.dragon.Architecture.X86_64,
                                 execution_mode=base.dragon.LLVMExecutionMode.STATEFUL_V2)
     call_sites=set()
-    for address,code in [(entry,fixture['code_hex'])]+[(s['address'],s['code_hex']) for s in fixture['stubs']]:
+    for address,code in [(entry,fixture['code_hex'])]+([] if model_factory else [(s['address'],s['code_hex']) for s in fixture['stubs']]):
         dis=base.dragon.Disassembler(base.dragon.Architecture.X86_64,base.dragon.Configuration(strategy=0))
         graph=dis.analyze(bytes.fromhex(code),address)
         function=graph.get_function(address)
@@ -35,15 +36,30 @@ def compile_case(fixture, entry, level, work, args):
         source=work/'optimized.ll'
         subprocess.run([args.opt,'-S','-passes=default<O2>',str(raw),'-o',str(source)],check=True,capture_output=True)
     subprocess.run([args.opt,'-passes=verify','-disable-output',str(source)],check=True,capture_output=True)
-    names=[(entry,f'dragon_v2_x86_64_{entry:x}')]
+    ir=raw.read_text()
+    def entries(address,symbol):
+        header=re.search(r'define void @'+symbol+r'\([^\n]*\) #(\d+)',ir)
+        if header:
+            attributes=re.search(r'^attributes #'+header[1]+r' = \{([^\n]*)',ir,re.M)
+            metadata=re.search(r'"dragon.entrypoints"="([^"]*)"',attributes[1]) if attributes else None
+            if metadata:return [(int(pc,16),symbol) for pc in metadata[1].split(',')]
+        return [(address,symbol)]
+    root_symbol=f'dragon_v2_x86_64_{entry:x}'
+    names=entries(entry,root_symbol);root_count=len(names)
     wrappers=[]
     for stub in fixture['stubs']:
         address=stub['address'];symbol=f'dragon_v2_x86_64_{address:x}';wrapper=f'model_{address:x}'
-        wrappers.append(f'void {symbol}(S*,M*,C*,E*); void {wrapper}(S*s,M*m,C*c,E*e) {{++calls{address:x}; {symbol}(s,m,c,e);}}')
-        names.append((address,wrapper))
+        if model_factory:
+            wrappers.append(model_factory(stub));names.append((address,wrapper))
+        else:
+            wrappers.append(f'void {symbol}(S*,M*,C*,E*); void {wrapper}(S*s,M*m,C*c,E*e) {{if(get64(s->regs_bytes+128)=={address})++calls{address:x}; {symbol}(s,m,c,e);}}')
+            names.extend((pc,wrapper) for pc,_ in entries(address,symbol))
     declarations='\n'.join(f'void {symbol}(S*,M*,C*,E*);' for _,symbol in names)
     table=','.join(f'{{{address}ULL,{symbol}}}' for address,symbol in names)
-    driver=work/'driver.c';driver.write_text(DRIVER.replace('DECLARATIONS',declarations+'\n'+'\n'.join(wrappers)).replace('ENTRIES',table).replace('INITIAL_BUDGET',str(fixture.get('context_budget',1000))))
+    resume=''
+    if fixture.get('initially_missing'):
+        resume=f'if(e.reason!=DRAGON_EXIT_NEED_TARGET || get64(regs+32)!=0xc7f8 || calls2000) return 94; c.entry_count={len(names)};dragon_llvm_execute_v2(&s,&m,&c,&e,0xf000);'
+    driver=work/'driver.c';driver.write_text(DRIVER.replace('DECLARATIONS',declarations+'\n'+'\n'.join(wrappers)).replace('ENTRIES',table).replace('INITIAL_BUDGET',str(fixture.get('context_budget',1000))).replace('INITIAL_COUNT',str(root_count if fixture.get('initially_missing') else len(names))).replace('RESUME_CODE',resume))
     obj=work/'module.o';exe=work/'native'
     triple={'aarch64':'aarch64-linux-gnu','x86_64':'x86_64-linux-gnu'}.get(platform.machine())
     if not triple: raise RuntimeError('Linux aarch64/x86_64 host required')
@@ -55,6 +71,7 @@ def compile_case(fixture, entry, level, work, args):
 DRIVER=r'''
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <dragon_c.h>
 typedef dragon_guest_state_v2_t S;
 typedef dragon_guest_memory_v2_t M;
@@ -62,6 +79,10 @@ typedef dragon_exec_context_v2_t C;
 typedef dragon_exec_exit_v2_t E;
 static unsigned char regs[512],memory[65536];
 static uint64_t calls2000,calls3000;
+static uint64_t get64(const unsigned char *p){uint64_t v;memcpy(&v,p,8);return v;}
+static uint16_t get16(const unsigned char *p){uint16_t v;memcpy(&v,p,2);return v;}
+static void put64(unsigned char *p,uint64_t v){memcpy(p,&v,8);}
+static void put16(unsigned char *p,uint16_t v){memcpy(p,&v,2);}
 DECLARATIONS
 int main(int argc,char **argv) {
   if(argc!=3) return 90;
@@ -70,8 +91,9 @@ int main(int argc,char **argv) {
   fclose(f);
   const dragon_target_entry_v2_t entries[]={ENTRIES};
   S s={2,DRAGON_ARCH_X86_64,sizeof(regs),regs}; M m={memory,sizeof(memory)};
-  C c={entries,sizeof(entries)/sizeof(entries[0]),INITIAL_BUDGET,0}; E e={0};
+  C c={entries,INITIAL_COUNT,INITIAL_BUDGET,0}; E e={0};
   dragon_llvm_execute_v2(&s,&m,&c,&e,0xf000);
+  RESUME_CODE
   f=fopen(argv[2],"wb"); if(!f) return 92;
   const unsigned char magic[8]={'D','T','F','L','O','W','1',0};
   fwrite(magic,1,8,f);fwrite(&calls2000,8,1,f);fwrite(&calls3000,8,1,f);
@@ -81,16 +103,17 @@ int main(int argc,char **argv) {
 }
 '''
 
-def main():
+def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case',action='append',dest='cases')
     parser.add_argument('--trials',type=int,default=8)
     parser.add_argument('--out',type=Path)
     parser.add_argument('--corrupt-output',action='store_true')
+    parser.add_argument('--corrupt-fpsw',action='store_true',help='negative control: flip defined C1, never an excluded condition bit')
     parser.add_argument('--opt',default='opt-21');parser.add_argument('--llc',default='llc-21');parser.add_argument('--cc',default='gcc')
     args=parser.parse_args()
     if args.trials<1:parser.error('positive trials required')
-    fixtures=json.loads((base.ROOT/'tests/fixtures/llvm-function-flow.json').read_text())
+    fixtures=json.loads((fixtures_path or base.ROOT/'tests/fixtures/llvm-function-flow.json').read_text())
     selected=[f for f in fixtures['cases'] if not args.cases or f['id'] in args.cases]
     if not selected or (args.cases and set(args.cases)!={f['id'] for f in selected}):parser.error('unknown case')
     out=(args.out or Path(tempfile.mkdtemp(prefix='dragon-dispatch-'))).resolve();out.mkdir(parents=True,exist_ok=True)
@@ -98,27 +121,30 @@ def main():
     for fixture in selected:
         for level in ('O0','O2'):
             work=out/fixture['id']/level;work.mkdir(parents=True,exist_ok=True)
-            try:exe,bad_ir,sites=compile_case(fixture,fixtures['entry'],level,work,args)
+            try:exe,bad_ir,sites=compile_case(fixture,fixtures['entry'],level,work,args,model_factory)
             except Exception as error:
                 detail=error.stderr.decode(errors='replace') if isinstance(error,subprocess.CalledProcessError) and isinstance(error.stderr,bytes) else str(error)
                 rows.append(dict(case=fixture['id'],opt=level,status='infrastructure_error',detail=detail));continue
             for trial in range(args.trials):
                 row=dict(case=fixture['id'],opt=level,trial=trial)
                 regs,memory=base.initial(fixture,trial,fixtures['entry'])
-                try:expected=base.reference(fixture,regs,memory,fixtures['entry'],sites,stop_before_control=True)
+                try:expected=base.reference(fixture,regs,memory,fixtures['entry'],sites,stop_before_control=True,stop_before_calls=stop_before_calls,skip_stub_returns=bool(model_factory))
                 except Exception as error:row.update(status='reference_error',detail=str(error));rows.append(row);continue
                 actual,error=base.native(exe,regs,memory,work,trial,extra_bytes=64)
                 if error:row.update(status=error['kind'],detail=error)
                 else:
+                    if args.corrupt_fpsw:
+                        damaged=bytearray(actual[0]);damaged[487]^=2
+                        actual=(bytes(damaged),)+actual[1:]
                     differences=base.compare(fixture,expected,actual,bad_ir,args.corrupt_output,include_pc=True)
                     record=struct.unpack('<8Q',actual[3]);exit=record[:7]
                     if exit!=expected[4]:differences.append(dict(field='exit',got=exit,expected=expected[4]))
-                    row.update(status='different' if differences else 'prefix_match',differences=differences,exit=exit,budget_left=record[7],undefined_flag_fields=len(fixture['undefined_flags']),register_fields_compared=len(base.FIELDS)+1-len(fixture['undefined_flags']),memory_bytes_compared=base.MEM_SIZE)
+                    row.update(status='different' if differences else 'prefix_match',differences=differences,exit=exit,budget_left=record[7],undefined_flag_fields=len(fixture['undefined_flags']),undefined_fpsw_bits=len(fixture.get('undefined_fpsw_bits',[])),register_fields_compared=len(base.FIELDS)+1-len(fixture['undefined_flags']),memory_bytes_compared=base.MEM_SIZE)
                 rows.append(row)
             print(fixture['id'],level,dict(collections.Counter(r['status'] for r in rows if r['case']==fixture['id'] and r['opt']==level)),flush=True)
     statuses=dict(collections.Counter(r['status'] for r in rows))
-    summary=dict(stage='before CALL/RET, unsupported instruction, missing target or budget; NOT full-function success',cases=len(selected),trials_per_opt=args.trials,results=len(rows),statuses=statuses,skipped=0,legacy_normalizations=0,
-      undefined_flag_fields=sum(r.get('undefined_flag_fields',0) for r in rows),
+    summary=dict(stage=('before CALL/RET' if stop_before_calls else 'before RET; call models execute Guest RET')+' or explicit terminal boundary; NOT full-function success',cases=len(selected),trials_per_opt=args.trials,results=len(rows),statuses=statuses,skipped=0,legacy_normalizations=0,
+      undefined_flag_fields=sum(r.get('undefined_flag_fields',0) for r in rows),undefined_fpsw_bits=sum(r.get('undefined_fpsw_bits',0) for r in rows),
       register_fields_compared=sum(r.get('register_fields_compared',0) for r in rows),memory_bytes_compared=sum(r.get('memory_bytes_compared',0) for r in rows),
       llvm_lifter_sha256=hashlib.sha256((base.ROOT/'lib/LLVMLifter.cpp').read_bytes()).hexdigest(),artifacts=str(out))
     summary['runtime_sha256']=hashlib.sha256((base.ROOT/'lib/LLVMExecution.cpp').read_bytes()).hexdigest()
@@ -132,4 +158,4 @@ def main():
         if row['status']!='prefix_match':print('FAIL',json.dumps(row,indent=2))
     return 0 if all(r['status']=='prefix_match' for r in rows) and len(rows)==len(selected)*2*args.trials else 1
 
-if __name__=='__main__':sys.exit(main())
+if __name__=='__main__':sys.exit(main(stop_before_calls=False))

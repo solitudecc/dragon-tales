@@ -1,9 +1,11 @@
 # LLVM Lift：跨函数控制流与调用边界（实施中）
 
-状态：第 1 步已完成，2026-11-03 按所有者“接着下一步”的要求推进已提交的
-[状态与控制流契约](llvm-execution-contract.md)。第 2 步新增 V2 分发出口，Legacy 无法表达
-跨界转移时安全拒绝；CALL/RET 机器效果仍 Unsupported，第 3–6 步尚待实施。
-[第 1 步验证记录](llvm-flow-step1-validation.md)；[第 2 步验证记录](llvm-flow-step2-validation.md)。
+状态：第 1–3 步已实施；[契约](llvm-execution-contract.md)下的 V2 分发、x64 普通直接
+CALL 的状态同步和恢复入口已建立，Legacy 无法表达的调用/转移安全拒绝。A/B 不再使用
+预期失败标记；完整 Guest RET 和其余架构/形式仍待第 4 步，不能把当前前缀测试当作完整
+函数成功。第 4–6 步尚待实施。
+[第 1 步记录](llvm-flow-step1-validation.md)；[第 2 步记录](llvm-flow-step2-validation.md)；
+[第 3 步记录](llvm-flow-step3-validation.md)。
 
 
 ## 背景：现在的问题

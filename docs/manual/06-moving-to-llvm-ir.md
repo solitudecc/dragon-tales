@@ -57,9 +57,12 @@ produce explicit exits with the synchronized Guest PC; they are not `unreachable
 See [the execution contract](../llvm-execution-contract.md) for ownership,
 registration, memory and state requirements.
 
-Task 8 step 2 implements the state/branch exits. V2 currently stops before
-CALL/RET with `Unsupported`; their effects arrive in steps 3/4. IR verification
-or a matching execution prefix does not mean that full function execution works.
+Task 8 steps 2/3 implement state/branch exits and ordinary x64 direct CALL.
+Register the hexadecimal addresses in each implementation's `dragon.entrypoints`
+attribute to that implementation so Guest returns can resume the caller at the
+actual continuation with fresh state. Other CALL forms and LLVM RET currently
+stop `Unsupported`, pending steps 4/5. Execution prefixes do not prove complete
+Guest function execution. Legacy now rejects CALL, including reachable trace calls.
 
 ## The calling convention
 

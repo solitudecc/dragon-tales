@@ -62,6 +62,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     const auto *ir = graph.getIGNILBlock(address);
     if (!ir) return false;
     for (const auto &op : ir->ops()) {
+      if (op.opcode == ignil::Opcode::CALL) return false;
       if (op.opcode == ignil::Opcode::JMP &&
           (op.srcs.size() != 1 || !localTarget(op.srcs[0]))) return false;
       if (op.opcode == ignil::Opcode::CJMP &&
@@ -136,6 +137,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     return false;
   }
   llvm::IRBuilder<>(entryBB).CreateBr(bbMap->at(fn.startAddress()));
+  resumeEntries_=*bbMap;
 
   auto regFile = buildRegFile(llfn, &fn, graph);
 
@@ -150,6 +152,22 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
       llfn->eraseFromParent();
       return false;
     }
+  }
+  if (stateful()) {
+    entryBB->getTerminator()->eraseFromParent();
+    llvm::IRBuilder<> builder(entryBB);
+    auto *pc=builder.CreateLoad(builder.getInt64Ty(),regFile.at(arch_ == Architecture::ARM64 ? 264 : 128).at(64));
+    auto *unknown=llvm::BasicBlock::Create(*ctx_,"entry.unsupported",llfn);
+    auto *dispatch=builder.CreateSwitch(pc,unknown,resumeEntries_.size());
+    std::string entries;
+    for (const auto &[address,block] : resumeEntries_) {
+      dispatch->addCase(builder.getInt64(address),block);
+      if (!entries.empty()) entries+=',';
+      entries+=std::format("{:x}",address);
+    }
+    llfn->addFnAttr("dragon.entrypoints",entries);
+    llvm::IRBuilder<> out(unknown);
+    emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regFile,regsPtr,out,DRAGON_DETAIL_ENTRY,0);
   }
   return true;
 }
@@ -227,7 +245,13 @@ dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
     collectRegsFromOps(ignilBlock->ops(), regFile, regNames);
   }
 
-  if (stateful()) regFile[arch_ == Architecture::ARM64 ? 264 : 128].try_emplace(64,nullptr);
+  if (stateful()) {
+    regFile[arch_ == Architecture::ARM64 ? 264 : 128].try_emplace(64,nullptr);
+    if (arch_ == Architecture::X86_64) regFile[32].try_emplace(64,nullptr);
+    if (arch_ != Architecture::ARM64 && (regFile.contains(480) || regFile.contains(486))) {
+      regFile[480].try_emplace(8,nullptr);regFile[486].try_emplace(16,nullptr);
+    }
+  }
   allocateRegFile(llfn, regFile, regNames);
   return regFile;
 }
@@ -237,6 +261,13 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(const ignil::Block &block,
   if (block.empty() || mode_ != ExecutionMode::Legacy)
     return false;
 
+  bool live=true;
+  for (const auto &op : block.ops()) {
+    if (op.opcode == ignil::Opcode::LABEL) live=true;
+    if (!live) continue;
+    if (op.opcode == ignil::Opcode::CALL) return false;
+    if (op.opcode == ignil::Opcode::RET || op.opcode == ignil::Opcode::LOCALJMP) live=false;
+  }
   std::string fnName = name.empty() ? "trace" : std::string(name);
   auto *ptrTy = llvm::PointerType::getUnqual(*ctx_);
   auto *voidTy = llvm::Type::getVoidTy(*ctx_);
@@ -359,10 +390,26 @@ bool dragon::llvmlifter::LLVMLifter::liftOps(
       const bool unsupported = op.opcode == O::OPAQUE || unsupportedAddresses_.contains(op.address);
       if (unsupported) { emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION); continue; }
     }
+    if (stateful()) for (const auto &source : op.srcs)
+      if (const auto *temporary=std::get_if<ignil::Temp>(&source);temporary && !temps.contains(temporary->id))
+        return false; // a machine entry cannot depend on hidden transient SSA
     // A resolved machine trace drops its external branches, while preserving
     // the internal loop belonging to each individual machine instruction.
     if (trace && (op.opcode == O::JMP || op.opcode == O::CJMP)) continue;
     liftOp(op,regs,temps,memPtr,regsPtr,builder,bbMap);
+    if (stateful() && op.opcode == O::CALL) {
+      // Every Guest call returns to the dispatcher. A later invocation enters
+      // the exact Guest continuation with fresh register loads, never old SSA.
+      if (const auto *instruction=graph_->get(op.address)) {
+        const auto next=instruction->address()+instruction->size();
+        if (!bbMap.contains(next)) {
+          auto *continuation=llvm::BasicBlock::Create(*ctx_,"call.continue",function);
+          resumeEntries_.emplace(next,continuation);
+          builder.SetInsertPoint(continuation);
+        }
+      }
+      temps.clear();
+    }
   }
   return true;
 }
@@ -647,7 +694,24 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
 
     case ignil::Opcode::CALL: {
       if (stateful()) {
-        emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);
+        const auto *instruction=graph_->get(op.address);
+        // The initial state-boundary implementation covers ordinary x64
+        // direct near calls, including their real pre-callee SP/memory effects.
+        // Other CALL forms remain honestly Unsupported until steps 4/5.
+        if (arch_ != Architecture::X86_64 || !instruction || instruction->size()!=5 ||
+            instruction->bytes().empty() || instruction->bytes()[0]!=0xe8 ||
+            op.srcs.size()!=1 || !std::holds_alternative<ignil::Const>(op.srcs[0])) {
+          emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
+        }
+        auto *target=r0(); // evaluate before changing SP
+        const auto next=instruction->address()+instruction->size();
+        auto *sp=builder.CreateLoad(builder.getInt64Ty(),regs.at(32).at(64));
+        auto *newSP=builder.CreateSub(sp,builder.getInt64(8));
+        auto *slot=memoryAddress(newSP,8,op.address,regs,regsPtr,memPtr,builder);
+        builder.CreateAlignedStore(builder.getInt64(next),slot,llvm::Align(1));
+        builder.CreateStore(newSP,regs.at(32).at(64));
+        mergeIntoParent(32,64,newSP,regs,builder);syncOverlapping(32,64,newSP,regs,builder);
+        emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_CALL,op.address,target,regs,regsPtr,builder,0,next);
         break;
       }
       auto *ptrTy = llvm::PointerType::getUnqual(*ctx_);
@@ -726,6 +790,16 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
 void dragon::llvmlifter::LLVMLifter::writeBackRegisters(RegFile &regs,
                                                 llvm::Value *regsPtr,
                                                 llvm::IRBuilder<> &builder) {
+  // FPTOP is authoritative; every boundary exports a coherent architectural
+  // SW rather than stale TOP bits cached before a callee or x87 push/pop.
+  if (stateful() && arch_ != Architecture::ARM64 && regs.contains(480)) {
+    auto *top=builder.CreateLoad(builder.getInt8Ty(),regs.at(480).at(8));
+    auto *sw=builder.CreateLoad(builder.getInt16Ty(),regs.at(486).at(16));
+    auto *bits=builder.CreateShl(builder.CreateAnd(builder.CreateZExt(top,builder.getInt16Ty()),builder.getInt16(7)),builder.getInt16(11));
+    auto *updated=builder.CreateOr(builder.CreateAnd(sw,builder.getInt16(0xc7ff)),bits);
+    builder.CreateStore(updated,regs.at(486).at(16));
+    mergeIntoParent(486,16,updated,regs,builder);syncOverlapping(486,16,updated,regs,builder);
+  }
   // Write back the widest register at each offset so callers can observe
   // the final register state even after aggressive optimisation passes.
   // A view inside a register already written back (AH within RAX) holds the
@@ -987,10 +1061,15 @@ bool dragon::llvmlifter::LLVMLifter::setExecutionMode(ExecutionMode mode) {
 
 void dragon::llvmlifter::LLVMLifter::emitExit(std::uint64_t reason, std::uint64_t kind,
     std::uint64_t sourcePC, llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
-    llvm::IRBuilder<> &builder, std::uint64_t detail) {
+    llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC) {
+  emitExitAtValue(reason,kind,builder.getInt64(sourcePC),target,regs,regsPtr,builder,detail,returnPC);
+}
+void dragon::llvmlifter::LLVMLifter::emitExitAtValue(std::uint64_t reason, std::uint64_t kind,
+    llvm::Value *sourcePC, llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
+    llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC) {
   const bool known = target && !llvm::isa<llvm::UndefValue>(target) && !llvm::isa<llvm::PoisonValue>(target);
   if (target && !known) reason=DRAGON_EXIT_UNKNOWN_TARGET;
-  auto *pc = known ? builder.CreateZExtOrTrunc(target,builder.getInt64Ty()) : builder.getInt64(sourcePC);
+  auto *pc = known ? builder.CreateZExtOrTrunc(target,builder.getInt64Ty()) : sourcePC;
   const auto offset = arch_ == Architecture::ARM64 ? 264u : 128u;
   builder.CreateStore(pc,regs.at(offset).at(64));
   mergeIntoParent(offset,64,pc,regs,builder);
@@ -1001,10 +1080,10 @@ void dragon::llvmlifter::LLVMLifter::emitExit(std::uint64_t reason, std::uint64_
   const std::pair<std::size_t,llvm::Value *> fields[]{
     {offsetof(ExecExitV2,reason),builder.getInt64(reason)},
     {offsetof(ExecExitV2,transfer_kind),builder.getInt64(kind)},
-    {offsetof(ExecExitV2,source_pc),builder.getInt64(sourcePC)},
+    {offsetof(ExecExitV2,source_pc),sourcePC},
     {offsetof(ExecExitV2,next_pc),pc},
     {offsetof(ExecExitV2,next_pc_valid),builder.getInt64(valid)},
-    {offsetof(ExecExitV2,return_pc),builder.getInt64(0)},
+    {offsetof(ExecExitV2,return_pc),builder.getInt64(returnPC)},
     {offsetof(ExecExitV2,detail),builder.getInt64(detail)}
   };
   for (const auto &[offset,value] : fields)

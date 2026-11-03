@@ -228,6 +228,7 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `guard_truth.py` | 27 CFGs vs 20,736 Unicorn executions: byte/word/dword guards, signedness, boolean holes, narrowing and masks. Also runs without Z3. |
 | `function_llvm_diff.py` | Historical Legacy whole-function baseline. Strict default remains red (A stale state; B now explicitly rejected). `--assert-baseline` describes the saved 0aa4b73 implementation, not current V2 semantics. `--corrupt-output` is a negative control. See `docs/llvm-flow-step1-validation.md` for counts and Legacy CALL/RET normalizations. |
 | `function_dispatch_diff.py` | V2 x64 control-flow prefixes vs Unicorn at O0/O2. Includes branches, indirect/zero/missing targets, loops, budget and unsupported-instruction boundaries; compares PC/SP/full snapshots and memory with zero Legacy normalizations. prefix_match is not full CALL/RET success. |
+| `function_call_diff.py` | x64 direct CALL/state/resumption oracle vs Unicorn, O0/O2. C models implement exact fixture code plus Guest RET; the root stops before its still-unimplemented RET. Covers parameters, non-ABI GPR/vector clobbers, flags, raw x87 and missing-model resume. No Legacy normalizations; only declared undefined flags/status bits excluded. |
 | `llvm_diff.py` | LLVM-lifted code (compiled with `llc-21`, run natively) vs SymbolicExecutor. |
 | `analyze_bin.py BIN OBJDUMP` | Whole-binary report: objdump agreement, function recovery, empty functions, IGNIL coverage + top unlifted, indirect jumps, LLVM lift success. `STRATEGY=0/1`, `LLVM=0/1`. |
 | `table_truth.py BIN OBJDUMP STRATEGY` | i386 absolute jump tables: resolved targets vs the table in the image. |
@@ -380,10 +381,16 @@ Step 2 adds explicit StatefulV2 mode and uniform `dragon_v2_<arch>_<addr>` four-
 implementations (state, memory, runtime, exit), mirrored in C/Python. See
 `Execution.h` and the contract for the ABI/preconditions. `executeV2` dispatches by
 Guest PC; missing targets, budgets and unsupported instructions are explicit exits.
-Legacy rejects cross-boundary/dynamic jumps before emitting IR. Resolved table
-cases do not make the default edge UB. V2 CALL/RET still stop Unsupported pending
-steps 3/4. Only A retains `[!shouldfail]`; B's Legacy refusal is a safety result,
-not full execution success. Counts and exclusions: `docs/llvm-flow-step2-validation.md`.
+Step 3 handles ordinary x64 direct CALL: it pushes the Guest return address,
+flushes state, exits to the dispatcher, and resumes via `dragon.entrypoints`
+with fresh parameter loads. No caller SSA survives a callee. Legacy rejects CALL
+as well as unsupported branches; trace operations after a true RET stay ignored.
+No A/B expected-failure markers remain. V2 RET and other CALL forms are still
+Unsupported pending steps 4/5; root-RET prefixes are not full-function success.
+x87 SW.TOP is materialized from authoritative FPTOP at V2 boundaries. The two
+call-x87 fixtures exclude only manual-undefined FSTP C0/C2/C3 bits (8/10/14),
+not TOP, C1 or exception bits; `--corrupt-fpsw` flips defined C1 and must fail.
+See `docs/llvm-flow-step3-validation.md` for counts, exact masks and limitations.
 For corpus IR verification use `LLVM_MODE=v2` (check_one.py); default Legacy now
 reports intentional refusal of functions whose transfers it cannot represent.
 

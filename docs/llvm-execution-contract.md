@@ -1,7 +1,8 @@
 # LLVM 函数执行契约（任务 8）
 
-状态：2026-11-03 所有者要求继续下一步，按已提交方案开始实施。第 2 步只兑现基础 V2
-状态/分发出口，CALL/RET 机器效果仍明确 Unsupported；见本文第 9 节及分步验证记录。
+状态：2026-11-03 所有者要求继续下一步，按已提交方案开始实施。第 2/3 步兑现基础 V2
+状态/分发和 x64 普通直接 CALL 的同步；完整 RET/其他 CALL 形式仍 Unsupported，
+见本文第 9/10 节及分步验证记录。
 第 1 步基线为 `0aa4b73`，当时只增加文档和测试，没有修改公共接口或降级实现。
 本文描述六步完成后的目标。中间提交只宣布已经兑现的能力；尚未实现的机器效果必须明确
 拒绝/退出 Unsupported，阶段测试须说明停止边界或使用了哪些既有抽象兼容项，不能冒充
@@ -215,3 +216,31 @@ V2 使用独立 freeze 值，标志字节限制为 0/1，不把未知效果交�
 `function_dispatch_diff.py` 将相同机器代码执行到这些明确边界，比较 PC/SP/所有已建模
 寄存器/全部映射内存和退出记录；不使用第 1 步的 Legacy PC/SP/CALL 栈归一。统计名为
 prefix_match，不能解释为完整 Guest CALL/RET 已实现或 A 已修复。
+
+
+## 10. 第 3 步：同步与精确恢复入口
+
+选择分发循环方案：Guest CALL 写回状态后返回运行时；运行时按 Guest 地址调用四指针
+实现。被调方 Guest Return/其他转移产生新 PC，运行时按实际目标分发。Caller 再次进入时
+从寄存器区重新加载自己的全部视图，旧局部值/SSA 不跨越这次调用；没有隐含 ABI 假设。
+
+每个 V2 实现支持原 Guest BB 入口及已解码 CALL 的 fall-through；LLVM 函数属性
+`dragon.entrypoints` 以逗号分隔的十六进制地址列出。调用方注册这些地址到同一个实现，
+不能把它们错误地映射到函数起点重新执行。入口 switch 依据权威 Guest PC 选择真实位置；
+未列出的入口明确 Unsupported + Entry detail。部分 SSA 临时量不能充当隐藏的跨调用状态；
+入口/继续点需要缺少的临时定义时 lift 明确失败。
+
+为了让同步测试看到正确的 SP/返回地址槽，第 3 步同时落实普通 x64 直接 near CALL
+（无前缀 E8 rel32）的机器前置效果：先求目标，再在 Guest 栈压入解码所得 fall-through，
+同步 RSP 和 PC，然后 Transfer Call。需要实现的目标缺失时，PC/栈已提交；补模型后从该
+PC 继续，不重复压栈。return_pc 记录这次 CALL 的 fall-through。
+
+完整 LLVM RET、i386/A64 CALL 和其余 CALL 形式留给第 4/5 步，当前仍在它们之前明确
+Unsupported。第 3 步的外部测试模型独立实现夹具 Guest 指令和真实 Guest RET；Unicorn
+执行同一组机器字节，Caller 返回后执行到 root RET 之前。它验证完整的调用边界和恢复，
+但不是 LLVM root RET 已实现的证明。
+
+x87 在每次 V2 写回时以 FPTOP 合成 SW.TOP；两者不允许因 cached 值而产生过期的跨函数
+视图。FSTP 的 C0/C2/C3 按 Intel SDM 未定义，只在相应夹具声明的 8/10/14 位屏蔽；
+其余 SW 位、TOP/TAG/CW 和每个物理寄存器的全部 80 位继续比较。细节和检测 C1 的
+负对照见第 3 步验证记录。该规则没有改变现有 IGNIL 抽象。
