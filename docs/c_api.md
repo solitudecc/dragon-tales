@@ -878,13 +878,35 @@ dragon_llvm_lifter_destroy(lifter);
 dragon_graph_destroy(graph);
 ```
 
+Select the execution mode before lifting:
+
+```c
+int selected = dragon_llvm_lifter_set_execution_mode(lifter, DRAGON_LLVM_STATEFUL_V2);
+```
+
+V2 emits `void dragon_v2_<arch>_<addr>(state, memory, runtime, exit)`, preserving
+the default Legacy names/signatures. Compile/JIT the implementations and register
+all addresses in `dragon.entrypoints`, then call `dragon_llvm_execute_v2` with
+caller-owned `dragon_guest_state_v2_t`, `dragon_guest_memory_v2_t`,
+`dragon_exec_context_v2_t` and `dragon_exec_exit_v2_t` objects. Their shared
+layout comes from `dragon/lifters/llvm/Execution.h`, included by `dragon_c.h`.
+
+Only Guest Return to `root_exit_pc` ends root execution; CALL/JMP to that address
+still requires an implementation. Missing targets, unsupported effects and budgets
+are explicit exits. Import names in `!dragon.imports` are diagnostic origins and
+never invoke host library functions. Legacy safely refuses CALL or transfers it
+cannot represent. See [the execution contract](llvm-execution-contract.md) for
+supported architectures/host ABI, layouts, ownership and registration rules.
+
 **API summary**
 
 | Function | Returns | Notes |
 |---|---|---|
 | `dragon_llvm_lifter_create(arch, module_name)` | `dragon_llvm_lifter_t*` | `module_name` may be NULL (defaults to `"lifted"`) |
 | `dragon_llvm_lifter_destroy(l)` | — | |
-| `dragon_llvm_lifter_lift(l, fn, graph)` | `int` (0/1) | 0 if any IGNIL block is missing |
+| `dragon_llvm_lifter_set_execution_mode(l, mode)` | `int` (0/1) | Select before lifting; 0 for invalid mode or nonempty module |
+| `dragon_llvm_execute_v2(state, memory, context, exit, root_exit_pc)` | — | Executes registered V2 implementations; status is in `exit` |
+| `dragon_llvm_lifter_lift(l, fn, graph)` | `int` (0/1) | 0 for invalid/missing blocks, duplicate symbols or unsupported Legacy transfers |
 | `dragon_llvm_lifter_ir(l)` | `char*` (heap) | Free with `dragon_cstr_free` |
 | `dragon_llvm_lifter_run_mem2reg(l)` | — | Promotes allocas → SSA |
 | `dragon_llvm_lifter_run_inst_combine(l)` | — | Folds sub-register patterns |

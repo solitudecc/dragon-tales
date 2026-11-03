@@ -750,6 +750,32 @@ if lifter.lift(fn, graph):
     print(lifter.ir())    # optimized IR
 ```
 
+### StatefulV2 execution
+
+The default is `LLVMExecutionMode.LEGACY`. To emit stateful Guest functions:
+
+```python
+lifter = dragon.LLVMLifter(
+    arch=dragon.Architecture.X86_64,
+    execution_mode=dragon.LLVMExecutionMode.STATEFUL_V2)
+assert lifter.lift(fn, graph)
+```
+
+V2 emits uniform four-pointer implementations named `dragon_v2_<arch>_<addr>`.
+Compile/JIT the IR and register all addresses listed in `dragon.entrypoints`;
+the shared C types and `dragon.lib.dragon_llvm_execute_v2` use the same
+`Execution.h` layout. The caller owns all buffers and implementations. The
+Guest PC in the register file drives dispatch, and the exit record distinguishes
+normal root Return from missing targets, unsupported effects and budgets.
+A CALL/JMP to the root exit address does not count as a Guest Return.
+
+With `LoadedImage.disassemble()` the IR can contain conservative
+`!dragon.imports` provenance; raw-byte Graphs have no loader names to infer.
+Names do not call host libraries. V2 models near x86 CALL/RET and ordinary A64
+BL/BLR/RET; Legacy safely refuses transfers its interface cannot represent.
+See [the execution contract](llvm-execution-contract.md) for exact supported
+conditions, state/memory layouts, ownership and registration requirements.
+
 ### Optimization passes
 
 Individual passes can be called separately or use `optimize()` for the
@@ -769,7 +795,7 @@ lifter.optimize()
 
 | Method | Returns | Notes |
 |---|---|---|
-| `lift(function, graph)` | `bool` | `False` if any IGNIL block is missing |
+| `lift(function, graph)` | `bool` | `False` for invalid/missing blocks, duplicate symbols or unsupported Legacy transfers |
 | `ir()` | `str` | Textual LLVM IR for all lifted functions |
 | `run_mem2reg()` | — | |
 | `run_inst_combine()` | — | |
@@ -1087,6 +1113,7 @@ lifted x86-64.
 |-------|--------|
 | `dragon.Architecture` | `UNKNOWN`, `X86_32`, `X86_64`, `ARM32`, `ARM64`, `RISCV32`, `RISCV64` |
 | `dragon.Syntax` | `INTEL`, `ATT` |
+| `dragon.LLVMExecutionMode` | `LEGACY`, `STATEFUL_V2` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
 | `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI`, `OPAQUE` (43 values) |

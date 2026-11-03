@@ -25,14 +25,29 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
     lifter=base.dragon.LLVMLifter(arch_id,
                                 execution_mode=base.dragon.LLVMExecutionMode.STATEFUL_V2)
     call_sites=set()
-    for address,code in [(entry,fixture['code_hex'])]+([] if model_factory else [(s['address'],s['code_hex']) for s in fixture['stubs']]):
-        dis=base.dragon.Disassembler(arch_id,base.dragon.Configuration(strategy=0))
-        graph=dis.analyze(bytes.fromhex(code),address)
+    local_functions=fixture.get('local_functions',[])
+    image_graph=None
+    if fixture.get('image_format'):
+        from function_image_fixture import make_image
+        data=make_image(fixture,entry,base.ROOT);(work/('image.'+fixture['image_format'])).write_bytes(data)
+        image=base.dragon.LoadedImage.load_bytes(data)
+        if image.architecture!=arch_id or not any(s.imported and s.name==fixture['expected_import_name'] for s in image.symbols()):
+            raise RuntimeError('fixture image import identity mismatch')
+        image_graph=image.disassemble(base.dragon.Configuration(strategy=0))
+    for address,code in [(entry,fixture['code_hex'])]+[(s['address'],s['code_hex']) for s in local_functions]+([] if model_factory else [(s['address'],s['code_hex']) for s in fixture['stubs']]):
+        if image_graph is not None and address in {entry}|{s['address'] for s in local_functions}:graph=image_graph
+        else:
+            dis=base.dragon.Disassembler(arch_id,base.dragon.Configuration(strategy=0))
+            graph=dis.analyze(bytes.fromhex(code),address)
         function=graph.get_function(address)
         if not function or not function.is_valid: raise RuntimeError('invalid function')
         if not lifter.lift(function,graph): raise RuntimeError('V2 lift rejected')
         call_sites.update(i.address for i in graph.instructions() if i.is_call)
     raw=work/'raw.ll';raw.write_text(lifter.ir())
+    if fixture.get('image_format'):
+        symbol=f'dragon_v2_{architecture}_{entry:x}'
+        record=r'!\d+ = !\{!"'+re.escape(symbol)+r'", i64 \d+, i64 '+str(fixture['image_slot'])+r', !"'+re.escape(fixture['expected_import_name'])+r'"\}'
+        if not re.search(record,lifter.ir()):raise RuntimeError('root import provenance missing or incorrect')
     subprocess.run([args.opt,'-passes=verify','-disable-output',str(raw)],check=True,capture_output=True)
     source=raw
     if level=='O2':
@@ -49,6 +64,8 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
         return [(address,symbol)]
     root_symbol=f'dragon_v2_{architecture}_{entry:x}'
     names=entries(entry,root_symbol);root_count=len(names)
+    for local in local_functions:
+        address=local['address'];names.extend(entries(address,f'dragon_v2_{architecture}_{address:x}'))
     wrappers=[]
     for stub in fixture['stubs']:
         address=stub['address'];symbol=f'dragon_v2_{architecture}_{address:x}';wrapper=f'model_{address:x}'

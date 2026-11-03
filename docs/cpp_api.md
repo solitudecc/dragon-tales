@@ -838,7 +838,7 @@ Run them in order for best results.
 
 ### Lifted function signature
 
-Every lifted function has the signature:
+The default Legacy mode emits:
 
 ```llvm
 define void @sub_<addr>(ptr %mem, ptr %regs)
@@ -853,6 +853,30 @@ convention, `Configuration::callingConvention`: System V (RDI, RSI, RDX, RCX,
 R8, R9) by default on x86-64, Microsoft x64 (RCX, RDX, R8, R9) with
 `CallingConvention::Win64` - which `loader::disassembleImage` selects for an
 x86-64 PE - and AAPCS64 (X0-X7) on AArch64.
+
+### StatefulV2 Guest execution
+
+Select `setExecutionMode(ExecutionMode::StatefulV2)` before the first lift.
+V2 emits `void dragon_v2_<arch>_<hex-address>(state, memory, runtime, exit)`.
+The aliases and `executeV2` are in `dragon/lifters/llvm/Execution.hpp`, using
+shared C layouts from `Execution.h`. Supported architectures are x86-32,
+x86-64 and AArch64; the host ABI requires 64-bit little-endian pointers.
+
+The caller owns the register snapshot, bounded flat Guest memory and target
+registry. Compile/JIT each implementation and register **every** Guest address
+in its `dragon.entrypoints` attribute to that four-pointer implementation.
+Guest CALL commits stack/LR effects once and returns to the dispatcher;
+continuations reload Guest state. Only Guest Return to `rootExitPC` ends root
+execution; a CALL/JMP to the same address still needs a registered target.
+Missing models, unsupported instructions and budgets are explicit exits.
+
+A Graph from `loader::disassembleImage` can carry proven import-slot origins
+as `!dragon.imports` metadata (implementation name, instruction PC, slot, name).
+Names neither invoke host symbols nor constrain external effects. The recovered
+`dragon.signature` is analysis metadata and does not change the V2 protocol or
+assume preserved registers. Legacy refuses CALL and transfers its two-pointer
+protocol cannot represent; the trace API remains Legacy. See the
+[execution contract](llvm-execution-contract.md) for layouts and preconditions.
 
 ### Lifting a single block without a Graph
 
@@ -875,13 +899,13 @@ if (lifter.liftBlock(block, "my_trace")) {
 Because a linear, already-resolved trace has no unresolved branch left to
 encode (the block's op order *is* the path that was actually taken),
 `JMP`/`CJMP` ops — which `liftTrace` still emits per-instruction, same as
-normal lifting — are dropped rather than translated, instead of producing
-`unreachable` (their fate under the `Graph`-based `lift()` when a target
-isn't in the function). `CALL` is preserved as a real LLVM call. If the
+normal lifting — are dropped. Reachable `CALL` is rejected because the
+Legacy trace protocol has no stateful callee interface. If the
 block ends in `RET`, anything after it is ignored, matching how a real
 `ret` would end execution; if it has no `RET`, a synthetic `ret void` (with
 the usual register write-back) is appended so the function is always
-well-formed. Returns `false` for an empty block.
+well-formed. Blocks with unlifted instruction markers are refused: a graph-free
+trace cannot safely reproduce unknown effects. Returns `false` for an empty block.
 
 After `runMem2Reg()` the alloca-based register representation is promoted to
 SSA values. The `%regs` boundary loads/stores are the only register memory

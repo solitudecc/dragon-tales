@@ -1,18 +1,18 @@
 # LLVM 函数执行契约（任务 8）
 
-状态：2026-11-03 所有者要求继续下一步，按已提交方案开始实施。第 2/3 步兑现基础 V2
-状态/分发和 x64 普通直接 CALL 的同步；完整 RET/其他 CALL 形式仍 Unsupported，
-见本文第 9/10 节及分步验证记录。
+状态：2026-11-03 按所有者要求继续实施，六步已完成；三架构 Guest CALL/RET、
+精确恢复及导入来源元数据见第 9–12 节。最终验证见[第 6 步记录](llvm-flow-step6-validation.md)。第 9/10 节保留分步
+实施边界，当前能力以第 11/12 节及最新验证记录为准。
 第 1 步基线为 `0aa4b73`，当时只增加文档和测试，没有修改公共接口或降级实现。
-本文描述六步完成后的目标。中间提交只宣布已经兑现的能力；尚未实现的机器效果必须明确
+本文描述已实施的执行协议。分步记录保留当时的实现范围；尚未实现的机器效果必须明确
 拒绝/退出 Unsupported，阶段测试须说明停止边界或使用了哪些既有抽象兼容项，不能冒充
 最终 V2 全函数执行通过。
 
 后续步骤以[六步计划](llvm-control-flow.md)为准，每步独立分支、提交、合入并汇报。
 
-## 1. 要解决的问题及当前接口
+## 1. 原始问题及基线接口（第 1 步）
 
-当前 `LLVMLifter::lift()` 生成 `void sub_<地址>(ptr mem, ptr regs)`，入口从寄存器字节区
+基线 `0aa4b73` 的 `LLVMLifter::lift()` 生成 `void sub_<地址>(ptr mem, ptr regs)`，入口从寄存器字节区
 加载局部 alloca，在 RET 写回；直接 CALL 却生成 `void fn_<地址>(ptr mem)`，调用前后没有
 寄存器同步。跨函数 JMP/CJMP 和 switch default 可以进入 `unreachable`。
 
@@ -282,3 +282,15 @@ NeedTarget/Unsupported/Budget 仍单独统计，不能计作正常返回。Legac
 会使不能证明的来源失效。直接 CALL 的目标可追踪有限的简单 JMP thunk；循环、复杂
 控制流或未知地址停止命名。Graph 合并有冲突的槽位名会丢弃，不进行任选其一。
 原始字节 Disassembler 的 Graph 没有加载器表时不猜名称；分发语义与名称独立。
+
+
+## 13. 保守拒绝的补充边界
+
+Legacy 同时检查解码的 CALL 和未表达成 IGNIL RET 的返回，避免未建模控制指令
+绕过拒绝检查。Graph-free trace 必须没有 unlifted 标记；已知操作中的普通 RET 仍是
+终止点。未知 x86 控制指令即使没有显式/隐式寄存器定义，也必须登记 unlifted。
+
+V2 的普通近 JMP/Jcc 分发不推测分段/认证语义。x86 far JMP、尚未实现的 word JMP/
+Jcc 及不支持的控制前缀，A64 BRAA/BRAB 等认证分支，执行前报告 Unsupported。
+未知 far/word-memory JMP 不得把寻址基寄存器当成真实目标；其 IGNIL 目标保持未知。
+这些是缺少模型的退出，不算完整函数正常返回；未增加模型或改变入口协议。

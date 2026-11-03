@@ -1532,7 +1532,15 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     if (desc.isConditionalBranch()) {
       liftJcc(*mc, addr, insn.size(), out, tempId);
     } else if (desc.isBranch()) {
-      liftJmp(*mc, addr, insn.size(), out, tempId);
+      const auto name=instrInfo_->getName(opc);
+      if(name.starts_with("FARJMP") || name=="JMP16m") {
+        // Segmented destinations and the missing word-memory form cannot be
+        // represented by treating MC operand 0 as a flat target register.
+        auto target=newTemp(tempId,architecture_==Architecture::X86_64 ? 64 : 32);
+        out.append({ignil::Opcode::UNDEF,target,{},addr});
+        out.append({ignil::Opcode::JMP,std::nullopt,{target},addr});
+        out.noteUnlifted(addr);
+      } else liftJmp(*mc, addr, insn.size(), out, tempId);
     } else {
       // Unknown instruction. Side-effect-free ones (prefetch, fence, nop,
       // ...) have no explicit register-def operands, so nothing is emitted
@@ -1582,7 +1590,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
       // through, was really not lifted - as opposed to a nop or a prefetch.
       constexpr unsigned kMemoryOperandCount = 5;
       if (desc.getNumDefs() != 0 || !desc.implicit_defs().empty() ||
-          mc->getNumOperands() >= kMemoryOperandCount)
+          mc->getNumOperands() >= kMemoryOperandCount || desc.isCall() || desc.isReturn())
         out.noteUnlifted(addr);
     }
   }

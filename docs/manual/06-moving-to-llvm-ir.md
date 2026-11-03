@@ -57,12 +57,13 @@ produce explicit exits with the synchronized Guest PC; they are not `unreachable
 See [the execution contract](../llvm-execution-contract.md) for ownership,
 registration, memory and state requirements.
 
-Task 8 steps 2/3 implement state/branch exits and ordinary x64 direct CALL.
-Register the hexadecimal addresses in each implementation's `dragon.entrypoints`
-attribute to that implementation so Guest returns can resume the caller at the
-actual continuation with fresh state. Other CALL forms and LLVM RET currently
-stop `Unsupported`, pending steps 4/5. Execution prefixes do not prove complete
-Guest function execution. Legacy now rejects CALL, including reachable trace calls.
+V2 implements near x64/i386 CALL/RET, including i386 word forms, and ordinary
+A64 BL/BLR/RET Xn. Register all hexadecimal addresses in `dragon.entrypoints`
+so Guest returns resume the actual continuation with fresh state. Known import
+origins from a loaded image appear in `!dragon.imports` metadata. Names do not
+provide external implementations. Legacy rejects CALL, including reachable
+trace calls. Complete execution and boundary details are described
+[below](#executing-guest-functions-with-statefulv2).
 
 ## The calling convention
 

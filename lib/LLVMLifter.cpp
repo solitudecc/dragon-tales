@@ -50,6 +50,17 @@ std::optional<unsigned> x86ControlWord(const dragon::Instruction *instruction,
   } else if ((b[p]==0xc3 && b.size()==p+1) || (b[p]==0xc2 && b.size()==p+3)) return word;
   return std::nullopt; // far/interrupt/authenticated effects are not near CALL/RET
 }
+std::optional<std::size_t> x86BranchOpcode(const dragon::Instruction *instruction,dragon::Architecture arch) {
+  const auto &b=instruction->bytes();std::size_t p=0;
+  while(p<b.size()) {
+    const auto byte=b[p];
+    if(byte==0x66 || byte==0xf0 || byte==0xf2 || byte==0xf3)return std::nullopt;
+    if(byte==0x67 || byte==0x26 || byte==0x2e || byte==0x36 || byte==0x3e || byte==0x64 || byte==0x65 ||
+       (arch==dragon::Architecture::X86_64 && byte>=0x40 && byte<=0x4f))++p;
+    else return p;
+  }
+  return std::nullopt;
+}
 }
 
 bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
@@ -93,6 +104,15 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   if (mode_ == ExecutionMode::Legacy) for (const auto &[address, block] : blocks) {
     const auto *ir = graph.getIGNILBlock(address);
     if (!ir) return false;
+    // The decoder may recognize control flow with no supported IGNIL form.
+    // Check machine calls too, so a dropped far/unknown call cannot bypass
+    // the Legacy refusal merely by having no CALL op in the block.
+    for (const auto *instruction : block.instructions()) {
+      if (instruction->isCall()) return false;
+      if (instruction->isReturn() && std::none_of(ir->ops().begin(),ir->ops().end(),[&](const auto& op) {
+            return op.address==instruction->address() && op.opcode==ignil::Opcode::RET;
+          })) return false;
+    }
     for (const auto &op : ir->ops()) {
       if (op.opcode == ignil::Opcode::CALL) return false;
       if (op.opcode == ignil::Opcode::JMP &&
@@ -300,7 +320,7 @@ dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
 
 bool dragon::llvmlifter::LLVMLifter::liftBlock(const ignil::Block &block,
                                                std::string_view name) {
-  if (block.empty() || mode_ != ExecutionMode::Legacy)
+  if (block.empty() || !block.unlifted().empty() || mode_ != ExecutionMode::Legacy)
     return false;
 
   bool live=true;
@@ -379,6 +399,20 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(
                                                     : ((word&0xfffffc1f)==0xd65f0000);
           unsupported |= !normal;
         } else unsupported |= !x86ControlWord(instruction,arch_,instruction->isCall()).has_value();
+      }
+      if(instruction->isJump() && !instruction->isCall() && !instruction->isReturn()) {
+        if(arch_==Architecture::ARM64 && !instruction->isConditional()) {
+          const auto word=a64Word(instruction);
+          unsupported |= (word&0xfc000000)!=0x14000000 && (word&0xfffffc1f)!=0xd61f0000;
+        } else if(arch_!=Architecture::ARM64) {
+          const auto p=x86BranchOpcode(instruction,arch_);
+          if(!p)unsupported=true;
+          else if(!instruction->isConditional()) {
+            const auto &b=instruction->bytes();
+            unsupported |= !((b[*p]==0xe9 && b.size()==*p+5) || (b[*p]==0xeb && b.size()==*p+2) ||
+                (b[*p]==0xff && *p+1<b.size() && ((b[*p+1]>>3)&7)==4));
+          }
+        }
       }
       if (unsupported) {unsupportedPC=instruction->address();break;}
     }

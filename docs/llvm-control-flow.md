@@ -1,15 +1,16 @@
-# LLVM Lift：跨函数控制流与调用边界（实施中）
+# LLVM Lift：跨函数控制流与调用边界（已完成）
 
-状态：第 1–5 步已实施；[契约](llvm-execution-contract.md)下的 V2 分发、状态同步、
+状态：六步已完成（2026-11-03）；[契约](llvm-execution-contract.md)下的 V2 分发、状态同步、
 精确恢复及 x64/i386/A64 Guest CALL/RET 已验证。A/B 为普通回归，无预期失败标记。
 正常根返回和 NeedTarget/Unsupported/Budget 边界分开计数。IAT/GOT/PLT/thunk 名称
-作为保守诊断元数据恢复；第 6 步最终整体回归待实施。
+作为保守诊断元数据恢复。最终对拍 1792/1792、CTest 469/469（无 Z3 320/320），
+两套 69 样本、203113 函数 verify，跳转表 wrong=0；已知语料告警与未覆盖项单独保留。
 [第 1 步记录](llvm-flow-step1-validation.md)；[第 2 步记录](llvm-flow-step2-validation.md)；
 [第 3 步记录](llvm-flow-step3-validation.md)；[第 4 步记录](llvm-flow-step4-validation.md)；
-[第 5 步记录](llvm-flow-step5-validation.md)。
+[第 5 步记录](llvm-flow-step5-validation.md)；[最终记录](llvm-flow-step6-validation.md)。
 
 
-## 背景：现在的问题
+## 背景：修复前的问题
 
 基本块内的指令语义已经过多层对拍验证（单指令、真实块、LLVM 原生执行）。但**函数级的控制流和调用边界**在
 LLVM 降级层（`lib/LLVMLifter.cpp`）存在两类确认的问题，而且以前的验证没有覆盖到：

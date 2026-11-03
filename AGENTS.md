@@ -377,8 +377,8 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 ## 6. Backlog (suggested order)
 
-Known LLVM lowering gaps at call boundaries and out-of-function control flow, with
-the implementation plan: `docs/llvm-control-flow.md`.
+Task 8 LLVM call boundaries and out-of-function flow are implemented and validated;
+plan and history: `docs/llvm-control-flow.md`.
 The owner requested continuing with the submitted contract on 2026-11-03.
 Step 2 adds explicit StatefulV2 mode and uniform `dragon_v2_<arch>_<addr>` four-pointer
 implementations (state, memory, runtime, exit), mirrored in C/Python. See
@@ -401,7 +401,17 @@ through Graph's existing pimpl and records conservative `!dragon.imports` proven
 Provenance is local to a block, invalidates aliases/calls, and follows at most
 8 simple JMP thunks. Conflicting merged names stay discarded. Unknown names
 still dispatch by actual Guest address. See `docs/llvm-flow-step5-validation.md`;
-final whole-corpus execution/verification work remains step 6.
+step 6 is complete: `docs/llvm-flow-step6-validation.md`.
+Final source: CTest 469/469 (no Z3 320/320); 1792 native V2 records match
+(1226 root Return, 262 NeedTarget, 288 Unsupported, 16 Budget), zero skips.
+Both corpora: 69 samples, 203113 functions / 1656 modules verify, no new baseline
+alerts; table oracles exact1124 / wrong0 / unresolved116 / nobound558 / unreadable42.
+Real LLVM blocks: 450 comparisons, 142 registered skips, zero differences; toy-vm
+6 tests/107 assertions; guards each27 CFGs/20736 executions with and without Z3.
+Unknown decoded CALL/RET cannot bypass Legacy refusal; complete trace blocks must
+have no unlifted markers. Far/word-memory JMP targets stay UNDEF and unlifted.
+V2 also refuses unsupported x86 branch prefixes/word forms and authenticated A64
+branches before execution. No new ABI/name or CALL/RET-abstraction changes in step6.
 x87 SW.TOP is materialized from authoritative FPTOP at V2 boundaries. The two
 call-x87 fixtures exclude only manual-undefined FSTP C0/C2/C3 bits (8/10/14),
 not TOP, C1 or exception bits; `--corrupt-fpsw` flips defined C1 and must fail.

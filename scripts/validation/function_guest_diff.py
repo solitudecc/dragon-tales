@@ -47,17 +47,22 @@ class Adapter:
         for name,value in f.get('set_gprs',{}).items():
             slot=next((o for n,o,w,u in self.gprs if n==name),None)
             if slot is None:raise ValueError('unknown input register '+name)
-            base.put(regs,slot,value)
-        for addr,code in [(entry,f['code_hex'])]+[(s['address'],s['code_hex']) for s in f['stubs']]:
+            base.put(regs,slot,value[trial%len(value)] if isinstance(value,list) else value)
+        for addr,code in [(entry,f['code_hex'])]+[(s['address'],s['code_hex']) for s in f.get('local_functions',[])]+[(s['address'],s['code_hex']) for s in f['stubs']]:
             data=bytes.fromhex(code);memory[addr:addr+len(data)]=data
         if not self.a64:
             sp=base.get(regs,self.sp_offset);width=4 if self.x32 else 8
             base.put(memory,sp+f.get('root_return_offset',0),f.get('root_return_target',base.SENTINEL),width)
-        for address in f.get('missing_targets',[]):memory[address]=0x90 if not self.a64 else 0
+        for address in f.get('missing_targets',[]):
+            if address<len(memory):memory[address]=0x90 if not self.a64 else 0
         for cell in f.get('memory_values',[]):base.put(memory,cell['address'],cell['value'],cell['width'])
         return regs,memory
     def reference(self,f,regs,memory,entry):
         uc=Uc(self.arch_id,self.mode);uc.mem_map(0,base.MEM_SIZE);uc.mem_write(0,bytes(memory))
+        # Missing implementations are observation boundaries. A dummy code
+        # page lets Unicorn expose the actual PC before the target executes;
+        # the page is never read/written by a fixture instruction.
+        for page in {address&~0xfff for address in f.get('missing_targets',[]) if address>=base.MEM_SIZE}:uc.mem_map(page,0x1000)
         for _,off,width,reg in self.gprs:uc.reg_write(reg,base.get(regs,off,width))
         flags=sum(regs[o]<<b for _,o,b in self.flags)
         uc.reg_write(A.UC_ARM64_REG_NZCV if self.a64 else X.UC_X86_REG_EFLAGS,flags if self.a64 else flags|2)
@@ -67,16 +72,25 @@ class Adapter:
             uc.reg_write(X.UC_X86_REG_FPTAG,base.get(regs,482,2));uc.reg_write(X.UC_X86_REG_FPCW,base.get(regs,484,2));uc.reg_write(X.UC_X86_REG_FPSW,base.get(regs,486,2))
         events=collections.Counter();targets={s['address'] for s in f['stubs']};last=[entry,0];stop=[]
         def hook(u,pc,size,data):
+            pc=u.reg_read(self.pc_reg) # architectural PC, rather than the hook's widened address label
+            if pc==base.SENTINEL:u.emu_stop();return
             if pc in f.get('unsupported_before',[]):stop.extend([5,0,pc,pc,1,0,2]);u.emu_stop();return
             if pc in f.get('missing_targets',[]):
                 kind=f.get('boundary_kind',1);stop.extend([3,kind,last[0],pc,1,last[0]+last[1] if kind==2 else 0,0]);u.emu_stop();return
             if pc in targets:events.update([pc])
             last[:]=[pc,size]
-        uc.hook_add(UC_HOOK_CODE,hook);uc.emu_start(entry,base.SENTINEL,count=10000)
+        uc.hook_add(UC_HOOK_CODE,hook)
+        until=0 if any(a>=base.MEM_SIZE for a in f.get('missing_targets',[])) else base.SENTINEL
+        uc.emu_start(entry,until,count=10000)
         pc=uc.reg_read(self.pc_reg)
         if not stop:
             if pc!=base.SENTINEL:raise RuntimeError('reference did not reach root exit within budget')
-            stop=[1,3,last[0],pc,1,0,0]
+            code=bytes(uc.mem_read(last[0],last[1]))
+            returned=(len(code)==4 and int.from_bytes(code,'little')&0xfffffc1f==0xd65f0000) if self.a64 else base.is_near_return(code)
+            if returned:stop=[1,3,last[0],pc,1,0,0]
+            elif pc in f.get('missing_targets',[]):
+                kind=f.get('boundary_kind',1);stop=[3,kind,last[0],pc,1,last[0]+last[1] if kind==2 else 0,0]
+            else:raise RuntimeError('root exit marker reached without Guest RET')
         out=bytearray(regs)
         for _,off,width,reg in self.gprs:base.put(out,off,uc.reg_read(reg),8)
         base.put(out,self.pc_offset,pc)

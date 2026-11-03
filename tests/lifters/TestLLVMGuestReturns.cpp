@@ -62,3 +62,36 @@ TEST_CASE("V2 x86 near RET produces an architectural Return exit", "[llvm][guest
     CHECK(returned);
   }
 }
+
+TEST_CASE("Legacy rejects decoded calls and returns absent from the abstract IL", "[llvm][legacy-transfer]") {
+  using namespace dragon;
+  for (auto arch:{Architecture::X86_32,Architecture::X86_64}) {
+    std::vector<std::vector<std::uint8_t>> cases{{0xff,0x18,0xc3},{0xcb},{0xca,0x08,0x00}};
+    if(arch==Architecture::X86_32)cases.push_back({0x9a,0x00,0x20,0x00,0x00,0x08,0x00,0xc3});
+    for (const auto& code:cases) {
+      INFO(ArchitectureName(arch));INFO(unsigned(code.front()));
+      Disassembler dis{arch,Configuration{}};Graph graph{arch,Configuration{}};dis.disassemble(code,0x1000,graph);
+      REQUIRE(graph.get(0x1000));CHECK((graph.get(0x1000)->isCall() || graph.get(0x1000)->isReturn()));
+      Function root{&graph,0x1000};REQUIRE(root.isValid());llvmlifter::LLVMLifter lifter{arch};
+      CHECK_FALSE(lifter.lift(root,graph));CHECK(lifter.module().empty());
+    }
+  }
+}
+
+TEST_CASE("Unknown x86 control instructions are recorded even without register definitions", "[llvm][legacy-transfer]") {
+  using namespace dragon;
+  for (const auto& code:std::vector<std::vector<std::uint8_t>>{{0x9a,0x00,0x20,0x00,0x00,0x08,0x00,0xc3},{0xcb},{0xca,0x08,0x00},{0xea,0x00,0x20,0x00,0x00,0x08,0x00},{0xff,0x28},{0x66,0xff,0x20}}) {
+    Disassembler dis{Architecture::X86_32,Configuration{}};Graph graph{Architecture::X86_32,Configuration{}};
+    dis.disassemble(code,0x1000,graph);const auto *block=graph.getIGNILBlock(0x1000);REQUIRE(block);
+    CHECK(std::find(block->unlifted().begin(),block->unlifted().end(),0x1000)!=block->unlifted().end());
+  }
+}
+
+TEST_CASE("Legacy trace refuses a block with unmodelled instruction effects", "[llvm][legacy-transfer]") {
+  using namespace dragon;
+  ignil::Block block{0x1000};
+  block.append({ignil::Opcode::COPY,ignil::Reg{0,64,"RAX"},{ignil::Const{7,64}},0x1000});
+  block.noteUnlifted(0x1001);block.append({ignil::Opcode::RET,std::nullopt,{},0x1002});
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  CHECK_FALSE(lifter.liftBlock(block));CHECK(lifter.module().empty());
+}

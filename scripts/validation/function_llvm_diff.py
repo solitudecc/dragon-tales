@@ -68,6 +68,14 @@ def initial(fixture, trial, entry):
     for name,value in fixture.get("set_gprs",{}).items(): put(regs,8*GPRS.index(name),value)
     return regs, memory
 
+def is_near_return(code):
+    # Classify the instruction Unicorn actually executed. Reaching its stop
+    # address through CALL/JMP must never be counted as a Guest Return.
+    prefixes={0x66,0x67,0x26,0x2e,0x36,0x3e,0x64,0x65,0xf3,*range(0x40,0x50)}
+    p=0
+    while p<len(code) and code[p] in prefixes:p+=1
+    return p<len(code) and ((code[p]==0xc3 and len(code)==p+1) or (code[p]==0xc2 and len(code)==p+3))
+
 def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=False, stop_before_calls=True, skip_stub_returns=False, full_guest=False):
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0, MEM_SIZE); uc.mem_write(0, bytes(memory))
@@ -102,7 +110,10 @@ def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=F
     uc.emu_start(entry, SENTINEL, count=10000)
     if not stop_before_control and uc.reg_read(U.UC_X86_REG_RIP) != SENTINEL: raise RuntimeError('reference did not return to root sentinel within budget')
     if stop_before_control and not stop_info and full_guest and uc.reg_read(U.UC_X86_REG_RIP)==SENTINEL:
-        stop_info=[1,3,previous[0],SENTINEL,1,0,0]
+        if is_near_return(bytes(uc.mem_read(previous[0],previous_size[0]))):stop_info=[1,3,previous[0],SENTINEL,1,0,0]
+        elif SENTINEL in fixture.get('missing_targets',[]):
+            call=previous[0] in call_sites;stop_info=[3,2 if call else 1,previous[0],SENTINEL,1,previous[0]+previous_size[0] if call else 0,0]
+        else:raise RuntimeError('root exit marker reached without Guest RET')
     out = bytearray(regs)
     for i, name in enumerate(GPRS): put(out, i*8, uc.reg_read(getattr(U,'UC_X86_REG_'+name)))
     # Existing IGNIL RET abstraction only: undo exactly the root return pop.

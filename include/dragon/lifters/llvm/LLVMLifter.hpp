@@ -52,6 +52,7 @@ class LLVMLifter {
   ///
   /// Intra-instruction LABEL/LOCAL* branches remain runtime control flow,
   /// including REP loops, even in an otherwise linear machine trace.
+  /// Requires a complete block: unlifted instruction markers cause refusal.
   /// Returns false for an empty block or malformed local control flow.
   bool liftBlock(const ignil::Block &block, std::string_view name = "trace");
 
