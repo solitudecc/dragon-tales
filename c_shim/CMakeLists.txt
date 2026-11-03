@@ -14,7 +14,6 @@ set_target_properties(libdragon_c PROPERTIES
 target_include_directories(libdragon_c
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    PRIVATE
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 

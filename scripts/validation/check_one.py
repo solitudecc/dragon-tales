@@ -9,7 +9,9 @@ import json, re, subprocess, sys, tempfile, time
 import dragon
 
 path, objdump = sys.argv[1], sys.argv[2]
-out = {'binary': _os.path.basename(path)}
+llvm_mode=_os.environ.get('LLVM_MODE','legacy')
+if llvm_mode not in ('legacy','v2'): raise ValueError('LLVM_MODE must be legacy or v2')
+out = {'binary': _os.path.basename(path),'llvm_mode':llvm_mode}
 img = dragon.LoadedImage.load_file(path)
 if img is None:
     print(json.dumps({**out, 'error': 'load failed'})); sys.exit(0)
@@ -43,20 +45,32 @@ for strat in (0, 1):
     valid = [a for a in funcs if g.get_function(a) and g.get_function(a).is_valid]
     r['functions'] = len(valid)
     r['empty_symbol_functions'] = len([a for a in funcs if a in fsyms and a not in set(valid)])
-    # LLVM: one module with every function, then verify it.
-    L = dragon.LLVMLifter(img.architecture)
-    failed = 0
-    for a in valid:
-        try:
-            if not L.lift(g.get_function(a), g):
-                failed += 1
-        except Exception:
-            failed += 1
-    r['llvm_lift_failed'] = failed
-    with tempfile.NamedTemporaryFile('w', suffix='.ll', delete=False) as f:
-        f.write(L.ir())
-    v = subprocess.run(['opt-21', '-passes=verify', '-disable-output', f.name], capture_output=True, text=True)
-    r['llvm_verify'] = 'ok' if v.returncode == 0 else v.stderr.strip().splitlines()[0][:200]
-    _os.unlink(f.name)
+    # Verify every function. V2 uses bounded modules to fit the 3 GB VM;
+    # no function is capped/skipped. Native fixtures separately exercise
+    # modules containing multiple V2 implementations and runtime dispatch.
+    mode=dragon.LLVMExecutionMode.STATEFUL_V2 if llvm_mode=='v2' else dragon.LLVMExecutionMode.LEGACY
+    chunk_size=128 if llvm_mode=='v2' else max(1,len(valid))
+    failed=verified=modules=0
+    verification_errors=[]
+    for start in range(0,max(1,len(valid)),chunk_size):
+        L=dragon.LLVMLifter(img.architecture,execution_mode=mode)
+        accepted=0
+        for a in valid[start:start+chunk_size]:
+            try:
+                if L.lift(g.get_function(a),g):accepted+=1
+                else:failed+=1
+            except Exception:failed+=1
+        with tempfile.TemporaryDirectory(prefix='dragon-check-') as directory:
+            path_ir=_os.path.join(directory,'module.ll')
+            with open(path_ir,'w') as f:f.write(L.ir())
+            v=subprocess.run(['opt-21','-passes=verify','-disable-output',path_ir],capture_output=True,text=True)
+        modules+=1
+        if v.returncode==0:verified+=accepted
+        else:verification_errors.append((v.stderr.strip().splitlines() or [f'opt exit {v.returncode}'])[0][:200])
+        L.__del__()
+    r['llvm_lift_failed']=failed
+    r['llvm_verified_functions']=verified
+    r['llvm_verified_modules']=modules
+    r['llvm_verify']='ok' if not verification_errors else verification_errors[0]
     out[key] = r
 print(json.dumps(out))

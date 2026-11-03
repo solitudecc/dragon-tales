@@ -1,6 +1,7 @@
 #pragma once
 
 #include <dragon/Architecture.hpp>
+#include <dragon/lifters/llvm/Execution.hpp>
 #include <dragon/disassembler/Function.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
@@ -9,9 +10,12 @@
 #include <llvm/IR/Module.h>
 #include <map>
 #include <memory>
+#include <set>
 #include <string_view>
 
 namespace dragon::llvmlifter {
+
+enum class ExecutionMode { Legacy = 0, StatefulV2 = 1 };
 
 class LLVMLifter {
   public:
@@ -24,7 +28,12 @@ class LLVMLifter {
   LLVMLifter(LLVMLifter &&) noexcept;
   LLVMLifter &operator=(LLVMLifter &&) noexcept = default;
 
-  /// Lift one function (all its IGNIL blocks must be in the graph).
+  /// Select before lifting; a module cannot mix execution protocols.
+  bool setExecutionMode(ExecutionMode mode);
+
+  /// Lift one function (all its IGNIL blocks must be in the graph). Legacy
+  /// rejects transfers it cannot report; StatefulV2 emits explicit exits.
+  /// V2 target implementations require valid caller-owned Execution.h objects.
   bool lift(const Function &fn, const Graph &graph);
 
   /// Lifts a single, already-flattened IGNIL block directly to LLVM IR -
@@ -159,6 +168,16 @@ class LLVMLifter {
   void initializeRegistersFromParam(llvm::Function *llfn, RegFile &regFile,
                                     llvm::Value *regsPtr);
 
+  void emitExit(std::uint64_t reason, std::uint64_t kind, std::uint64_t sourcePC,
+                llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
+                llvm::IRBuilder<> &builder, std::uint64_t detail = 0);
+  void writeBackRegisters(RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
+  void emitBudgetCheck(std::uint64_t pc, RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
+  llvm::Value *memoryAddress(llvm::Value *address, std::uint64_t bytes, std::uint64_t pc,
+                             RegFile &regs, llvm::Value *regsPtr, llvm::Value *memPtr, llvm::IRBuilder<> &builder);
+  bool stateful() const { return mode_ == ExecutionMode::StatefulV2 && graph_; }
+  ExecutionMode mode_ = ExecutionMode::Legacy;
+  std::set<std::uint64_t> unsupportedAddresses_;
   Architecture arch_;
   // The graph being lifted by lift(), null otherwise (liftBlock).
   const Graph *graph_ = nullptr;

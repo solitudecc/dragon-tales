@@ -3,11 +3,160 @@
   "architecture": "x86_64",
   "entry": 4096,
   "cases": [
-    {"id": "control_store", "code_hex": "c70307000000c3", "undefined_flags": [], "stubs": []},
-    {"id": "control_branch", "code_hex": "85ff7407c70307000000c3c70309000000c3", "undefined_flags": ["AF"], "stubs": []},
-    {"id": "control_loop", "code_hex": "b903000000ff03e2fcc3", "undefined_flags": [], "stubs": []},
-    {"id": "control_call_zero", "code_hex": "31c0e8f90f000085c07407b901000000890bc3", "undefined_flags": ["AF"], "stubs": [{"address": 8192, "code_hex": "b800000000c3", "rax": 0}]},
-    {"id": "A", "code_hex": "31c0e8f90f000085c07407b901000000890bc3", "undefined_flags": ["AF"], "known_defect": "call_state", "stubs": [{"address": 8192, "code_hex": "b801000000c3", "rax": 1}]},
-    {"id": "B", "code_hex": "85ff0f84f81f0000c70307000000c3", "undefined_flags": ["AF"], "known_defect": "conditional_exit", "stubs": [{"address": 12288, "code_hex": "c70309000000c3", "store": 9}]}
+    {
+      "id": "control_store",
+      "code_hex": "c70307000000c3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "control_branch",
+      "code_hex": "85ff7407c70307000000c3c70309000000c3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "stubs": []
+    },
+    {
+      "id": "control_loop",
+      "code_hex": "b903000000ff03e2fcc3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "control_call_zero",
+      "code_hex": "31c0e8f90f000085c07407b901000000890bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b800000000c3",
+          "rax": 0
+        }
+      ]
+    },
+    {
+      "id": "A",
+      "code_hex": "31c0e8f90f000085c07407b901000000890bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "known_defect": "call_state",
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b801000000c3",
+          "rax": 1
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "code_hex": "85ff0f84f81f0000c70307000000c3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "known_defect": "conditional_exit",
+      "stubs": [
+        {
+          "address": 12288,
+          "code_hex": "c70309000000c3",
+          "store": 9
+        }
+      ]
+    },
+    {
+      "id": "jump_out",
+      "code_hex": "e9fb1f0000",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 12288,
+          "code_hex": "c70309000000c3",
+          "store": 9
+        }
+      ]
+    },
+    {
+      "id": "jump_indirect",
+      "code_hex": "ffe0",
+      "undefined_flags": [],
+      "set_gprs": {
+        "RAX": 12288
+      },
+      "stubs": [
+        {
+          "address": 12288,
+          "code_hex": "c70309000000c3",
+          "store": 9
+        }
+      ]
+    },
+    {
+      "id": "missing_target",
+      "code_hex": "e9fb1f0000",
+      "undefined_flags": [],
+      "missing_targets": [
+        12288
+      ],
+      "stubs": []
+    },
+    {
+      "id": "zero_target",
+      "code_hex": "e9fbefffff",
+      "undefined_flags": [],
+      "missing_targets": [
+        0
+      ],
+      "stubs": []
+    },
+    {
+      "id": "unsupported_trap",
+      "code_hex": "c703070000000f0bc3",
+      "undefined_flags": [],
+      "unsupported_before": [
+        4102
+      ],
+      "stubs": []
+    },
+    {
+      "id": "unsupported_opaque",
+      "code_hex": "b8070000000f31c3",
+      "undefined_flags": [],
+      "unsupported_before": [
+        4101
+      ],
+      "stubs": []
+    },
+    {
+      "id": "missing_next",
+      "code_hex": "ff03",
+      "undefined_flags": [],
+      "unsupported_before": [
+        4098
+      ],
+      "stubs": []
+    },
+    {
+      "id": "budget_loop",
+      "code_hex": "ff03ebfc",
+      "undefined_flags": [],
+      "budget_blocks": 5,
+      "context_budget": 6,
+      "stubs": []
+    },
+    {
+      "id": "rep_local",
+      "code_hex": "f3a4c3",
+      "undefined_flags": [],
+      "set_gprs": {
+        "RCX": 3,
+        "RSI": 32768,
+        "RDI": 32769
+      },
+      "stubs": []
+    }
   ]
 }

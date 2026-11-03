@@ -1,7 +1,8 @@
-# LLVM 函数执行契约草案（任务 8，第 1 步）
+# LLVM 函数执行契约（任务 8）
 
-状态：**待仓库所有者确认；不是已实现的接口**。基线为 `0aa4b73`。
-本步只增加本文、测试夹具和函数级执行对拍，不修改降级实现、IGNIL、C shim 或 Python 公共接口。
+状态：2026-11-03 所有者要求继续下一步，按已提交方案开始实施。第 2 步只兑现基础 V2
+状态/分发出口，CALL/RET 机器效果仍明确 Unsupported；见本文第 9 节及分步验证记录。
+第 1 步基线为 `0aa4b73`，当时只增加文档和测试，没有修改公共接口或降级实现。
 本文描述六步完成后的目标。中间提交只宣布已经兑现的能力；尚未实现的机器效果必须明确
 拒绝/退出 Unsupported，阶段测试须说明停止边界或使用了哪些既有抽象兼容项，不能冒充
 最终 V2 全函数执行通过。
@@ -17,7 +18,7 @@
 这些是本次需要修复的问题，不是新增的刻意设计差异。`unreachable` 只能用于已经证明不可能的
 路径，不能表示未知目标、缺少实现、超出函数范围或运行预算耗尽。
 
-## 2. 本草案请求批准的选择
+## 2. 执行方案（2026-11-03 起按此实施）
 
 | 项目 | 建议 | 兼容边界 / 实施步骤 |
 |---|---|---|
@@ -28,9 +29,8 @@
 | Guest CALL/RET | 在 V2 LLVM 层落实机器效果；Legacy IGNIL 的抽象保持 | 第 4 步；默认 trace/toy-vm 行为不自动切换 |
 | A64 RET 的目标 | 建议通过 RET 的 aux 补充架构寄存器编号，仍不增加 src 操作数 | 建议 aux=0 表示旧的默认 X30，aux=1..32 表示 X0..X31；X31 解释为 XZR。这是元数据接口扩展，必须批准后再改 |
 
-这里的类型名、模式名和 V2 LLVM 符号名都是**具体建议**，本步未写入任何公共头文件。
-批准本文才授权落实上述方案；后续若需要超出本文的接口或设计变动，会再次先说明并等待同意。
-兼容策略也请求批准：Legacy 接口继续支持准确可表达的函数/trace；发现 CALL 或无法表示的
+模式、符号名与逻辑类型按本表实施；具体 C 布局见第 9 节。后续若需要超出本文的接口或设计
+变动，会再次先说明并等待同意。兼容策略：Legacy 接口继续支持准确可表达的函数/trace；发现 CALL 或无法表示的
 跨界出口时，应返回明确的 lift 失败，不能继续生成已知误编译的 IR。toy-vm 若依赖这些情况，
 必须先验证其实际使用方式，再选择明确的模型或获批准的迁移方案，不为保留测试而返回错误结果。
 
@@ -38,7 +38,7 @@
 
 ## 3. GuestState 的布局与所有权
 
-建议逻辑结构（本步不规定宿主 C struct 的 padding，也不发布二进制 ABI）：
+目标逻辑结构（第 1 步未发布 ABI；第 2 步的具体 C 布局见第 9 节）：
 
 ```text
 GuestStateV2 = { abi_version, architecture, regs_size, regs_bytes }
@@ -168,3 +168,50 @@ PC/SP/返回地址写入。本版仅覆盖 x86-64、有限小函数和模拟桩�
 
 本步只请求确认契约，不声称 A、B 已修复。严格对拍默认对现有 A/B 返回非零；正对照必须
 通过，故意破坏 Native 输出的负对照必须检出。IR verify 通过不算语义通过。
+
+
+## 9. 第 2 步已经实现的 V2 基础
+
+公共类型的唯一来源是 `include/dragon/lifters/llvm/Execution.h`。C++ 别名和执行器在
+`Execution.hpp`，C shim 包含同一 C 头文件，Python cffi 同时读取两份头文件。没有复制一套
+可能偏移不一致的 C/Python 类型。当前 ABI 面向 64 位小端宿主：
+
+| 类型 | 字段（按声明顺序） |
+|---|---|
+| GuestStateV2 | u64 abi_version=2, architecture（Architecture 的数值）, regs_size；u8* regs_bytes |
+| GuestMemoryV2 | u8* data；u64 size；当前是 Guest 地址 0..size 的连续映射 |
+| ExecContextV2 | TargetEntryV2* entries；u64 entry_count, budget；void* user_data |
+| TargetEntryV2 | u64 guest_address；四指针 TargetV2 implementation |
+| ExecExitV2 | 七个 u64：reason, transfer_kind, source_pc, next_pc, next_pc_valid, return_pc, detail |
+
+退出原因和 transfer_kind 的具体数值以该头文件为准。return_pc 仅在已执行的 CALL
+转移记录中有效；Unsupported CALL 尚未执行，不提供返回地址。C++ LLVMLifter 对象增加了
+内部状态字段，C++ 使用者须以新头文件重新编译；原 C 工厂签名及不透明句柄接口保留。
+每个已编译实现的架构必须与 state.architecture 及其来源 Graph 一致。调用方提供有效、互不重叠的状态/内存/
+运行时对象；模型只修改 Guest 寄存器、映射数据和自己的 user_data，不修改状态/映射头、
+注册表或增加运行预算。注册表中的每个地址须确实对应实现支持的入口；不存在的实现返回
+NeedTarget，不猜测相邻函数入口。当前 lifted 实现支持该函数的起始地址；后续增加恢复入口
+时会明确列出。V2 模块和 Legacy 模块不能混用。
+
+C++ 通过 `setExecutionMode(ExecutionMode::StatefulV2)` 在首次 lift 前 opt-in，C 使用
+`dragon_llvm_lifter_set_execution_mode`，Python 使用
+`LLVMLifter(..., execution_mode=LLVMExecutionMode.STATEFUL_V2)`。设置非法模式或在非空
+模块切换模式返回失败；旧构造方式及 Legacy LLVM 名字/签名保留。
+
+`executeV2` / `dragon_llvm_execute_v2` 从寄存器区 PC 查注册表，调用统一的四指针实现。
+每次分发、Guest 基本块入口和 IGNIL 局部循环入口各消耗一个预算单位；退出时 budget=0
+明确报告 Budget。合法可执行路径不会因为没有模型而变成 `unreachable`。调用方可在
+NeedTarget 后补充实现并以当前 PC 继续，不重新执行已完成的分支。
+
+第 2 步的 CALL/RET 在该指令执行前退出 Unsupported；trap、unlifted/opaque 在最早缺少
+语义的指令前停止；字节流结束则停在最后一条已完成指令之后。合法的架构未定义数据在
+V2 使用独立 freeze 值，标志字节限制为 0/1，不把未知效果交给 LLVM UB。
+
+映射边界检查使用完整访问宽度，且所有 Guest/快照访问 alignment=1。越界报告 Unsupported
+加 Memory detail；由于本任务不模拟架构故障，不承诺该错误的精确异常状态，也不能将其
+当作可恢复的 Guest fault。有效映射仍是执行前提。Unsupported 指令、NeedTarget 和 Budget
+则按各自声明的停止边界保留状态。
+
+`function_dispatch_diff.py` 将相同机器代码执行到这些明确边界，比较 PC/SP/所有已建模
+寄存器/全部映射内存和退出记录；不使用第 1 步的 Legacy PC/SP/CALL 栈归一。统计名为
+prefix_match，不能解释为完整 Guest CALL/RET 已实现或 A 已修复。

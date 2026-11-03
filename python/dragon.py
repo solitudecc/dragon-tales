@@ -55,7 +55,7 @@ def _prepare_cdef(path):
     return src
 
 
-ffi.cdef(_prepare_cdef(_HEADER))
+ffi.cdef(_prepare_cdef(os.path.join(_root, "include/dragon/lifters/llvm/Execution.h")) + "\n" + _prepare_cdef(_HEADER))
 lib = ffi.dlopen(_LIB)
 
 
@@ -1339,6 +1339,11 @@ def read_table_targets(candidate, data, base_addr):
 
 # -- LLVMLifter ----------------------------------------------------------------
 
+class LLVMExecutionMode:
+    LEGACY = 0
+    STATEFUL_V2 = 1
+
+
 class LLVMLifter:
     """Lifts Functions to LLVM IR via the IGNIL graph.
 
@@ -1348,12 +1353,17 @@ class LLVMLifter:
         Target architecture (default X86_64).
     module_name : str
         Name embedded in the LLVM module (default 'lifted').
+    execution_mode : LLVMExecutionMode
+        LEGACY by default; STATEFUL_V2 uses Execution.h state/dispatch exits.
     """
 
-    def __init__(self, arch=Architecture.X86_64, module_name='lifted'):
+    def __init__(self, arch=Architecture.X86_64, module_name='lifted', *, execution_mode=LLVMExecutionMode.LEGACY):
         self._ptr = lib.dragon_llvm_lifter_create(arch, module_name.encode())
         if self._ptr == ffi.NULL:
             raise RuntimeError('failed to create LLVMLifter')
+        if not lib.dragon_llvm_lifter_set_execution_mode(self._ptr, execution_mode):
+            self.__del__()
+            raise ValueError('invalid LLVM execution mode')
 
     def __del__(self):
         if self._ptr:
@@ -1369,7 +1379,8 @@ class LLVMLifter:
     def lift(self, function, graph):
         """Lift *function* using its IGNIL blocks in *graph*.
 
-        Returns True on success; False if any IGNIL block is missing.
+        Returns True on success; False for invalid/missing blocks or a Legacy
+        transfer the old protocol cannot represent. V2 uses explicit exits.
         """
         return bool(lib.dragon_llvm_lifter_lift(
             self._ptr, function._ptr, graph._ptr))

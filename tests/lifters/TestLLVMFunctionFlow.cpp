@@ -69,7 +69,7 @@ TEST_CASE("LLVM function-flow A must not discard an unknown callee return", "[ll
   CHECK(unknownReturnControlsBranch);
 }
 
-TEST_CASE("LLVM function-flow B must preserve a defined path across an external branch", "[llvm][function-flow][!shouldfail]") {
+TEST_CASE("LLVM function-flow B must preserve a defined path across an external branch", "[llvm][function-flow]") {
   using namespace dragon;
   Configuration config;config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
   Disassembler dis{Architecture::X86_64,config};Graph graph{Architecture::X86_64,config};
@@ -86,4 +86,45 @@ TEST_CASE("LLVM function-flow B must preserve a defined path across an external 
     for (const auto *next:llvm::successors(block))pending.push_back(next);
   }
   CHECK_FALSE(reachableUnreachable);
+}
+
+TEST_CASE("LLVM Legacy rejects control transfers its ABI cannot report", "[llvm][dispatch-regression]") {
+  using namespace dragon;
+  const std::vector<std::vector<std::uint8_t>> inputs{
+    {0xe9,0xfb,0x1f,0,0},                         // jmp 0x3000
+    {0xe9,0xfb,0xef,0xff,0xff},                   // jmp 0 (valid numeric target)
+    {0xff,0xe0},                                  // jmp rax, unresolved
+    {0x85,0xff,0x0f,0x85,0xf8,0x1f,0,0,0xc3},    // jne 0x3000; ret
+  };
+  for (const auto &bytes:inputs) {
+    Configuration config;config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
+    Disassembler dis{Architecture::X86_64,config};Graph graph{Architecture::X86_64,config};
+    dis.disassemble(bytes,0x1000,graph);Function root{&graph,0x1000};REQUIRE(root.isValid());
+    llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+    CHECK_FALSE(lifter.lift(root,graph));
+    CHECK(lifter.module().empty());
+  }
+}
+
+TEST_CASE("LLVM Legacy cannot treat an enumerated switch default as UB", "[llvm][dispatch-regression]") {
+  using namespace dragon;
+  Configuration config;config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
+  Disassembler dis{Architecture::X86_64,config};Graph graph{Architecture::X86_64,config};
+  dis.disassemble(std::vector<std::uint8_t>{0xff,0xe0,0xc3,0xc3},0x1000,graph);
+  auto *jump=graph.get(0x1000);REQUIRE(jump);jump->addBranch(0x1002);jump->addBranch(0x1003);
+  graph.addBlock(0x1002);graph.addBlock(0x1003);
+  // Supply the case semantics explicitly: failure must concern the default
+  // edge, never a missing-IGNIL setup error after an unresolved terminator.
+  for (const auto address:{0x1002u,0x1003u}) {
+      if (!graph.get(address)) graph.addInstruction(Instruction(address,1,"ret","",{0xc3},true,false,false,false,false,false));
+
+    ignil::Block block{address};
+    block.append({ignil::Opcode::RET,std::nullopt,{},address});
+    graph.addIGNILBlock(std::move(block));
+  }
+  Function root{&graph,0x1000};REQUIRE(root.isValid());
+  for (const auto &[address,block]:root.blocks()) REQUIRE(graph.getIGNILBlock(address));
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  CHECK_FALSE(lifter.lift(root,graph));
+  CHECK(lifter.module().empty());
 }

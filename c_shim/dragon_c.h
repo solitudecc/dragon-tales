@@ -2,6 +2,7 @@
 
   #include <stddef.h>
   #include <stdint.h>
+  #include <dragon/lifters/llvm/Execution.h>
 
   #ifdef __cplusplus
   extern "C" {
@@ -666,7 +667,14 @@
                                                   const char* module_name);
   void dragon_llvm_lifter_destroy(dragon_llvm_lifter_t* l);
 
-  // Lift one function. Returns 1 on success, 0 if any IGNIL block is missing.
+  // Select before lifting; returns 0 for an invalid mode or a nonempty module.
+  int dragon_llvm_lifter_set_execution_mode(dragon_llvm_lifter_t* l, dragon_llvm_execution_mode_t mode);
+  // Objects must be non-null and caller-owned; see Execution.h.
+  void dragon_llvm_execute_v2(dragon_guest_state_v2_t* state, dragon_guest_memory_v2_t* memory,
+      dragon_exec_context_v2_t* context, dragon_exec_exit_v2_t* exit, uint64_t root_exit_pc);
+
+  // Lift one function. Returns 0 for invalid/missing blocks or a Legacy
+  // transfer that cannot be represented; V2 emits explicit execution exits.
   int  dragon_llvm_lifter_lift(dragon_llvm_lifter_t* l,
                                const dragon_function_t* fn,
                                const dragon_graph_t* g);

@@ -448,12 +448,12 @@ TEST_CASE("SwitchDetector - resolved cases are CFG edges of the jump",
       CHECK(fn.block(c) != nullptr);
     }
 
-    // The LLVM lifter dispatches on the target instead of `unreachable`.
+    // The cases remain valid analysis results, but the Legacy LLVM ABI
+    // cannot report a default target outside this set. Refuse explicitly
+    // rather than generating a switch with an undefined default edge.
     dragon::llvmlifter::LLVMLifter lifter{dragon::Architecture::X86_64};
-    REQUIRE(lifter.lift(fn, g));
-    REQUIRE_FALSE(llvm::verifyModule(lifter.module(), &llvm::errs()));
-    const std::string ir = lifter.ir();
-    CHECK(ir.find("switch i64") != std::string::npos);
+    CHECK_FALSE(lifter.lift(fn, g));
+    CHECK(lifter.module().empty());
   }
 }
 

@@ -63,9 +63,10 @@ def initial(fixture, trial, entry):
         code = bytes.fromhex(stub['code_hex']); address = stub['address']; memory[address:address+len(code)] = code
     put(memory, STACK, SENTINEL)
     put(memory, DATA, [0, 1, 0xfffffffd, 0xffffffff, 0x7ffffffd, 0x80000000, 0xfffffffe, 0x7fffffff][trial%8], 4)
+    for name,value in fixture.get("set_gprs",{}).items(): put(regs,8*GPRS.index(name),value)
     return regs, memory
 
-def reference(fixture, regs, memory, entry, call_sites):
+def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=False):
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0, MEM_SIZE); uc.mem_write(0, bytes(memory))
     for i, name in enumerate(GPRS): uc.reg_write(getattr(U, 'UC_X86_REG_'+name), get(regs, i*8))
@@ -76,19 +77,33 @@ def reference(fixture, regs, memory, entry, call_sites):
     uc.reg_write(U.UC_X86_REG_FPTAG,get(regs,482,2)); uc.reg_write(U.UC_X86_REG_FPCW,get(regs,484,2)); uc.reg_write(U.UC_X86_REG_FPSW,get(regs,486,2))
     events = collections.Counter()
     targets = {stub['address'] for stub in fixture['stubs']}
-    ignored_calls=set();writes=[]
+    ignored_calls=set();writes=[];stop_info=[];previous=[entry];block_visits=collections.Counter()
     def on_instruction(u, pc, size, data):
+        if stop_before_control:
+            block_visits[pc]+=1
+            if 'budget_blocks' in fixture and pc==entry and block_visits[pc]>fixture['budget_blocks']:
+                stop_info.extend([6,0,pc,pc,1,0,0]);u.emu_stop();return
+            if pc in fixture.get('unsupported_before',[]):
+                stop_info.extend([5,0,pc,pc,1,0,2]);u.emu_stop();return
+            if pc in fixture.get("missing_targets",[]):
+                stop_info.extend([3,1,previous[0],pc,1,0,0]);u.emu_stop();return
+            if pc in call_sites or bytes(u.mem_read(pc,size)) == b"\xc3":
+                stop_info.extend([5,2 if pc in call_sites else 3,pc,pc,1,0,2]);u.emu_stop();return
+            previous[0]=pc
         if pc in targets: events.update([pc])
         if pc in call_sites:
             sp=u.reg_read(U.UC_X86_REG_RSP);ignored_calls.update(range(sp-8,sp))
     uc.hook_add(UC_HOOK_CODE,on_instruction)
     uc.hook_add(UC_HOOK_MEM_WRITE,lambda u,access,address,size,value,data:writes.append((u.reg_read(U.UC_X86_REG_RIP),address,size)))
     uc.emu_start(entry, SENTINEL, count=10000)
-    if uc.reg_read(U.UC_X86_REG_RIP) != SENTINEL: raise RuntimeError('reference did not return to root sentinel within budget')
+    if not stop_before_control and uc.reg_read(U.UC_X86_REG_RIP) != SENTINEL: raise RuntimeError('reference did not return to root sentinel within budget')
     out = bytearray(regs)
     for i, name in enumerate(GPRS): put(out, i*8, uc.reg_read(getattr(U,'UC_X86_REG_'+name)))
     # Existing IGNIL RET abstraction only: undo exactly the root return pop.
-    put(out, 32, get(out,32)-8)
+    if not stop_before_control: put(out, 32, get(out,32)-8)
+    else:
+        if not stop_info: raise RuntimeError("reference did not reach the declared stage boundary")
+        put(out,128,uc.reg_read(U.UC_X86_REG_RIP))
     flags = uc.reg_read(U.UC_X86_REG_EFLAGS)
     for _, off, bit in FLAGS: out[off] = (flags>>bit)&1
     for i in range(16):
@@ -99,7 +114,8 @@ def reference(fixture, regs, memory, entry, call_sites):
     out[480]=(sw>>11)&7;put(out,482,uc.reg_read(U.UC_X86_REG_FPTAG),2);put(out,484,uc.reg_read(U.UC_X86_REG_FPCW),2);put(out,486,sw,2)
     if any(pc not in call_sites and any(a in ignored_calls for a in range(address,address+size)) for pc,address,size in writes):
         raise RuntimeError('legacy adapter cannot exclude a CALL slot also written by ordinary code')
-    return out, bytes(uc.mem_read(0,MEM_SIZE)), events, ignored_calls
+    result=(out, bytes(uc.mem_read(0,MEM_SIZE)), events, ignored_calls)
+    return result+(tuple(stop_info),) if stop_before_control else result
 
 DRIVER = r'''
 #include <stdint.h>
@@ -168,7 +184,7 @@ def compile_case(fixture, entry, level, work, args):
 
 def no_core(): resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 
-def native(exe, regs, memory, work, trial):
+def native(exe, regs, memory, work, trial, *, extra_bytes=0):
     source=work/f'input-{trial}.bin';output=work/f'output-{trial}.bin';source.write_bytes(regs+memory)
     output.unlink(missing_ok=True)
     try:
@@ -177,16 +193,17 @@ def native(exe, regs, memory, work, trial):
     if run.returncode: return None,{'kind':'native_exit','returncode':run.returncode,'stderr':run.stderr.decode(errors='replace')}
     if not output.exists(): return None,{'kind':'native_protocol','detail':'no output'}
     data=output.read_bytes()
-    if len(data)!=24+REGS_SIZE+MEM_SIZE or data[:8]!=b'DTFLOW1\0': return None,{'kind':'native_protocol','detail':'invalid snapshot'}
+    if len(data)!=24+REGS_SIZE+MEM_SIZE+extra_bytes or data[:8]!=b'DTFLOW1\0': return None,{'kind':'native_protocol','detail':'invalid snapshot'}
     a,b=struct.unpack_from('<QQ',data,8)
-    return (data[24:24+REGS_SIZE],data[24+REGS_SIZE:],collections.Counter({0x2000:a,0x3000:b})),None
+    result=(data[24:24+REGS_SIZE],data[24+REGS_SIZE:24+REGS_SIZE+MEM_SIZE],collections.Counter({0x2000:a,0x3000:b}))
+    return (result+(data[-extra_bytes:],) if extra_bytes else result),None
 
-def compare(fixture, expected, actual, bad_ir, corrupt):
-    want_regs,want_mem,want_events,ignored=expected;got_regs,got_mem,got_events=actual
+def compare(fixture, expected, actual, bad_ir, corrupt, *, include_pc=False):
+    want_regs,want_mem,want_events,ignored=expected[:4];got_regs,got_mem,got_events=actual[:3]
     if corrupt:
         damaged=bytearray(got_mem);damaged[DATA]^=1;got_mem=bytes(damaged)
     diffs=[];excluded_flags=set(fixture['undefined_flags'])
-    for name,off,size in FIELDS:
+    for name,off,size in FIELDS + ([("RIP",128,8)] if include_pc else []):
         if name in excluded_flags: continue
         got,want=get(got_regs,off,size),get(want_regs,off,size)
         if got!=want: diffs.append({'field':name,'got':hex(got),'expected':hex(want)})

@@ -1,8 +1,10 @@
 # LLVM Lift：跨函数控制流与调用边界（实施中）
 
-状态：第 1 步的[状态与控制流契约草案](llvm-execution-contract.md)及最小函数级对拍已建立，
-**等待所有者确认；第 2–6 步尚未开始，降级代码未修改，A/B 仍失败**。
-[第 1 步验证记录](llvm-flow-step1-validation.md)。派活方式见 `docs/agent-tasks.md`（任务 8）。
+状态：第 1 步已完成，2026-11-03 按所有者“接着下一步”的要求推进已提交的
+[状态与控制流契约](llvm-execution-contract.md)。第 2 步新增 V2 分发出口，Legacy 无法表达
+跨界转移时安全拒绝；CALL/RET 机器效果仍 Unsupported，第 3–6 步尚待实施。
+[第 1 步验证记录](llvm-flow-step1-validation.md)；[第 2 步验证记录](llvm-flow-step2-validation.md)。
+
 
 ## 背景：现在的问题
 

@@ -1199,6 +1199,19 @@ dragon_llvm_lifter_t *dragon_llvm_lifter_create(dragon_architecture_t arch,
 
 void dragon_llvm_lifter_destroy(dragon_llvm_lifter_t *l) { delete l; }
 
+int dragon_llvm_lifter_set_execution_mode(dragon_llvm_lifter_t *l, dragon_llvm_execution_mode_t mode) {
+  return l && l->lifter.setExecutionMode(static_cast<dragon::llvmlifter::ExecutionMode>(mode));
+}
+void dragon_llvm_execute_v2(dragon_guest_state_v2_t *state, dragon_guest_memory_v2_t *memory,
+    dragon_exec_context_v2_t *context, dragon_exec_exit_v2_t *exit, uint64_t root_exit_pc) {
+  if (!exit) return;
+  if (!state || !memory || !context) {
+    *exit = {}; exit->reason=DRAGON_EXIT_UNSUPPORTED; exit->detail=DRAGON_DETAIL_INVALID_STATE; return;
+  }
+  dragon::llvmlifter::executeV2(*state,*memory,*context,*exit,root_exit_pc);
+}
+
+
 int dragon_llvm_lifter_lift(dragon_llvm_lifter_t *l,
                              const dragon_function_t *fn,
                              const dragon_graph_t *g) {

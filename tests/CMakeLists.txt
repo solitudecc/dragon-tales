@@ -17,6 +17,7 @@ add_executable(dragon_tests
         obfush/TestObfush.cpp
         lifters/TestLLVMLifter.cpp
         lifters/TestLLVMFunctionFlow.cpp
+        lifters/TestLLVMDispatch.cpp
         loader/TestLoader.cpp
 )
 
@@ -37,6 +38,7 @@ if(DRAGON_USE_UNICORN)
     target_sources(dragon_tests PRIVATE
         semantic/TestX86SemanticRoundTrip.cpp
         semantic/TestX86Div128.cpp
+        semantic/TestLLVMDispatchExecution.cpp
         toy-vm/TestToyVM.cpp
         toy-vm/TestToyVMHandlerRecovery.cpp
     )
@@ -147,6 +149,8 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - jump-table bounds follow the actual index"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)
+        add_test(NAME "Validation - LLVM V2 C and Python mirror"
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_v2.py)
         # This small function-level control set retains machine branches,
         # loops and a modelled call. A/B remain explicit standalone red cases.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -161,6 +165,12 @@ if(Python3_Interpreter_FOUND)
                         --case control_store --case control_branch --case control_loop --case control_call_zero
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-flow-controls)
+                add_test(NAME "Validation - LLVM V2 dispatch prefixes"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_dispatch_diff.py
+                        --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/function-dispatch-controls)
+                set_tests_properties("Validation - LLVM V2 dispatch prefixes" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
                 set_tests_properties("Validation - LLVM whole-function positive controls" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
             else()

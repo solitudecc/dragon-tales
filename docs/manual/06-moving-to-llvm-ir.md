@@ -29,19 +29,43 @@ print(lifter.ir())
 missing an IGNIL translation — the lifter refuses to produce a function
 with a gap in it rather than silently emitting wrong code.
 
-> **Create one `LLVMLifter` per function.** Each instance owns a single
-> `llvm::Module`; the intended pattern (and the one every example in
-> `examples/cpp/llvmir_lifting.cpp` follows) is one `LLVMLifter` per lifted
-> function, read its `ir()`, and move on. Calling `lift()` a second time on
-> the *same* `LLVMLifter` instance — even re-lifting the same function —
-> was tested while writing this manual and segfaults. Don't do it; construct
-> a fresh `LLVMLifter` per function instead.
+One lifter can hold multiple distinct functions. Re-lifting an existing symbol
+returns `false`; it does not silently create a renamed copy. Choose an execution
+mode before the first function is lifted.
+
+### Stateful V2 execution
+
+The default Legacy interface rejects cross-boundary or dynamic jumps that its
+two-pointer protocol cannot report. To retain runtime control-flow exits, opt in:
+
+```cpp
+lifter.setExecutionMode(dragon::llvmlifter::ExecutionMode::StatefulV2);
+```
+
+```python
+lifter = dragon.LLVMLifter(
+    dragon.Architecture.X86_64,
+    execution_mode=dragon.LLVMExecutionMode.STATEFUL_V2)
+```
+
+V2 emits `void @dragon_v2_<arch>_<hex-address>(state, memory, runtime, exit)`.
+The shared C types are in `dragon/lifters/llvm/Execution.h`; C++, C shim and
+Python use the same layout. After compiling/JIT-loading the IR, register each
+supported Guest entry address with its four-pointer host implementation and run
+`executeV2` (C: `dragon_llvm_execute_v2`). Missing targets and exhausted budgets
+produce explicit exits with the synchronized Guest PC; they are not `unreachable`.
+See [the execution contract](../llvm-execution-contract.md) for ownership,
+registration, memory and state requirements.
+
+Task 8 step 2 implements the state/branch exits. V2 currently stops before
+CALL/RET with `Unsupported`; their effects arrive in steps 3/4. IR verification
+or a matching execution prefix does not mean that full function execution works.
 
 ## The calling convention
 
-Every lifted function has the signature `void @sub_<address>(ptr %mem, ptr %regs)`
-(the name is the function's start address in **decimal**, not hex — `foo`
-at `0x1000` becomes `@sub_4096`). Two opaque pointers carry all lifted
+Legacy lifted functions have the signature `void @sub_<address>(ptr %mem, ptr %regs)`
+(the name is the function's start address in **hexadecimal** — `foo`
+at `0x1000` becomes `@sub_1000`). Two opaque pointers carry all lifted
 state:
 
 - **`%regs`** — the same flat register address space from chapter 5's

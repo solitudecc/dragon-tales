@@ -1,6 +1,7 @@
 """Run check_one.py over every binary in a directory, one subprocess each
 (crash/timeout isolated), and print anomalies. Usage: corpus_check.py DIR"""
 import glob, json, os, subprocess, sys
+from pathlib import Path
 HERE = os.path.dirname(os.path.abspath(__file__))
 def objdump_for(path):
     with open(path, 'rb') as f:
@@ -12,6 +13,8 @@ def objdump_for(path):
     machine = int.from_bytes(head[pe + 4:pe + 6], 'little')
     return 'x86_64-w64-mingw32-objdump' if machine == 0x8664 else 'i686-w64-mingw32-objdump'
 timeout = int(os.environ.get('TIMEOUT', 900))
+results_dir=Path(os.environ['RESULTS_DIR']) if os.environ.get('RESULTS_DIR') else None
+if results_dir:results_dir.mkdir(parents=True,exist_ok=True)
 for path in sorted(glob.glob(os.path.join(sys.argv[1], '*'))):
     try:
         p = subprocess.run([sys.executable, os.path.join(HERE, 'check_one.py'), path, objdump_for(path)],
@@ -21,6 +24,7 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], '*'))):
     if p.returncode != 0:
         print(f'{os.path.basename(path):34s} CRASH rc={p.returncode} {p.stderr.strip().splitlines()[-1:] }'); continue
     r = json.loads(p.stdout.strip().splitlines()[-1])
+    if results_dir:(results_dir/(os.path.basename(path)+'.json')).write_text(json.dumps(r,indent=2))
     if 'error' in r:
         print(f'{r["binary"]:34s} {r["error"]}'); continue
     issues = []
@@ -34,4 +38,4 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], '*'))):
     if r['linear'].get('objdump_missing'):
         issues.append(f'objdump_missing={r["linear"]["objdump_missing"]}')
     t = f'{r["linear"]["time"]:6.1f}s/{r["recursive"]["time"]:6.1f}s'
-    print(f'{r["binary"]:34s} {t} fn={r["linear"]["functions"]:5d} ' + ('OK' if not issues else ' | '.join(issues)))
+    print(f'{r["binary"]:34s} {t} fn={r["linear"]["functions"]:5d} ' + ('OK' if not issues else ' | '.join(issues)),flush=True)
