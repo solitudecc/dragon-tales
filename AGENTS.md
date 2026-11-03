@@ -206,6 +206,19 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Generated function semantics (2026-11-04): `generated_function_diff.py` builds
+seeded x64 diamond/alias/bounded-loop/call functions and NOP layout variants.
+Unicorn independently executes each version's bytes; six V2/static/product
+O0/O2 plans compare all 76 modelled fields and all 64 KiB, with no exclusions.
+64 generated functions / 6144 root-return comparisons match, zero boundaries
+or skips. Known entry checks 128/128, full no-CALL CFG checks 96/96; all edges
+observed in 192 nonempty branch coverage checks (not proof of all paths).
+Wrong-branch and stale-callee-state controls each report 96/96 differences;
+`--expect-control` rejects infrastructure errors or missing comparisons.
+The CFG checker also rejects omitted edges and spurious entries. CTest now
+482/482, no Z3 333/333. No production semantics or ABI changes. See
+`docs/generated-function-validation.md` for commands, raw failures and limits.
+
 **Unicorn version.** Unicorn 2.1.4 (latest release, QEMU 5.0) is wrong on
 BZHI with an index >= the operand size and on BLSI's CF; the dev branch
 (commit 2a05c41, 2026-10-18) has the QEMU fixes and agrees with x86 code run

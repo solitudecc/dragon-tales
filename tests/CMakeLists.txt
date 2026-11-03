@@ -194,6 +194,21 @@ if(Python3_Interpreter_FOUND)
                         --trials 2 --out ${CMAKE_CURRENT_BINARY_DIR}/static-exit-controls)
                 set_tests_properties("Validation - LLVM static Guest calls and boundaries" "Validation - LLVM static Exit contract" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                add_test(NAME "Validation - generated function semantics and CFG truth"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/generated_function_diff.py
+                        --seeds 1 --trials 8 --out ${CMAKE_CURRENT_BINARY_DIR}/generated-function-controls)
+                add_test(NAME "Validation - generated functions detect wrong branch"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/generated_function_diff.py
+                        --seeds 1 --trials 8 --control invert-branch --expect-control
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/generated-branch-negative)
+                add_test(NAME "Validation - generated functions detect stale callee state"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/generated_function_diff.py
+                        --seeds 1 --trials 8 --control stale-call --expect-control
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/generated-call-negative)
+                set_tests_properties("Validation - generated function semantics and CFG truth"
+                    "Validation - generated functions detect wrong branch"
+                    "Validation - generated functions detect stale callee state" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
                 add_test(NAME "Validation - complete Guest CALL and RET"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
