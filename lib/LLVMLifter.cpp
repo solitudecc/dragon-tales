@@ -129,14 +129,24 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   std::string name = mode_ != ExecutionMode::Legacy
       ? std::format("dragon_{}_{}_{:x}", mode_ == ExecutionMode::StaticAnalysis ? "static" : "v2", ArchitectureName(arch_), fn.startAddress())
       : std::format("sub_{:x}", fn.startAddress());
-  if (module_->getFunction(name)) return false;
   auto *ptrTy = llvm::PointerType::getUnqual(*ctx_);
   auto *voidTy = llvm::Type::getVoidTy(*ctx_);
   auto *FnType = llvm::FunctionType::get(voidTy,
       mode_ != ExecutionMode::Legacy ? std::vector<llvm::Type*>{ptrTy,ptrTy,ptrTy,ptrTy}
                                         : std::vector<llvm::Type*>{ptrTy,ptrTy}, false);
-  auto *llfn = llvm::Function::Create(
-          FnType, llvm::GlobalValue::ExternalLinkage, name, *module_);
+  auto *llfn=module_->getFunction(name);
+  const bool hadDeclaration=llfn!=nullptr;
+  if (llfn && (mode_!=ExecutionMode::StaticAnalysis || !llfn->isDeclaration() ||
+               llfn->getFunctionType()!=FnType)) return false;
+  if (!llfn) llfn=llvm::Function::Create(FnType,llvm::GlobalValue::ExternalLinkage,name,*module_);
+  auto failedLift=[&] {
+    // A caller may already reference a forward declaration. Preserve that
+    // symbol if the body cannot be lifted, rather than leaving dangling uses.
+    llfn->deleteBody();llfn->removeFnAttr("dragon.entrypoints");
+    llfn->removeFnAttr("dragon.signature");
+    if (!hadDeclaration && llfn->use_empty()) llfn->eraseFromParent();
+    return false;
+  };
   if (mode_ != ExecutionMode::Legacy) {
     llfn->getArg(0)->setName("state"); llfn->getArg(1)->setName("memory");
     llfn->getArg(2)->setName("runtime"); llfn->getArg(3)->setName("exit");
@@ -185,8 +195,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   auto bbMap = buildBlockMap(llfn, &fn, graph);
 
   if (!bbMap || !bbMap->contains(fn.startAddress())) {
-    llfn->eraseFromParent();
-    return false;
+    return failedLift();
   }
   llvm::IRBuilder<>(entryBB).CreateBr(bbMap->at(fn.startAddress()));
   resumeEntries_=*bbMap;
@@ -201,8 +210,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
       continue;
     TempMap temps{}; // fresh per block - Temp ids don't cross block boundaries
     if (!liftBlock(ib, llfn, &regFile, &temps, memPtr, regsPtr, bbMap.value())) {
-      llfn->eraseFromParent();
-      return false;
+      return failedLift();
     }
   }
   if (stateful()) {
@@ -1225,7 +1233,13 @@ void dragon::llvmlifter::LLVMLifter::emitStaticCall(const ignil::Op &op,
   auto *type=fn->getFunctionType();
   // This declaration makes no promises about effects or preserved registers.
   // Guest targets remain numeric state; there is no native inttoptr bridge.
-  auto callee=module_->getOrInsertFunction("dragon_static_external",type);
+  std::string calleeName="dragon_static_external";
+  if (const auto *constant=llvm::dyn_cast<llvm::ConstantInt>(target)) {
+    const auto address=constant->getZExtValue();
+    const auto internal=std::format("dragon_static_{}_{:x}",ArchitectureName(arch_),address);
+    if (module_->getFunction(internal) || Function(graph_,address).isValid()) calleeName=internal;
+  }
+  auto callee=module_->getOrInsertFunction(calleeName,type);
   builder.CreateCall(callee,{fn->getArg(0),fn->getArg(1),fn->getArg(2),fn->getArg(3)});
   reloadRegisters(regs,regsPtr,builder);
   const auto pcOffset=arch_==Architecture::ARM64 ? 264u : 128u;

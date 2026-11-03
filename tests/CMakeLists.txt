@@ -183,6 +183,14 @@ if(Python3_Interpreter_FOUND)
                         --trials 2 --out ${CMAKE_CURRENT_BINARY_DIR}/function-static-controls)
                 set_tests_properties("Validation - LLVM static external call state execution" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
+                add_test(NAME "Validation - LLVM static Guest calls and boundaries"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_static_guest_diff.py
+                        --trials 2 --out ${CMAKE_CURRENT_BINARY_DIR}/function-static-guest-controls)
+                add_test(NAME "Validation - LLVM static Exit contract"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/static_exit_contract.py
+                        --trials 2 --out ${CMAKE_CURRENT_BINARY_DIR}/static-exit-controls)
+                set_tests_properties("Validation - LLVM static Guest calls and boundaries" "Validation - LLVM static Exit contract" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
                 add_test(NAME "Validation - complete Guest CALL and RET"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}

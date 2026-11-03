@@ -35,7 +35,9 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
         if image.architecture!=arch_id or not any(s.imported and s.name==fixture['expected_import_name'] for s in image.symbols()):
             raise RuntimeError('fixture image import identity mismatch')
         image_graph=image.disassemble(base.dragon.Configuration(strategy=0))
-    for address,code in [(entry,fixture['code_hex'])]+[(s['address'],s['code_hex']) for s in local_functions]+([] if model_factory else [(s['address'],s['code_hex']) for s in fixture['stubs']]):
+    root=[(entry,fixture['code_hex'])];local=[(s['address'],s['code_hex']) for s in local_functions]
+    ordered=local+root if static_analysis and fixture.get('callee_first') else root+local
+    for address,code in ordered+([] if model_factory else [(s['address'],s['code_hex']) for s in fixture['stubs']]):
         if image_graph is not None and address in {entry}|{s['address'] for s in local_functions}:graph=image_graph
         else:
             dis=base.dragon.Disassembler(arch_id,base.dragon.Configuration(strategy=0))

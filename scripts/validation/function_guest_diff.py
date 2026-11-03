@@ -118,18 +118,18 @@ class Adapter:
         if record[:7]!=want_exit:differences.append(dict(field='exit',got=record[:7],expected=want_exit))
         return differences,record
 
-def main():
+def main(*, fixtures_path=None, compile_factory=None, adapter_factory=None):
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--trials',type=int,default=8);parser.add_argument('--case',action='append',dest='cases');parser.add_argument('--out',type=Path);parser.add_argument('--corrupt-output',action='store_true')
     parser.add_argument('--opt',default='opt-21');parser.add_argument('--llc',default='llc-21');parser.add_argument('--cc',default='gcc');args=parser.parse_args()
     if args.trials<1:parser.error('positive trials required')
-    fixtures=json.loads((base.ROOT/'tests/fixtures/llvm-guest-flow.json').read_text());selected=[f for f in fixtures['cases'] if not args.cases or f['id'] in args.cases]
+    fixtures=json.loads((fixtures_path or base.ROOT/'tests/fixtures/llvm-guest-flow.json').read_text());selected=[f for f in fixtures['cases'] if not args.cases or f['id'] in args.cases]
     if not selected or (args.cases and set(args.cases)!={f['id'] for f in selected}):parser.error('unknown case')
     out=(args.out or Path(tempfile.mkdtemp(prefix='dragon-guest-'))).resolve();out.mkdir(parents=True,exist_ok=True);rows=[]
     for f in selected:
-        adapter=Adapter(f['architecture'])
+        adapter=(adapter_factory or Adapter)(f['architecture'])
         for level in ('O0','O2'):
             work=out/f['id']/level;work.mkdir(parents=True,exist_ok=True)
-            try:exe,bad_ir,sites=compile.compile_case(f,fixtures['entry'],level,work,args,architecture=f['architecture'])
+            try:exe,bad_ir,sites=(compile_factory or compile.compile_case)(f,fixtures['entry'],level,work,args,architecture=f['architecture'])
             except Exception as error:
                 detail=error.stderr.decode(errors='replace') if isinstance(error,compile.subprocess.CalledProcessError) and isinstance(error.stderr,bytes) else str(error)
                 rows.append(dict(case=f['id'],opt=level,status='infrastructure_error',detail=detail));continue

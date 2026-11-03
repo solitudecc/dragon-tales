@@ -785,7 +785,8 @@ is needed to verify or optimize the IR. Calls commit Guest stack/LR effects,
 flush state, and reload it before a verified normal continuation. All modelled
 registers and Guest memory may change. Other exits propagate explicitly.
 Static IR consumes no V2 budget and is not registered with `execute_v2`.
-The first stage lowers all calls through the opaque declaration; see the
+Known internal entries call `dragon_static_*` directly, with forward declarations
+that can receive definitions later in either lift order. See the
 [static contract](llvm-static-analysis-contract.md) for scope and later stages.
 
 ### Optimization passes

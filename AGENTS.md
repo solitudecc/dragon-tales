@@ -381,7 +381,16 @@ The owner approved `docs/llvm-static-analysis-contract.md` on 2026-11-03.
 StaticAnalysis=2 (`DRAGON_LLVM_STATIC_ANALYSIS`, Python STATIC_ANALYSIS) emits
 four-pointer `dragon_static_*` functions and opaque `dragon_static_external`
 calls without a V2 budget/runtime. Step 1 reloads state and guards normal call
-continuation; internal direct calls and broad static regression follow in steps 2/3.
+continuation. Step 2 emits direct calls to known static entries, accepts forward
+declarations in either lift order, and preserves declarations after a failed body
+lift. Three-architecture static execution: 91 fixtures / 1456 matches, zero skips;
+normal Return900 / Transfer220 / NeedTarget96 / Unsupported240. The 18 Exit
+protocol variants compare 288 snapshots, and non-returning stubs terminate all
+16 children with the expected code; CTest 478/478. Static JMP/thunk/altered-return
+boundaries are explicit and do not imply complete cross-function execution.
+The static Guest oracle declares those boundaries before comparing Unicorn;
+no state fields or memory are normalized. Artifacts: static-step2-guests-final
+and static-step2-exits-final; broad static corpora remain step 3.
 See `docs/llvm-static-analysis-validation.md` for failures on old mode selection,
 CTest 474/474 and 272 full-state/memory static comparisons at O0/O2. The native
 validation links C fixture stubs only after opt and needs no libdragon runtime;

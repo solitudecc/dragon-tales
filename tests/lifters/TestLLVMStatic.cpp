@@ -46,3 +46,39 @@ TEST_CASE("LLVM static mode preserves conditional out of function exits", "[llvm
   CHECK(lifter.ir().find("unreachable")==std::string::npos);
   CHECK(lifter.ir().find("store i32 7")!=std::string::npos);
 }
+
+TEST_CASE("LLVM static internal declarations accept definitions in either order", "[llvm][static]") {
+  for (bool callerFirst : {true,false}) {
+    Configuration config; config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
+    Disassembler dis{Architecture::X86_64,config}; Graph graph{Architecture::X86_64,config};
+    std::vector<std::uint8_t> code{0xe8,0x0b,0,0,0,0xc3};code.resize(16,0xcc);
+    code.insert(code.end(),{0xb8,7,0,0,0,0xc3});dis.disassemble(code,0x1000,graph);
+    Function root{&graph,0x1000},callee{&graph,0x1010}; REQUIRE(root.isValid());REQUIRE(callee.isValid());
+    LLVMLifter lifter{Architecture::X86_64};REQUIRE(lifter.setExecutionMode(static_cast<ExecutionMode>(2)));
+    REQUIRE(lifter.lift(callerFirst ? root : callee,graph));
+    if (callerFirst) {
+      auto *declaration=lifter.module().getFunction("dragon_static_x86_64_1010");
+      REQUIRE(declaration);CHECK(declaration->isDeclaration());
+      CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+    }
+    REQUIRE(lifter.lift(callerFirst ? callee : root,graph));
+    CHECK_FALSE(lifter.module().getFunction("dragon_static_x86_64_1010")->isDeclaration());
+    CHECK(lifter.ir().find("call void @dragon_static_x86_64_1010")!=std::string::npos);
+    CHECK(lifter.ir().find("dragon_static_x86_64_1010.1")==std::string::npos);
+    CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+  }
+}
+
+TEST_CASE("LLVM failed static callee lift preserves its used declaration", "[llvm][static]") {
+  Configuration config;config.disassemblyStrategy=DisassemblyStrategy::LINEAR_SWEEP;
+  Disassembler dis{Architecture::X86_64,config};Graph graph{Architecture::X86_64,config};
+  std::vector<std::uint8_t> code{0xe8,0x0b,0,0,0,0xc3};code.resize(16,0xcc);code.push_back(0xc3);
+  dis.disassemble(code,0x1000,graph);Function root{&graph,0x1000},callee{&graph,0x1010};
+  LLVMLifter lifter{Architecture::X86_64};REQUIRE(lifter.setExecutionMode(static_cast<ExecutionMode>(2)));
+  REQUIRE(lifter.lift(root,graph));auto *declaration=lifter.module().getFunction("dragon_static_x86_64_1010");REQUIRE(declaration);
+  ignil::Block invalid{0x1010};invalid.append({ignil::Opcode::COPY,ignil::Reg{0,64,"RAX"},{ignil::Temp{999,64}},0x1010});
+  REQUIRE(graph.getIGNILBlock(0x1010));*graph.getIGNILBlock(0x1010)=std::move(invalid);
+  CHECK_FALSE(lifter.lift(callee,graph));
+  CHECK(lifter.module().getFunction("dragon_static_x86_64_1010")==declaration);
+  CHECK(declaration->isDeclaration());CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+}
