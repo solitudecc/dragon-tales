@@ -267,6 +267,26 @@ proven independent simplifications remain possible. Static IR does not consume
 the V2 budget and must not be registered with its executor. See
 [the static contract](../llvm-static-analysis-contract.md) for staged coverage.
 
+A complete static-output example, using case A with an unknown target at 0x2000:
+
+```python
+from pathlib import Path
+import dragon
+
+code = bytes.fromhex("31c0e8f90f000085c07407b901000000890bc3")
+graph = dragon.Disassembler(dragon.Architecture.X86_64).analyze(code, 0x1000)
+with dragon.LLVMLifter(
+        execution_mode=dragon.LLVMExecutionMode.STATIC_ANALYSIS) as lifter:
+    assert lifter.lift(graph.get_function(0x1000), graph)
+    lifter.optimize()
+    Path("static.ll").write_text(lifter.ir())
+```
+
+No implementation of 0x2000 is supplied or executed. In the validated example,
+the library pipeline removed all 13 register allocas (22158 to 13050 IR bytes),
+while retaining the opaque external call and the dependent control flow.
+This is an example's IR size change, not a general deobfuscation ratio.
+
 The default Legacy interface keeps `void sub_<addr>(mem, regs)` and the trace
 API. It refuses CALL and transfers it cannot report. For complete Guest
 control flow, opt in before the first lift:

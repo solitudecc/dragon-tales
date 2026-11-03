@@ -44,9 +44,9 @@ class LLVMLifter {
   /// has no unresolved branch left to encode (the block's op order *is*
   /// the path that was actually taken), so JMP/CJMP ops - which liftTrace
   /// still emits per-instruction, same as normal lifting - are dropped
-  /// rather than translated, instead of producing `unreachable` (their
-  /// fate under the Graph-based `lift()` when a target isn't in the
-  /// function). Reachable CALL is rejected: the Legacy callee protocol has no register state. RET, if present,
+  /// rather than translated. Graph-based Legacy rejects transfers it cannot
+  /// represent; V2/StaticAnalysis use explicit exits for unknown boundaries.
+  /// Reachable CALL is rejected: the Legacy callee protocol has no register state. RET, if present,
   /// must be the block's true terminator - anything after it is ignored,
   /// matching how a real `ret` would end execution. If the block has no
   /// RET, a synthetic `ret void` (with the usual register write-back) is

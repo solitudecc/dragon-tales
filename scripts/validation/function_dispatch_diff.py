@@ -18,7 +18,7 @@ import tempfile
 
 import function_llvm_diff as base
 
-def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64', *, static_analysis=False):
+def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64', *, static_analysis=False, product_pipeline=False):
     arch_id={'x86_64':2,'x86_32':1,'arm64':4}[architecture]
     pc_offset=264 if architecture=='arm64' else 128
     regs_size=800 if architecture=='arm64' else 512
@@ -44,8 +44,11 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
             graph=dis.analyze(bytes.fromhex(code),address)
         function=graph.get_function(address)
         if not function or not function.is_valid: raise RuntimeError('invalid function')
-        if not lifter.lift(function,graph): raise RuntimeError('V2 lift rejected')
+        if not lifter.lift(function,graph): raise RuntimeError(('static' if static_analysis else 'V2')+' lift rejected')
         call_sites.update(i.address for i in graph.instructions() if i.is_call)
+    if product_pipeline:
+        (work/'unoptimized.ll').write_text(lifter.ir())
+        lifter.optimize()
     raw=work/'raw.ll';raw.write_text(lifter.ir())
     if fixture.get('image_format'):
         symbol=f'{prefix}_{architecture}_{entry:x}'
@@ -184,6 +187,9 @@ def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True, full
       register_fields_compared=sum(r.get('register_fields_compared',0) for r in rows),memory_bytes_compared=sum(r.get('memory_bytes_compared',0) for r in rows),
       llvm_lifter_sha256=hashlib.sha256((base.ROOT/'lib/LLVMLifter.cpp').read_bytes()).hexdigest(),artifacts=str(out))
     summary['runtime_sha256']=hashlib.sha256((base.ROOT/'lib/LLVMExecution.cpp').read_bytes()).hexdigest()
+    summary['root_returns']=sum(r.get('exit',[0])[0]==1 and r['exit'][1]==3 and r['exit'][3]==base.SENTINEL and r['exit'][4]==1 for r in rows)
+    summary['return_boundaries']=sum(r.get('exit',[0])[0]==1 for r in rows)-summary['root_returns']
+    summary['terminal_boundaries']=sum('exit' in r for r in rows)-summary['root_returns']
     summary['unicorn_version']=__import__('unicorn').__version__
     summary['host']=platform.machine()
     summary['tools']={command:subprocess.run([command,'--version'],capture_output=True,text=True,check=True).stdout.splitlines()[0] for command in (args.opt,args.llc,args.cc)}

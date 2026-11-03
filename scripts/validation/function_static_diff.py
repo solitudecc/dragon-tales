@@ -13,7 +13,7 @@ import function_call_diff as calls
 
 original_compile=dispatch.compile_case
 def compile_static(*args,**kwargs):
-    return original_compile(*args,**kwargs,static_analysis=True)
+    return original_compile(*args,**kwargs,static_analysis=True,product_pipeline=True)
 
 def reference_static(*args,**kwargs):
     expected=dispatch.base.reference(*args,**kwargs)

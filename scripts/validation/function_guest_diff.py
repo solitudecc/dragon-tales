@@ -147,6 +147,9 @@ def main(*, fixtures_path=None, compile_factory=None, adapter_factory=None):
             print(f['id'],level,dict(collections.Counter(r['status'] for r in rows if r['case']==f['id'] and r['opt']==level)),flush=True)
     summary=dict(cases=len(selected),trials_per_opt=args.trials,statuses=dict(collections.Counter(r['status'] for r in rows)),results=len(rows),skipped=0,legacy_normalizations=0,register_fields_compared=sum(r.get('register_fields_compared',0) for r in rows),memory_bytes_compared=sum(r.get('memory_bytes_compared',0) for r in rows),undefined_flag_fields=sum(r.get('undefined_flag_fields',0) for r in rows),exits=dict(collections.Counter(str(r['exit'][0]) for r in rows if 'exit' in r)),llvm_lifter_sha256=hashlib.sha256((base.ROOT/'lib/LLVMLifter.cpp').read_bytes()).hexdigest(),artifacts=str(out))
     summary['runtime_sha256']=hashlib.sha256((base.ROOT/'lib/LLVMExecution.cpp').read_bytes()).hexdigest()
+    summary['root_returns']=sum(r.get('exit',[0])[0]==1 and r['exit'][1]==3 and r['exit'][3]==base.SENTINEL and r['exit'][4]==1 for r in rows)
+    summary['return_boundaries']=sum(r.get('exit',[0])[0]==1 for r in rows)-summary['root_returns']
+    summary['terminal_boundaries']=sum('exit' in r for r in rows)-summary['root_returns']
     summary['unicorn_version']=__import__('unicorn').__version__;summary['host']=platform.machine()
     summary['tools']={command:compile.subprocess.run([command,'--version'],capture_output=True,text=True,check=True).stdout.splitlines()[0] for command in (args.opt,args.llc,args.cc)}
     (out/'results.json').write_text(json.dumps(dict(summary=summary,results=rows),indent=2));print(json.dumps(summary,indent=2))

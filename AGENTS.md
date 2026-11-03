@@ -384,13 +384,29 @@ calls without a V2 budget/runtime. Step 1 reloads state and guards normal call
 continuation. Step 2 emits direct calls to known static entries, accepts forward
 declarations in either lift order, and preserves declarations after a failed body
 lift. Three-architecture static execution: 91 fixtures / 1456 matches, zero skips;
-normal Return900 / Transfer220 / NeedTarget96 / Unsupported240. The 18 Exit
+Return900 (804 root returns, 96 changed-target return boundaries) /
+Transfer220 / NeedTarget96 / Unsupported240. The 18 Exit
 protocol variants compare 288 snapshots, and non-returning stubs terminate all
 16 children with the expected code; CTest 478/478. Static JMP/thunk/altered-return
 boundaries are explicit and do not imply complete cross-function execution.
 The static Guest oracle declares those boundaries before comparing Unicorn;
 no state fields or memory are normalized. Artifacts: static-step2-guests-final
-and static-step2-exits-final; broad static corpora remain step 3.
+and static-step2-exits-final. Step 3 is complete (2026-11-04): CTest 479/479,
+no Z3 330/330. Product optimize() then O0/O2: 1728 matches, zero skips (1070
+root returns and 658 declared boundaries, including 96 other-target returns);
+288 Exit snapshots plus 16 expected non-returning children also pass. Memory
+and defined x87 C1 controls each produce 4/4 differences. Static corpora: all
+69 samples / 138 strategies / 203113 function checks, 5227 raw plus 5227
+optimized modules verify, all structural baselines unchanged. Import metadata
+159595 references are diagnostic, not semantic passes. LLVM_MODE=static in
+check_one.py enables both verifies and optimize(); static chunks default to 32
+after memory pressure with 128 (no functions dropped). Summary reporting has
+10 deliberate negative controls. Real Legacy blocks: 450 match / 142 registered
+skips; six Lua table runs exact104/wrong0/unresolved10/nobound76/unreadable0,
+identical to their prior outputs. Unlifted x32/x64/A64 stays 188/49/90, full
+histograms unchanged. These block/table tests do not replace static function
+execution, and corpus verification is not semantic execution of real libraries.
+Artifacts: VM validation-results/static-step3-*, progress.json records all jobs.
 See `docs/llvm-static-analysis-validation.md` for failures on old mode selection,
 CTest 474/474 and 272 full-state/memory static comparisons at O0/O2. The native
 validation links C fixture stubs only after opt and needs no libdragon runtime;
@@ -429,7 +445,7 @@ Provenance is local to a block, invalidates aliases/calls, and follows at most
 8 simple JMP thunks. Conflicting merged names stay discarded. Unknown names
 still dispatch by actual Guest address. See `docs/llvm-flow-step5-validation.md`;
 step 6 is complete: `docs/llvm-flow-step6-validation.md`.
-Final source: CTest 469/469 (no Z3 320/320); 1792 native V2 records match
+Original task 8 acceptance: CTest 469/469 (no Z3 320/320); 1792 native V2 records match
 (1226 root Return, 262 NeedTarget, 288 Unsupported, 16 Budget), zero skips.
 Both corpora: 69 samples, 203113 functions / 1656 modules verify, no new baseline
 alerts; table oracles exact1124 / wrong0 / unresolved116 / nobound558 / unreadable42.

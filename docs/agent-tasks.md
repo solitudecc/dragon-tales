@@ -14,7 +14,14 @@
 | 7 | C shim / Python 暴露 AnalysisHints、callingConvention | 已完成（2026-11-02；403/403 ctest） |
 | 8 | LLVM Lift：跨函数控制流与调用边界（详见 docs/llvm-control-flow.md） | 已完成（2026-11-03；六步独立提交；ctest 469/469，无 Z3 320/320；1792 执行匹配；69 样本、203113 函数 verify；跳转表 wrong=0） |
 
+任务 8 的静态模式后续已完成（2026-11-04；三步各自独立提交）：
+`STATIC_ANALYSIS=2` 保留未知外部调用，支持内部声明/定义及保守状态同步，
+无需提供外部函数实现即可生成和优化 IR。CTest 479/479、无 Z3 330/330；
+1728 次执行/声明边界比较一致；69 样本、203113 次函数检查的优化前后 IR 均 verify。
+具体退出分类、跳过、负对照及盲区见 [静态模式记录](llvm-static-analysis-validation.md)。
+
 **分配建议**
+
 - 可以并行：任务 1、2、5、6、7 基本互不冲突。
 - 会冲突：任务 3 和 4 都要改 `X86IGNILLifter.cpp`；任务 1 和 3 都可能新增 IGNIL 浮点操作。
   这几个建议串行做，或者先由一个 agent 把"FP32 / 新浮点操作"做好合入，其他 agent 再基于它继续。

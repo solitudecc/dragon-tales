@@ -35,6 +35,8 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], '*'))):
                 issues.append(f'{k}.{f}={x[f]}' + (f' {x["edges_to_undecoded_eg"]}' if f == 'edges_to_undecoded' else ''))
         if x['llvm_verify'] != 'ok':
             issues.append(f'{k}.llvm_verify: {x["llvm_verify"]}')
+        if x.get('llvm_optimized_verify','ok')!='ok':
+            issues.append(f'{k}.llvm_optimized_verify: {x["llvm_optimized_verify"]}')
     if r['linear'].get('objdump_missing'):
         issues.append(f'objdump_missing={r["linear"]["objdump_missing"]}')
     t = f'{r["linear"]["time"]:6.1f}s/{r["recursive"]["time"]:6.1f}s'

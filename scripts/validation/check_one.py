@@ -10,8 +10,10 @@ import dragon
 
 path, objdump = sys.argv[1], sys.argv[2]
 llvm_mode=_os.environ.get('LLVM_MODE','legacy')
-if llvm_mode not in ('legacy','v2'): raise ValueError('LLVM_MODE must be legacy or v2')
-out = {'binary': _os.path.basename(path),'llvm_mode':llvm_mode}
+if llvm_mode not in ('legacy','v2','static'): raise ValueError('LLVM_MODE must be legacy, v2 or static')
+optimize=_os.environ.get('LLVM_OPTIMIZE','1' if llvm_mode=='static' else '0')
+if optimize not in ('0','1'):raise ValueError('LLVM_OPTIMIZE must be 0 or 1')
+out = {'binary': _os.path.basename(path),'llvm_mode':llvm_mode,'llvm_optimize':optimize=='1'}
 img = dragon.LoadedImage.load_file(path)
 if img is None:
     print(json.dumps({**out, 'error': 'load failed'})); sys.exit(0)
@@ -48,10 +50,16 @@ for strat in (0, 1):
     # Verify every function. V2 uses bounded modules to fit the 3 GB VM;
     # no function is capped/skipped. Native fixtures separately exercise
     # modules containing multiple V2 implementations and runtime dispatch.
-    mode=dragon.LLVMExecutionMode.STATEFUL_V2 if llvm_mode=='v2' else dragon.LLVMExecutionMode.LEGACY
-    chunk_size=128 if llvm_mode=='v2' else max(1,len(valid))
+    mode={'legacy':dragon.LLVMExecutionMode.LEGACY,'v2':dragon.LLVMExecutionMode.STATEFUL_V2,
+          'static':dragon.LLVMExecutionMode.STATIC_ANALYSIS}[llvm_mode]
+    # Static modules retain opaque call boundaries and can grow large.
+    # Smaller batches limit extra module memory on the 3 GB VM;
+    # every function is still checked before and after the same pipeline.
+    chunk_size=32 if llvm_mode=='static' else 128 if llvm_mode=='v2' else max(1,len(valid))
+    r['llvm_chunk_size']=chunk_size
     failed=verified=modules=import_references=0
-    verification_errors=[]
+    optimized_verified=optimized_modules=0
+    verification_errors=[];optimized_errors=[]
     for start in range(0,max(1,len(valid)),chunk_size):
         L=dragon.LLVMLifter(img.architecture,execution_mode=mode)
         accepted=0
@@ -67,6 +75,13 @@ for strat in (0, 1):
             if metadata:import_references+=len(re.findall(r'!\d+',metadata[1]))
             with open(path_ir,'w') as f:f.write(ir)
             v=subprocess.run(['opt-21','-passes=verify','-disable-output',path_ir],capture_output=True,text=True)
+            if optimize=='1':
+                L.optimize()
+                with open(path_ir,'w') as f:f.write(L.ir())
+                after=subprocess.run(['opt-21','-passes=verify','-disable-output',path_ir],capture_output=True,text=True)
+                optimized_modules+=1
+                if after.returncode==0:optimized_verified+=accepted
+                else:optimized_errors.append((after.stderr.strip().splitlines() or [f'opt exit {after.returncode}'])[0][:200])
         modules+=1
         if v.returncode==0:verified+=accepted
         else:verification_errors.append((v.stderr.strip().splitlines() or [f'opt exit {v.returncode}'])[0][:200])
@@ -76,5 +91,8 @@ for strat in (0, 1):
     r['llvm_verified_modules']=modules
     r['llvm_import_references']=import_references
     r['llvm_verify']='ok' if not verification_errors else verification_errors[0]
+    r['llvm_optimized_verified_functions']=optimized_verified
+    r['llvm_optimized_verified_modules']=optimized_modules
+    r['llvm_optimized_verify']='ok' if not optimized_errors else optimized_errors[0]
     out[key] = r
 print(json.dumps(out))

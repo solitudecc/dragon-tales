@@ -152,6 +152,9 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - jump-table bounds follow the actual index"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)
+        add_test(NAME "Validation - static corpus summary rejects incomplete results"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_static_corpus_summary.py)
         add_test(NAME "Validation - LLVM V2 C and Python mirror"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_v2.py)
         add_test(NAME "Validation - LLVM static C and Python mirror"

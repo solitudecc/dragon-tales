@@ -43,7 +43,7 @@ def main():
       for level in ('O0','O2'):
         work=out/name/level;work.mkdir(parents=True,exist_ok=True)
         try:
-          exe,bad_ir,sites=dispatch.compile_case(fixture,0x1000,level,work,args,model,static_analysis=True)
+          exe,bad_ir,sites=dispatch.compile_case(fixture,0x1000,level,work,args,model,static_analysis=True,product_pipeline=True)
           for trial in range(args.trials):
             regs,memory=base.initial(fixture,trial,0x1000)
             expected=base.reference(prefix,regs,memory,0x1000,sites,stop_before_control=True,stop_before_calls=False,full_guest=True)
@@ -75,7 +75,7 @@ def main():
       work=out/'noreturn'/level;work.mkdir(parents=True,exist_ok=True)
       try:
         model=lambda stub:'#include <stdlib.h>\nvoid model_2000(S*s,M*m,C*c,E*e){_Exit(42);}'
-        exe,_,_=dispatch.compile_case(fixture,0x1000,level,work,args,model,static_analysis=True)
+        exe,_,_=dispatch.compile_case(fixture,0x1000,level,work,args,model,static_analysis=True,product_pipeline=True)
         for trial in range(args.trials):
           regs,memory=base.initial(fixture,trial,0x1000)
           actual,error=base.native(exe,regs,memory,work,trial,extra_bytes=64)

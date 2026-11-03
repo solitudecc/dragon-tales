@@ -18,7 +18,7 @@ class StaticAdapter(guest.Adapter):
         return regs,memory,events,record
 
 def compile_static(f,*args,**kwargs):
-    result=dispatch.compile_case(f,*args,**kwargs,static_analysis=True)
+    result=dispatch.compile_case(f,*args,**kwargs,static_analysis=True,product_pipeline=True)
     if '_internal_' in f['id']:
         raw=(args[2]/'raw.ll').read_text()
         if f'call void @dragon_static_{f["architecture"]}_2000(' not in raw:
