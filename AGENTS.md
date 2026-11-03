@@ -377,6 +377,18 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 ## 6. Backlog (suggested order)
 
+Static-analysis follow-up is a proposal, not an implemented execution mode:
+`docs/llvm-static-analysis-contract.md`. The owner requires approval before new
+mode/IR names or signatures are implemented. Proposed mode 2 and `dragon_static_*`
+have not been added to the public APIs or lifter. The standalone
+`scripts/validation/static_call_contract_probe.py` checks a hand-written LLVM
+call-effect contract only: 88/88 correct native comparisons; stale-cache control
+66 differences; false-memory(none) control 33 differences (O2 only); zero skips;
+66 IR verifies. It does not validate machine CALL/RET or static deobfuscation.
+The initial control assertion incorrectly expected llc O0 to exploit memory(none);
+it failed, and now asserts the observed O0/O2 behavior separately for every input,
+without excluding any records. Artifacts: VM validation-results/static-contract-probe-final.
+
 Task 8 LLVM call boundaries and out-of-function flow are implemented and validated;
 plan and history: `docs/llvm-control-flow.md`.
 The owner requested continuing with the submitted contract on 2026-11-03.
