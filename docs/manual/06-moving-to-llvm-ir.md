@@ -250,6 +250,23 @@ This is C++-only; the Python/C API only exposes the rendered IR text via
 
 ## Executing Guest functions with StatefulV2
 
+For static analysis, select `LLVMExecutionMode.STATIC_ANALYSIS` instead:
+
+```python
+lifter = dragon.LLVMLifter(
+    image.architecture, execution_mode=dragon.LLVMExecutionMode.STATIC_ANALYSIS)
+assert lifter.lift(function, graph)
+lifter.optimize()
+print(lifter.ir())
+```
+
+This emits `dragon_static_*` functions and opaque `dragon_static_external`
+declarations, without executing external functions. Verify/optimization needs
+no external bodies. Unknown effects conservatively block dependent folds;
+proven independent simplifications remain possible. Static IR does not consume
+the V2 budget and must not be registered with its executor. See
+[the static contract](../llvm-static-analysis-contract.md) for staged coverage.
+
 The default Legacy interface keeps `void sub_<addr>(mem, regs)` and the trace
 API. It refuses CALL and transfers it cannot report. For complete Guest
 control flow, opt in before the first lift:

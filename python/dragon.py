@@ -1342,6 +1342,7 @@ def read_table_targets(candidate, data, base_addr):
 class LLVMExecutionMode:
     LEGACY = 0
     STATEFUL_V2 = 1
+    STATIC_ANALYSIS = 2
 
 
 class LLVMLifter:
@@ -1355,6 +1356,7 @@ class LLVMLifter:
         Name embedded in the LLVM module (default 'lifted').
     execution_mode : LLVMExecutionMode
         LEGACY by default; STATEFUL_V2 uses Execution.h state/dispatch exits.
+        STATIC_ANALYSIS preserves opaque external calls for static optimization.
     """
 
     def __init__(self, arch=Architecture.X86_64, module_name='lifted', *, execution_mode=LLVMExecutionMode.LEGACY):

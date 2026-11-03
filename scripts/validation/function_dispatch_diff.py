@@ -18,12 +18,13 @@ import tempfile
 
 import function_llvm_diff as base
 
-def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64'):
+def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64', *, static_analysis=False):
     arch_id={'x86_64':2,'x86_32':1,'arm64':4}[architecture]
     pc_offset=264 if architecture=='arm64' else 128
     regs_size=800 if architecture=='arm64' else 512
     lifter=base.dragon.LLVMLifter(arch_id,
-                                execution_mode=base.dragon.LLVMExecutionMode.STATEFUL_V2)
+                                execution_mode=2 if static_analysis else base.dragon.LLVMExecutionMode.STATEFUL_V2)
+    prefix='dragon_static' if static_analysis else 'dragon_v2'
     call_sites=set()
     local_functions=fixture.get('local_functions',[])
     image_graph=None
@@ -45,7 +46,7 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
         call_sites.update(i.address for i in graph.instructions() if i.is_call)
     raw=work/'raw.ll';raw.write_text(lifter.ir())
     if fixture.get('image_format'):
-        symbol=f'dragon_v2_{architecture}_{entry:x}'
+        symbol=f'{prefix}_{architecture}_{entry:x}'
         record=r'!\d+ = !\{!"'+re.escape(symbol)+r'", i64 \d+, i64 '+str(fixture['image_slot'])+r', !"'+re.escape(fixture['expected_import_name'])+r'"\}'
         if not re.search(record,lifter.ir()):raise RuntimeError('root import provenance missing or incorrect')
     subprocess.run([args.opt,'-passes=verify','-disable-output',str(raw)],check=True,capture_output=True)
@@ -62,13 +63,13 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
             metadata=re.search(r'"dragon.entrypoints"="([^"]*)"',attributes[1]) if attributes else None
             if metadata:return [(int(pc,16),symbol) for pc in metadata[1].split(',')]
         return [(address,symbol)]
-    root_symbol=f'dragon_v2_{architecture}_{entry:x}'
+    root_symbol=f'{prefix}_{architecture}_{entry:x}'
     names=entries(entry,root_symbol);root_count=len(names)
     for local in local_functions:
-        address=local['address'];names.extend(entries(address,f'dragon_v2_{architecture}_{address:x}'))
+        address=local['address'];names.extend(entries(address,f'{prefix}_{architecture}_{address:x}'))
     wrappers=[]
     for stub in fixture['stubs']:
-        address=stub['address'];symbol=f'dragon_v2_{architecture}_{address:x}';wrapper=f'model_{address:x}'
+        address=stub['address'];symbol=f'{prefix}_{architecture}_{address:x}';wrapper=f'model_{address:x}'
         if model_factory:
             wrappers.append(model_factory(stub));names.append((address,wrapper))
         else:
@@ -80,12 +81,25 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
     if fixture.get('initially_missing'):
         resume=f'if(e.reason!=DRAGON_EXIT_NEED_TARGET || get64(regs+32)!=0xc7f8 || calls2000) return 94; c.entry_count={len(names)};dragon_llvm_execute_v2(&s,&m,&c,&e,0xf000);'
     driver=work/'driver.c';driver.write_text(DRIVER.replace('DECLARATIONS',declarations+'\n'+'\n'.join(wrappers)).replace('ENTRIES',table).replace('INITIAL_BUDGET',str(fixture.get('context_budget',1000))).replace('INITIAL_COUNT',str(root_count if fixture.get('initially_missing') else len(names))).replace('RESUME_CODE',resume).replace('regs[512]',f'regs[{regs_size}]').replace('DRAGON_ARCH_X86_64',{'x86_64':'DRAGON_ARCH_X86_64','x86_32':'DRAGON_ARCH_X86_32','arm64':'DRAGON_ARCH_ARM64'}[architecture]))
+    if static_analysis:
+        # Validation-only implementation. No bodies were supplied to opt, and
+        # no such dispatcher/model is installed in the product library.
+        helper='\nvoid dragon_static_external(S*s,M*m,C*c,E*e){uint64_t pc=get64(s->regs_bytes+'+str(pc_offset)+');'
+        helper+=''.join(f'if(pc=={address}ULL){{{symbol}(s,m,c,e);return;}}' for address,symbol in names)
+        helper+='e->reason=DRAGON_EXIT_NEED_TARGET;}\n'
+        text=driver.read_text().replace('int main(',helper+'int main(')
+        text=text.replace('dragon_llvm_execute_v2(&s,&m,&c,&e,0xf000);',root_symbol+'(&s,&m,&c,&e);')
+        # A zero budget demonstrates that static IR does not use V2 runtime.
+        text=text.replace('}; E e={0};','}; E e={0}; c.budget=0;')
+        text=text.replace('  f=fopen(argv[2]', '  if(c.budget!=0)return 95;\n  f=fopen(argv[2]')
+        driver.write_text(text)
     obj=work/'module.o';exe=work/'native'
     triple={'aarch64':'aarch64-linux-gnu','x86_64':'x86_64-linux-gnu'}.get(platform.machine())
     if not triple: raise RuntimeError('Linux aarch64/x86_64 host required')
     subprocess.run([args.llc,'-O0','-filetype=obj','-mtriple='+triple,str(source),'-o',str(obj)],check=True,capture_output=True)
     runtime=Path(base.dragon._LIB).resolve()
-    subprocess.run([args.cc,'-O0','-I'+str(base.ROOT/'include'),'-I'+str(base.ROOT/'c_shim'),str(driver),str(obj),str(runtime),'-Wl,-rpath,'+str(runtime.parent),'-o',str(exe)],check=True,capture_output=True)
+    link=[] if static_analysis else [str(runtime),'-Wl,-rpath,'+str(runtime.parent)]
+    subprocess.run([args.cc,'-O0','-I'+str(base.ROOT/'include'),'-I'+str(base.ROOT/'c_shim'),str(driver),str(obj)]+link+['-o',str(exe)],check=True,capture_output=True)
     return exe, 'unreachable' in source.read_text(), call_sites
 
 DRIVER=r'''
@@ -123,7 +137,7 @@ int main(int argc,char **argv) {
 }
 '''
 
-def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True, full_guest=False):
+def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True, full_guest=False, reference_factory=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case',action='append',dest='cases')
     parser.add_argument('--trials',type=int,default=8)
@@ -148,7 +162,7 @@ def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True, full
             for trial in range(args.trials):
                 row=dict(case=fixture['id'],opt=level,trial=trial)
                 regs,memory=base.initial(fixture,trial,fixtures['entry'])
-                try:expected=base.reference(fixture,regs,memory,fixtures['entry'],sites,stop_before_control=True,stop_before_calls=stop_before_calls,skip_stub_returns=bool(model_factory),full_guest=full_guest)
+                try:expected=(reference_factory or base.reference)(fixture,regs,memory,fixtures['entry'],sites,stop_before_control=True,stop_before_calls=stop_before_calls,skip_stub_returns=bool(model_factory),full_guest=full_guest)
                 except Exception as error:row.update(status='reference_error',detail=str(error));rows.append(row);continue
                 actual,error=base.native(exe,regs,memory,work,trial,extra_bytes=64)
                 if error:row.update(status=error['kind'],detail=error)

@@ -878,6 +878,16 @@ assume preserved registers. Legacy refuses CALL and transfers its two-pointer
 protocol cannot represent; the trace API remains Legacy. See the
 [execution contract](llvm-execution-contract.md) for layouts and preconditions.
 
+### Static analysis
+
+`setExecutionMode(ExecutionMode::StaticAnalysis)` emits four-pointer
+`dragon_static_<arch>_<addr>` functions using the existing state layouts.
+Unknown callees remain `dragon_static_external` declarations with conservative
+effects; verify/optimization requires no function bodies or execution runtime.
+Calls reload state and continue only on a matching Guest Return. This mode does
+not consume a V2 budget and must not be registered as a V2 implementation.
+See [the static contract](llvm-static-analysis-contract.md) for staged coverage.
+
 ### Lifting a single block without a Graph
 
 `liftBlock` is the `Graph`-free counterpart to `Disassembler::liftTrace` —

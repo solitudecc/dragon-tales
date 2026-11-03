@@ -377,10 +377,16 @@ and ARM requires exhaustive enumeration; a capped list is never a target set.
 
 ## 6. Backlog (suggested order)
 
-Static-analysis follow-up is a proposal, not an implemented execution mode:
-`docs/llvm-static-analysis-contract.md`. The owner requires approval before new
-mode/IR names or signatures are implemented. Proposed mode 2 and `dragon_static_*`
-have not been added to the public APIs or lifter. The standalone
+The owner approved `docs/llvm-static-analysis-contract.md` on 2026-11-03.
+StaticAnalysis=2 (`DRAGON_LLVM_STATIC_ANALYSIS`, Python STATIC_ANALYSIS) emits
+four-pointer `dragon_static_*` functions and opaque `dragon_static_external`
+calls without a V2 budget/runtime. Step 1 reloads state and guards normal call
+continuation; internal direct calls and broad static regression follow in steps 2/3.
+See `docs/llvm-static-analysis-validation.md` for failures on old mode selection,
+CTest 474/474 and 272 full-state/memory static comparisons at O0/O2. The native
+validation links C fixture stubs only after opt and needs no libdragon runtime;
+the product installs no external models. Invalid exits must not retain stale state.
+No IGNIL CALL/RET or existing V2 ABI/name changes. The standalone
 `scripts/validation/static_call_contract_probe.py` checks a hand-written LLVM
 call-effect contract only: 88/88 correct native comparisons; stale-cache control
 66 differences; false-memory(none) control 33 differences (O2 only); zero skips;

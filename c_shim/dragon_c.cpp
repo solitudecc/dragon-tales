@@ -1189,6 +1189,7 @@ dragon_slicer_t *dragon_slicer_create(int max_blocks) {
 struct dragon_llvm_lifter {
   dragon::llvmlifter::LLVMLifter lifter;
 };
+static_assert(static_cast<int>(dragon::llvmlifter::ExecutionMode::StaticAnalysis)==DRAGON_LLVM_STATIC_ANALYSIS);
 
 dragon_llvm_lifter_t *dragon_llvm_lifter_create(dragon_architecture_t arch,
                                                 const char *module_name) {

@@ -15,6 +15,8 @@ def model(stub):
     if 'copy_gpr' in stub:
         dst,src,width=stub['copy_gpr'];code.append(f'put64(r+{base.GPRS.index(dst)*8},get64(r+{base.GPRS.index(src)*8})'+ ('&0xffffffffULL' if width==32 else '')+');')
     if 'set_cf' in stub:code.append(f'r[136]={stub["set_cf"]};')
+    if 'store' in stub:
+        code.append(f'uint64_t at=get64(r+24);uint32_t v={stub["store"]}u;if(m->size<4 || at>m->size-4){{*e=(E){{5,0,0,0,0,0,3}};return;}}memcpy(m->data+at,&v,4);')
     if 'copy_xmm' in stub:
         dst,src=stub['copy_xmm'];code.append(f'memcpy(r+{143+8*dst},r+{143+8*src},8);memcpy(r+{271+8*dst},r+{271+8*src},8);')
     if 'fill_xmm' in stub:

@@ -15,7 +15,7 @@
 
 namespace dragon::llvmlifter {
 
-enum class ExecutionMode { Legacy = 0, StatefulV2 = 1 };
+enum class ExecutionMode { Legacy = 0, StatefulV2 = 1, StaticAnalysis = 2 };
 
 class LLVMLifter {
   public:
@@ -34,6 +34,8 @@ class LLVMLifter {
   /// Lift one function (all its IGNIL blocks must be in the graph). Legacy
   /// rejects transfers it cannot report; StatefulV2 emits explicit exits.
   /// V2 target implementations require valid caller-owned Execution.h objects.
+  /// StaticAnalysis uses the same state layout and opaque external declarations;
+  /// it requires no runtime or external bodies for IR analysis/optimization.
   bool lift(const Function &fn, const Graph &graph);
 
   /// Lifts a single, already-flattened IGNIL block directly to LLVM IR -
@@ -168,6 +170,13 @@ class LLVMLifter {
   // value at the same offset.
   void initializeRegistersFromParam(llvm::Function *llfn, RegFile &regFile,
                                     llvm::Value *regsPtr);
+  void reloadRegisters(RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
+  void writeExitAtValue(std::uint64_t reason, std::uint64_t kind, llvm::Value *sourcePC,
+                llvm::Value *target, RegFile &regs, llvm::IRBuilder<> &builder,
+                std::uint64_t detail, std::uint64_t returnPC);
+  void emitStaticCall(const ignil::Op &op, llvm::Value *target, std::uint64_t next,
+                RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
+                const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap);
 
   void emitExit(std::uint64_t reason, std::uint64_t kind, std::uint64_t sourcePC,
                 llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
@@ -179,7 +188,7 @@ class LLVMLifter {
   void emitBudgetCheck(std::uint64_t pc, RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
   llvm::Value *memoryAddress(llvm::Value *address, std::uint64_t bytes, std::uint64_t pc,
                              RegFile &regs, llvm::Value *regsPtr, llvm::Value *memPtr, llvm::IRBuilder<> &builder);
-  bool stateful() const { return mode_ == ExecutionMode::StatefulV2 && graph_; }
+  bool stateful() const { return mode_ != ExecutionMode::Legacy && graph_; }
   ExecutionMode mode_ = ExecutionMode::Legacy;
   std::set<std::uint64_t> unsupportedAddresses_;
   std::map<std::uint64_t,llvm::BasicBlock *> resumeEntries_;

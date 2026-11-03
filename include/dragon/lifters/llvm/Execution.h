@@ -5,7 +5,8 @@
  * caller-owned for the entire execution. Guest addresses index memory.data.
  * No host ABI assumptions are made about guest functions. */
 typedef enum dragon_llvm_execution_mode {
-  DRAGON_LLVM_LEGACY = 0, DRAGON_LLVM_STATEFUL_V2 = 1
+  DRAGON_LLVM_LEGACY = 0, DRAGON_LLVM_STATEFUL_V2 = 1,
+  DRAGON_LLVM_STATIC_ANALYSIS = 2
 } dragon_llvm_execution_mode_t;
 typedef enum dragon_exec_reason_v2 {
   DRAGON_EXIT_RETURN = 1, DRAGON_EXIT_TRANSFER = 2,

@@ -3,6 +3,13 @@
 
 #include <array>
 
+TEST_CASE("C LLVM static mode is an explicit opt in", "[c-api][static]") {
+  auto *lifter=dragon_llvm_lifter_create(DRAGON_ARCH_X86_64,"static"); REQUIRE(lifter);
+  CHECK(dragon_llvm_lifter_set_execution_mode(lifter,static_cast<dragon_llvm_execution_mode_t>(2))==1);
+  CHECK(dragon_llvm_lifter_set_execution_mode(lifter,static_cast<dragon_llvm_execution_mode_t>(99))==0);
+  dragon_llvm_lifter_destroy(lifter);
+}
+
 TEST_CASE("C analysis hints own entries and report invalid inputs", "[c-api][hints]") {
   auto *hints = dragon_analysis_hints_create();
   REQUIRE(hints);

@@ -898,6 +898,13 @@ never invoke host library functions. Legacy safely refuses CALL or transfers it
 cannot represent. See [the execution contract](llvm-execution-contract.md) for
 supported architectures/host ABI, layouts, ownership and registration rules.
 
+`DRAGON_LLVM_STATIC_ANALYSIS` selects static IR with `dragon_static_<arch>_<addr>`
+four-pointer functions. Unknown calls remain declarations of
+`dragon_static_external`; no bodies or V2 runtime are needed for verify or
+optimization. Calls conservatively expose register/memory effects and guard
+normal continuation. Static functions are not V2 runtime targets. See
+[the static contract](llvm-static-analysis-contract.md).
+
 **API summary**
 
 | Function | Returns | Notes |

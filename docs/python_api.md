@@ -776,6 +776,18 @@ BL/BLR/RET; Legacy safely refuses transfers its interface cannot represent.
 See [the execution contract](llvm-execution-contract.md) for exact supported
 conditions, state/memory layouts, ownership and registration requirements.
 
+### Static analysis
+
+Select `LLVMExecutionMode.STATIC_ANALYSIS` before lifting. Functions use
+`dragon_static_<arch>_<addr>(state, memory, runtime, exit)`. Unknown calls remain
+four-pointer declarations of `dragon_static_external`; no external implementation
+is needed to verify or optimize the IR. Calls commit Guest stack/LR effects,
+flush state, and reload it before a verified normal continuation. All modelled
+registers and Guest memory may change. Other exits propagate explicitly.
+Static IR consumes no V2 budget and is not registered with `execute_v2`.
+The first stage lowers all calls through the opaque declaration; see the
+[static contract](llvm-static-analysis-contract.md) for scope and later stages.
+
 ### Optimization passes
 
 Individual passes can be called separately or use `optimize()` for the
@@ -1113,7 +1125,7 @@ lifted x86-64.
 |-------|--------|
 | `dragon.Architecture` | `UNKNOWN`, `X86_32`, `X86_64`, `ARM32`, `ARM64`, `RISCV32`, `RISCV64` |
 | `dragon.Syntax` | `INTEL`, `ATT` |
-| `dragon.LLVMExecutionMode` | `LEGACY`, `STATEFUL_V2` |
+| `dragon.LLVMExecutionMode` | `LEGACY`, `STATEFUL_V2`, `STATIC_ANALYSIS` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
 | `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI`, `OPAQUE` (43 values) |

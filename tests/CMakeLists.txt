@@ -20,6 +20,7 @@ add_executable(dragon_tests
         lifters/TestLLVMDispatch.cpp
         lifters/TestLLVMGuestReturns.cpp
         lifters/TestLLVMImports.cpp
+        lifters/TestLLVMStatic.cpp
         loader/TestLoader.cpp
 )
 
@@ -153,6 +154,10 @@ if(Python3_Interpreter_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)
         add_test(NAME "Validation - LLVM V2 C and Python mirror"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_v2.py)
+        add_test(NAME "Validation - LLVM static C and Python mirror"
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_static.py)
+        set_tests_properties("Validation - LLVM static C and Python mirror" PROPERTIES
+            ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         # Function execution retains machine branches, loops and Guest CALL/RET.
         # A/B are ordinary V2 regressions; Legacy keeps its explicit controls.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -172,6 +177,11 @@ if(Python3_Interpreter_FOUND)
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-call-controls)
                 set_tests_properties("Validation - LLVM V2 call state execution" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
+                add_test(NAME "Validation - LLVM static external call state execution"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_static_diff.py
+                        --trials 2 --out ${CMAKE_CURRENT_BINARY_DIR}/function-static-controls)
+                set_tests_properties("Validation - LLVM static external call state execution" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
                 add_test(NAME "Validation - complete Guest CALL and RET"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py
