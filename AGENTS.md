@@ -110,7 +110,10 @@ Gotchas:
   `rewriteThroughScratch`): any fix to a register form fixes its memory form.
 - IGNIL CALL does not push a return address and RET has no operand (x86 and
   ARM alike) — a deliberate abstraction. x86 RET stores any imm16 byte count
-  in aux for clients; current backends do not pop the guest stack. Difftests show 3 expected diffs on
+  in aux for clients; the abstract executor and Legacy do not pop the guest stack.
+  StatefulV2 models machine CALL/RET at its execution boundary. A64 ordinary RET aux
+  is 0 for legacy X30, or 1..32 for X0..X31 (X31=XZR); still no IGNIL operands.
+  Difftests show 3 expected diffs on
   AArch64 `bl/blr/ret` because of it.
 - Float ops (FADD/FSUB/FMUL/FDIV/SITOFP/FPTOSI/FLT/FEQ/FUNO) treat 64-bit
   slots as IEEE doubles. A NaN result keeps its class but has independent
@@ -385,8 +388,14 @@ Step 3 handles ordinary x64 direct CALL: it pushes the Guest return address,
 flushes state, exits to the dispatcher, and resumes via `dragon.entrypoints`
 with fresh parameter loads. No caller SSA survives a callee. Legacy rejects CALL
 as well as unsupported branches; trace operations after a true RET stay ignored.
-No A/B expected-failure markers remain. V2 RET and other CALL forms are still
-Unsupported pending steps 4/5; root-RET prefixes are not full-function success.
+No A/B expected-failure markers remain. Step 4 implements near x64/i386 CALL/RET
+(including i386 word forms) and ordinary A64 BL/BLR/RET Xn; targets are evaluated
+before SP/LR changes. Only rootExitPC ends execution; altered returns dispatch
+by their actual Guest address. Far/system/authenticated transfers and long-mode
+66-prefixed CALL/RET remain explicit Unsupported. The new three-architecture
+function oracle and existing V2 runners execute the root RET and separately
+count normal returns and declared terminal boundaries. No V2 Legacy normalization.
+See `docs/llvm-flow-step4-validation.md`; naming/remaining indirect work is step 5.
 x87 SW.TOP is materialized from authoritative FPTOP at V2 boundaries. The two
 call-x87 fixtures exclude only manual-undefined FSTP C0/C2/C3 bits (8/10/14),
 not TOP, C1 or exception bits; `--corrupt-fpsw` flips defined C1 and must fail.

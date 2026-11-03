@@ -1,4 +1,4 @@
-"""Task 8 step 3: execute x64 CALL boundaries, stop BEFORE root RET.
+"""Execute x64 CALL boundaries and the complete root Guest RET.
 
 External C models implement the exact fixture guest instructions and Guest
 RET over the same state/memory; Unicorn executes their machine bytes. No
@@ -30,4 +30,4 @@ def model(stub):
     return '\n'.join(code)
 
 if __name__=='__main__':
-    raise SystemExit(dispatch.main(fixtures_path=base.ROOT/'tests/fixtures/llvm-call-state.json',model_factory=model,stop_before_calls=False))
+    raise SystemExit(dispatch.main(fixtures_path=base.ROOT/'tests/fixtures/llvm-call-state.json',model_factory=model,stop_before_calls=False,full_guest=True))

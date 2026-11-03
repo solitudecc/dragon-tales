@@ -244,3 +244,28 @@ x87 在每次 V2 写回时以 FPTOP 合成 SW.TOP；两者不允许因 cached �
 视图。FSTP 的 C0/C2/C3 按 Intel SDM 未定义，只在相应夹具声明的 8/10/14 位屏蔽；
 其余 SW 位、TOP/TAG/CW 和每个物理寄存器的全部 80 位继续比较。细节和检测 C1 的
 负对照见第 3 步验证记录。该规则没有改变现有 IGNIL 抽象。
+
+
+## 11. 第 4 步：Guest CALL/RET 的机器效果
+
+StatefulV2 的 x86 near CALL 先求出完整目标值，再按操作数宽度在 Guest 栈写入
+fall-through，更新 SP/PC；RET 从 Guest 栈读取目标，SP 增加返回地址宽度及无符号
+`aux` imm16。i386 的普通宽度为 4 字节，66 前缀为 2 字节（目标 IP 截断到 16 位）；
+x64 普通宽度为 8 字节。内存目标使用其实际宽度，地址计算先于压栈。
+A64 BL/BLR 先读取目标再将 PC+4 写入 X30；普通 RET 使用指定 Xn，X31 表示 XZR。
+IGNIL CALL 不压栈、RET 无操作数的抽象保持；A64 RET 仅使用已批准的 aux 约定
+（0 兼容旧 X30；1..32 对应 X0..X31）。现有 C/Python 的函数签名及 V2 名字不变。
+
+Return 不代表立刻退出整个执行器：目标等于调用者指定的 rootExitPC 才结束；其他
+目标继续按注册表分发。因此改写的 Guest 返回地址、RET 跳往另一函数、RET 目标 0
+都按真实目标处理；未知实现保留 PC 并报告 NeedTarget，不能返回到假想的宿主调用栈。
+所有调用经过分发循环，不使用 Guest 地址转成宿主函数指针。
+
+x86 far CALL/RETF/IRET、A64 带认证的调用/返回，以及 x64 66 前缀的 near CALL/RET
+本版不提供语义，执行前明确 Unsupported。没有模拟分段、OS、异常恢复、CET 或 PAC；
+内存故障沿用第 9 节的失败边界约定。
+
+第 4 步起 `function_guest_diff.py` 执行三架构完整 CALL/RET，已有分支与调用状态框架
+也执行 root RET，不再将它当 Unsupported。只有达到 rootExitPC 的记录才计为 Return；
+NeedTarget/Unsupported/Budget 仍单独统计，不能计作正常返回。Legacy 专用正对照仍沿用
+第 8 节明确列出的适配，其数字不混入 V2。

@@ -20,6 +20,37 @@
 #include <llvm/Transforms/Scalar/GVN.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
+namespace {
+std::uint32_t a64Word(const dragon::Instruction *instruction) {
+  if (!instruction || instruction->bytes().size()!=4) return 0;
+  const auto &b=instruction->bytes();
+  return std::uint32_t(b[0]) | (std::uint32_t(b[1])<<8) | (std::uint32_t(b[2])<<16) | (std::uint32_t(b[3])<<24);
+}
+std::optional<unsigned> x86ControlWord(const dragon::Instruction *instruction,
+                                     dragon::Architecture arch, bool call) {
+  if (!instruction) return std::nullopt;
+  const auto &b=instruction->bytes();std::size_t p=0;bool word16=false;
+  while (p<b.size()) {
+    const auto byte=b[p];
+    if (byte==0x66) word16=true;
+    else if (byte==0xf0 || byte==0xf2 || (byte==0xf3 && call)) return std::nullopt;
+    else if (byte!=0x67 && byte!=0x26 && byte!=0x2e && byte!=0x36 && byte!=0x3e &&
+             byte!=0x64 && byte!=0x65 && byte!=0xf3 &&
+             !(arch==dragon::Architecture::X86_64 && byte>=0x40 && byte<=0x4f)) break;
+    ++p;
+  }
+  if (p>=b.size()) return std::nullopt;
+  // Long-mode operand-size-prefixed control transfers remain unsupported.
+  if (word16 && arch==dragon::Architecture::X86_64) return std::nullopt;
+  const unsigned word=arch==dragon::Architecture::X86_64 ? 8 : word16 ? 2 : 4;
+  if (call) {
+    if (b[p]==0xe8 && b.size()==p+1+(word==2 ? 2 : 4)) return word;
+    if (b[p]==0xff && p+1<b.size() && ((b[p+1]>>3)&7)==2) return word;
+  } else if ((b[p]==0xc3 && b.size()==p+1) || (b[p]==0xc2 && b.size()==p+3)) return word;
+  return std::nullopt; // far/interrupt/authenticated effects are not near CALL/RET
+}
+}
+
 bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
                                           const Graph &graph) {
   // Refuse an invalid Function view rather than crash on it. Function's
@@ -247,7 +278,16 @@ dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
 
   if (stateful()) {
     regFile[arch_ == Architecture::ARM64 ? 264 : 128].try_emplace(64,nullptr);
-    if (arch_ == Architecture::X86_64) regFile[32].try_emplace(64,nullptr);
+    if (arch_ != Architecture::ARM64) regFile[32].try_emplace(arch_ == Architecture::X86_64 ? 64 : 32,nullptr);
+    else {
+      regFile[240].try_emplace(64,nullptr);
+      for (const auto &[address,block] : fn->blocks())
+        for (const auto &op : graph.getIGNILBlock(address)->ops())
+          if (op.opcode == ignil::Opcode::RET && op.aux<=32) {
+            const auto n=op.aux ? op.aux-1 : 30;
+            if (n!=31) regFile[n*8].try_emplace(64,nullptr);
+          }
+    }
     if (arch_ != Architecture::ARM64 && (regFile.contains(480) || regFile.contains(486))) {
       regFile[480].try_emplace(8,nullptr);regFile[486].try_emplace(16,nullptr);
     }
@@ -328,10 +368,18 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(
   std::optional<std::uint64_t> unsupportedPC;
   if (stateful()) {
     emitBudgetCheck(ib->startAddress(),*regs,regsPtr,builder);
-    for (const auto *instruction : BasicBlock(graph_,ib->startAddress()).instructions())
-      if (instruction->isTrap() || unsupportedAddresses_.contains(instruction->address())) {
-        unsupportedPC=instruction->address();break;
+    for (const auto *instruction : BasicBlock(graph_,ib->startAddress()).instructions()) {
+      bool unsupported=instruction->isTrap() || unsupportedAddresses_.contains(instruction->address());
+      if (instruction->isCall() || instruction->isReturn()) {
+        if (arch_ == Architecture::ARM64) {
+          const auto word=a64Word(instruction);
+          const bool normal=instruction->isCall() ? ((word&0xfc000000)==0x94000000 || (word&0xfffffc1f)==0xd63f0000)
+                                                    : ((word&0xfffffc1f)==0xd65f0000);
+          unsupported |= !normal;
+        } else unsupported |= !x86ControlWord(instruction,arch_,instruction->isCall()).has_value();
       }
+      if (unsupported) {unsupportedPC=instruction->address();break;}
+    }
     for (const auto &op : ib->ops()) if (op.opcode == ignil::Opcode::OPAQUE)
       unsupportedPC=unsupportedPC ? std::min(*unsupportedPC,op.address) : op.address;
   }
@@ -695,22 +743,31 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     case ignil::Opcode::CALL: {
       if (stateful()) {
         const auto *instruction=graph_->get(op.address);
-        // The initial state-boundary implementation covers ordinary x64
-        // direct near calls, including their real pre-callee SP/memory effects.
-        // Other CALL forms remain honestly Unsupported until steps 4/5.
-        if (arch_ != Architecture::X86_64 || !instruction || instruction->size()!=5 ||
-            instruction->bytes().empty() || instruction->bytes()[0]!=0xe8 ||
-            op.srcs.size()!=1 || !std::holds_alternative<ignil::Const>(op.srcs[0])) {
+        if (!instruction || op.srcs.size()!=1) {
           emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
         }
-        auto *target=r0(); // evaluate before changing SP
+        auto *target=r0(); // snapshot target before SP/LR changes (CALL SP / BLR X30)
         const auto next=instruction->address()+instruction->size();
-        auto *sp=builder.CreateLoad(builder.getInt64Ty(),regs.at(32).at(64));
-        auto *newSP=builder.CreateSub(sp,builder.getInt64(8));
-        auto *slot=memoryAddress(newSP,8,op.address,regs,regsPtr,memPtr,builder);
-        builder.CreateAlignedStore(builder.getInt64(next),slot,llvm::Align(1));
-        builder.CreateStore(newSP,regs.at(32).at(64));
-        mergeIntoParent(32,64,newSP,regs,builder);syncOverlapping(32,64,newSP,regs,builder);
+        if (arch_ == Architecture::ARM64) {
+          const auto word=a64Word(instruction);
+          if ((word&0xfc000000)!=0x94000000 && (word&0xfffffc1f)!=0xd63f0000) {
+            emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
+          }
+          auto *link=builder.getInt64(next);builder.CreateStore(link,regs.at(240).at(64));
+          mergeIntoParent(240,64,link,regs,builder);syncOverlapping(240,64,link,regs,builder);
+        } else {
+          const auto word=x86ControlWord(instruction,arch_,true);
+          if (!word) {emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;}
+          const auto width=arch_ == Architecture::X86_64 ? 64u : 32u;
+          auto *type=builder.getIntNTy(width);
+          target=builder.CreateZExtOrTrunc(target,builder.getIntNTy(*word*8));
+          auto *sp=builder.CreateLoad(type,regs.at(32).at(width));
+          auto *newSP=builder.CreateSub(sp,llvm::ConstantInt::get(type,*word));
+          auto *slot=memoryAddress(newSP,*word,op.address,regs,regsPtr,memPtr,builder);
+          builder.CreateAlignedStore(llvm::ConstantInt::get(builder.getIntNTy(*word*8),next),slot,llvm::Align(1));
+          builder.CreateStore(newSP,regs.at(32).at(width));
+          mergeIntoParent(32,width,newSP,regs,builder);syncOverlapping(32,width,newSP,regs,builder);
+        }
         emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_CALL,op.address,target,regs,regsPtr,builder,0,next);
         break;
       }
@@ -731,10 +788,30 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       break;
     }
 
-    case ignil::Opcode::RET:
-      if (stateful()) emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);
-      else emitReturn(regs, regsPtr, builder);
+    case ignil::Opcode::RET: {
+      if (!stateful()) {emitReturn(regs,regsPtr,builder);break;}
+      const auto *instruction=graph_->get(op.address);
+      llvm::Value *target=nullptr;
+      if (arch_ == Architecture::ARM64) {
+        const auto word=a64Word(instruction);const auto n=op.aux ? op.aux-1 : 30;
+        if ((word&0xfffffc1f)!=0xd65f0000 || op.aux>32 || ((word>>5)&31)!=n) {
+          emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
+        }
+        target=n==31 ? static_cast<llvm::Value*>(builder.getInt64(0)) : builder.CreateLoad(builder.getInt64Ty(),regs.at(n*8).at(64));
+      } else {
+        const auto word=x86ControlWord(instruction,arch_,false);
+        if (!word || op.aux>0xffff) {emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;}
+        const auto width=arch_ == Architecture::X86_64 ? 64u : 32u;auto *type=builder.getIntNTy(width);
+        auto *sp=builder.CreateLoad(type,regs.at(32).at(width));
+        auto *slot=memoryAddress(sp,*word,op.address,regs,regsPtr,memPtr,builder);
+        target=builder.CreateAlignedLoad(builder.getIntNTy(*word*8),slot,llvm::Align(1));
+        auto *newSP=builder.CreateAdd(sp,llvm::ConstantInt::get(type,*word+op.aux));
+        builder.CreateStore(newSP,regs.at(32).at(width));
+        mergeIntoParent(32,width,newSP,regs,builder);syncOverlapping(32,width,newSP,regs,builder);
+      }
+      emitExit(DRAGON_EXIT_RETURN,DRAGON_TRANSFER_RETURN,op.address,target,regs,regsPtr,builder);
       break;
+    }
 
     case ignil::Opcode::UNDEF:
       if (op.dst) {

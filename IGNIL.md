@@ -1382,8 +1382,8 @@ IR.
 | `SLT/SLE/SGT/SGE` | `icmp slt / sle / sgt / sge` |
 | `JMP target` | `br label %bb_<target>` (when target is a known block) |
 | `CJMP cond, taken, fall` | `br i1 %cond, label %bb_<taken>, label %bb_<fall>` |
-| `CALL target` | `call void @fn_<target>()` |
-| `RET` | `ret void` |
+| `CALL target` | Legacy refuses; StatefulV2 synchronizes Guest state and exits to the dispatcher |
+| `RET` | Legacy `ret void`; StatefulV2 reads the architectural Guest return target |
 | `UNDEF` | `undef` constant of the appropriate integer type |
 
 ---
@@ -2272,3 +2272,16 @@ TEST_CASE("SwitchAnalyzer — 4-case jump table") {
 | Jump tables in read-only data sections vs. inline after code | `MemReader` callback abstracts over this — the caller decides how to map addresses |
 | Path-sensitive constraints (nested ifs before the bounds check) | Extend `findBoundConstraint` to walk more than one predecessor; collect a conjunction of all `CJMP` guards along the unique path |
 | 32-bit relative entries (common in PIC code: table contains `target - table_base`) | Detect 32-bit LOAD width, `SEXT` the result, `ADD` the table base back; the backward slice will naturally encode this if the lifter emits the right ops |
+
+### Guest CALL/RET in StatefulV2
+
+IGNIL CALL still does not push a return address and RET still has no operands.
+The opt-in LLVM V2 backend implements ordinary x86 near CALL/RET (32/64-bit
+modes, including 16-bit operand size in i386), and AArch64 BL/BLR/RET using the
+decoded instruction and Guest state. x86 RET `aux` is the unsigned imm16 cleanup.
+Ordinary A64 RET records its source register in `aux`: 0 means legacy X30,
+1..32 means X0..X31; X31 is XZR. This metadata does not add an IGNIL operand
+or change the abstract executor. Authenticated/far/system transfers and
+long-mode 66-prefixed CALL/RET remain explicit Unsupported exits in V2.
+The ABI and supported entrypoints are specified in
+[the execution contract](docs/llvm-execution-contract.md).

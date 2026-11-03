@@ -1,0 +1,501 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_64_ret",
+      "architecture": "x86_64",
+      "code_hex": "c70307000000c3",
+      "source": "mov dword ptr [rbx],7; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_call",
+      "architecture": "x86_64",
+      "code_hex": "e8fb0f0000c3",
+      "source": "call callee; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_nested",
+      "architecture": "x86_64",
+      "code_hex": "55e8fa0f00005dc3",
+      "source": "push rbp; call callee; pop rbp; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "e8fb0f000083c001c3"
+        },
+        {
+          "address": 12288,
+          "code_hex": "b805000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_ret_imm",
+      "architecture": "x86_64",
+      "code_hex": "4883ec10e8f70f00004883c408c3",
+      "source": "sub rsp,16; call callee; add rsp,8; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b809000000c20800"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_root_ret_1",
+      "architecture": "x86_64",
+      "code_hex": "c20100",
+      "source": "ret 1",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_root_ret_max",
+      "architecture": "x86_64",
+      "code_hex": "c2ffff",
+      "source": "ret 65535",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_redirect",
+      "architecture": "x86_64",
+      "code_hex": "e8fb0f0000c70301000000c3",
+      "source": "call callee; mov dword ptr [rbx],1; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "48c7042400300000b807000000c3"
+        },
+        {
+          "address": 12288,
+          "code_hex": "c70309000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_call_memory_sp",
+      "architecture": "x86_64",
+      "code_hex": "6800200000ff14244883c408c3",
+      "source": "push 0x2000; call qword ptr [rsp]; add rsp,8; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b809000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_call_register_sp",
+      "architecture": "x86_64",
+      "code_hex": "ffd44883c408c3",
+      "source": "call rsp; add rsp,8; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "90c3"
+        }
+      ],
+      "initial_sp": 8192,
+      "root_return_offset": 8
+    },
+    {
+      "id": "x86_64_return_zero",
+      "architecture": "x86_64",
+      "code_hex": "c3",
+      "source": "ret",
+      "undefined_flags": [],
+      "stubs": [],
+      "missing_targets": [
+        0
+      ],
+      "root_return_target": 0,
+      "boundary_kind": 3
+    },
+    {
+      "id": "x86_32_ret",
+      "architecture": "x86_32",
+      "code_hex": "c70307000000c3",
+      "source": "mov dword ptr [ebx],7; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_call",
+      "architecture": "x86_32",
+      "code_hex": "e8fb0f0000c3",
+      "source": "call callee; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_nested",
+      "architecture": "x86_32",
+      "code_hex": "55e8fa0f00005dc3",
+      "source": "push ebp; call callee; pop ebp; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "e8fb0f000083c001c3"
+        },
+        {
+          "address": 12288,
+          "code_hex": "b805000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_ret_imm",
+      "architecture": "x86_32",
+      "code_hex": "83ec08e8f80f000083c404c3",
+      "source": "sub esp,8; call callee; add esp,4; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b809000000c20400"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_root_ret_1",
+      "architecture": "x86_32",
+      "code_hex": "c20100",
+      "source": "ret 1",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_root_ret_max",
+      "architecture": "x86_32",
+      "code_hex": "c2ffff",
+      "source": "ret 65535",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_redirect",
+      "architecture": "x86_32",
+      "code_hex": "e8fb0f0000c70301000000c3",
+      "source": "call callee; mov dword ptr [ebx],1; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "c7042400300000b807000000c3"
+        },
+        {
+          "address": 12288,
+          "code_hex": "c70309000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_call_memory_sp",
+      "architecture": "x86_32",
+      "code_hex": "6800200000ff142483c404c3",
+      "source": "push 0x2000; call dword ptr [esp]; add esp,4; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b809000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_call_register_sp",
+      "architecture": "x86_32",
+      "code_hex": "ffd483c404c3",
+      "source": "call esp; add esp,4; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "90c3"
+        }
+      ],
+      "initial_sp": 8192,
+      "root_return_offset": 4
+    },
+    {
+      "id": "x86_32_return_zero",
+      "architecture": "x86_32",
+      "code_hex": "c3",
+      "source": "ret",
+      "undefined_flags": [],
+      "stubs": [],
+      "missing_targets": [
+        0
+      ],
+      "root_return_target": 0,
+      "boundary_kind": 3
+    },
+    {
+      "id": "arm64_ret",
+      "architecture": "arm64",
+      "code_hex": "e00080d2c0035fd6",
+      "source": "mov x0,#7; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "arm64_call",
+      "architecture": "arm64",
+      "code_hex": "fd7bbfa9ff030094fd7bc1a8c0035fd6",
+      "source": "stp x29,x30,[sp,#-16]!; bl callee; ldp x29,x30,[sp],#16; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "e00080d2c0035fd6"
+        }
+      ]
+    },
+    {
+      "id": "arm64_nested",
+      "architecture": "arm64",
+      "code_hex": "fd7bbfa9ff030094fd7bc1a8c0035fd6",
+      "source": "stp x29,x30,[sp,#-16]!; bl callee; ldp x29,x30,[sp],#16; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "fd7bbfa9ff03009400040091fd7bc1a8c0035fd6"
+        },
+        {
+          "address": 12288,
+          "code_hex": "a00080d2c0035fd6"
+        }
+      ]
+    },
+    {
+      "id": "arm64_ret_x9",
+      "architecture": "arm64",
+      "code_hex": "20015fd6",
+      "source": "ret x9",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "X9": 61440
+      }
+    },
+    {
+      "id": "arm64_blr_x30",
+      "architecture": "arm64",
+      "code_hex": "c0033fd680025fd6",
+      "source": "blr x30; ret x20",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "200180d2c0035fd6"
+        }
+      ],
+      "set_gprs": {
+        "X30": 8192,
+        "X20": 61440
+      }
+    },
+    {
+      "id": "arm64_vector_call",
+      "architecture": "arm64",
+      "code_hex": "fd7bbfa9ff0300947f02803dfd7bc1a8c0035fd6",
+      "source": "stp x29,x30,[sp,#-16]!; bl callee; str q31,[x19]; ldp x29,x30,[sp],#16; ret",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "5fe5054fc0035fd6"
+        }
+      ]
+    },
+    {
+      "id": "arm64_return_zero",
+      "architecture": "arm64",
+      "code_hex": "c0035fd6",
+      "source": "ret",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "X30": 0
+      },
+      "missing_targets": [
+        0
+      ],
+      "boundary_kind": 3
+    },
+    {
+      "id": "arm64_ret_xzr",
+      "architecture": "arm64",
+      "code_hex": "e0035fd6",
+      "undefined_flags": [],
+      "stubs": [],
+      "missing_targets": [
+        0
+      ],
+      "boundary_kind": 3
+    },
+    {
+      "id": "x86_32_word_call",
+      "architecture": "x86_32",
+      "code_hex": "66e8fc0fc3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b80700000066c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_word_ret_unsupported",
+      "architecture": "x86_64",
+      "code_hex": "66c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "unsupported_before": [
+        4096
+      ]
+    },
+    {
+      "id": "arm64_auth_ret_unsupported",
+      "architecture": "arm64",
+      "code_hex": "ff0b5fd6",
+      "undefined_flags": [],
+      "stubs": [],
+      "unsupported_before": [
+        4096
+      ]
+    },
+    {
+      "id": "x86_64_control_branch",
+      "code_hex": "85ff7407c70307000000c3c70309000000c3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "stubs": [],
+      "architecture": "x86_64"
+    },
+    {
+      "id": "x86_64_control_loop",
+      "code_hex": "b903000000ff03e2fcc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "architecture": "x86_64"
+    },
+    {
+      "id": "x86_64_A",
+      "code_hex": "31c0e8f90f000085c07407b901000000890bc3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "known_defect": "call_state",
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b801000000c3",
+          "rax": 1
+        }
+      ],
+      "architecture": "x86_64"
+    },
+    {
+      "id": "x86_64_B",
+      "code_hex": "85ff0f84f81f0000c70307000000c3",
+      "undefined_flags": [
+        "AF"
+      ],
+      "known_defect": "conditional_exit",
+      "stubs": [
+        {
+          "address": 12288,
+          "code_hex": "c70309000000c3",
+          "store": 9
+        }
+      ],
+      "architecture": "x86_64"
+    },
+    {
+      "id": "x86_64_rep_local",
+      "code_hex": "f3a4c3",
+      "undefined_flags": [],
+      "set_gprs": {
+        "RCX": 3,
+        "RSI": 32768,
+        "RDI": 32769
+      },
+      "stubs": [],
+      "architecture": "x86_64"
+    },
+    {
+      "id": "x86_32_word_call_reg",
+      "architecture": "x86_32",
+      "code_hex": "66b8002066ffd0c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b80700000066c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_word_call_mem",
+      "architecture": "x86_32",
+      "code_hex": "66c703002066ff13c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b80700000066c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_word_call_ret_imm",
+      "architecture": "x86_32",
+      "code_hex": "83ec0466e8f90fc3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b80700000066c20400"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_word_call_mem_end",
+      "architecture": "x86_32",
+      "code_hex": "befeff000066c706002066ff16c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b80700000066c3"
+        }
+      ]
+    }
+  ]
+}

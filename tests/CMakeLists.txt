@@ -18,6 +18,7 @@ add_executable(dragon_tests
         lifters/TestLLVMLifter.cpp
         lifters/TestLLVMFunctionFlow.cpp
         lifters/TestLLVMDispatch.cpp
+        lifters/TestLLVMGuestReturns.cpp
         loader/TestLoader.cpp
 )
 
@@ -151,8 +152,8 @@ if(Python3_Interpreter_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)
         add_test(NAME "Validation - LLVM V2 C and Python mirror"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_v2.py)
-        # This small function-level control set retains machine branches,
-        # loops and a modelled call. A/B remain explicit standalone red cases.
+        # Function execution retains machine branches, loops and Guest CALL/RET.
+        # A/B are ordinary V2 regressions; Legacy keeps its explicit controls.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             find_program(DRAGON_FLOW_LLC NAMES llc-21)
             find_program(DRAGON_FLOW_OPT NAMES opt-21)
@@ -165,17 +166,23 @@ if(Python3_Interpreter_FOUND)
                         --case control_store --case control_branch --case control_loop
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-flow-controls)
-                add_test(NAME "Validation - LLVM V2 call state boundaries"
+                add_test(NAME "Validation - LLVM V2 call state execution"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_call_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-call-controls)
-                set_tests_properties("Validation - LLVM V2 call state boundaries" PROPERTIES
+                set_tests_properties("Validation - LLVM V2 call state execution" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
-                add_test(NAME "Validation - LLVM V2 dispatch prefixes"
+                add_test(NAME "Validation - complete Guest CALL and RET"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py
+                        --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/function-guest-controls)
+                set_tests_properties("Validation - complete Guest CALL and RET" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                add_test(NAME "Validation - LLVM V2 branch and loop execution"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_dispatch_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-dispatch-controls)
-                set_tests_properties("Validation - LLVM V2 dispatch prefixes" PROPERTIES
+                set_tests_properties("Validation - LLVM V2 branch and loop execution" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)
                 set_tests_properties("Validation - LLVM whole-function positive controls" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 120)

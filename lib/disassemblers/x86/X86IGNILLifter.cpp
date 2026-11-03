@@ -1327,7 +1327,8 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
            opc == opTest32ri_)
     liftTest(*mc, addr, out, tempId);
   else if (opc == opCall_ || opc == opCall32_ || opc == opCall64r_ ||
-           opc == opCall32r_)
+           opc == opCall32r_ || instrInfo_->getName(opc) == "CALLpcrel16" ||
+           instrInfo_->getName(opc) == "CALL16r")
     liftCall(*mc, addr, insn.size(), out, tempId);
   // LOOP/LOOPE/LOOPNE and JCXZ/JECXZ/JRCXZ have no condition-code operand.
   // They must be dispatched before the generic isConditionalBranch()
@@ -1338,13 +1339,14 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
            opc == opJcxz_ || opc == opJecxz_ || opc == opJrcxz_)
     liftLoop(*mc, addr, insn.size(), hasAddressSizePrefix(insn), out, tempId);
   else if (opc == opRet64_ || opc == opRet32_ || opc == opRetI64_ ||
-           opc == opRetI32_)
+           opc == opRetI32_ || instrInfo_->getName(opc) == "RET16" ||
+           instrInfo_->getName(opc) == "RETI16")
     liftRet(*mc, addr, out, tempId);
   else if (opc == opLeave64_ || opc == opLeave_)
     liftLeave(*mc, addr, out, tempId);
   else if (opc == opJmp64m_ || opc == opJmp32m_)
     liftJmpMem(*mc, addr, insn.size(), out, tempId);
-  else if (opc == opCall64m_ || opc == opCall32m_)
+  else if (opc == opCall64m_ || opc == opCall32m_ || instrInfo_->getName(opc) == "CALL16m")
     liftCallMem(*mc, addr, insn.size(), out, tempId);
   else if (auto zx = movzxForms_.find(opc); zx != movzxForms_.end())
     liftMovExtend(*mc, addr, zx->second, /*signExtend=*/false, out, tempId);
@@ -4281,7 +4283,8 @@ void dragon::x86::X86IGNILLifter::liftCallMem(const llvm::MCInst &mc,
   // generate an address from the instruction
   auto addrTemp = emitAddress(mc, 0, ptrWidth, addr, out, tmp);
   // generate a target that will be used to store the address
-  auto target = newTemp(tmp, ptrWidth);
+  const auto targetWidth=instrInfo_->getName(mc.getOpcode())=="CALL16m" ? 16 : ptrWidth;
+  auto target = newTemp(tmp, targetWidth);
   out.append({ignil::Opcode::LOAD, target, {addrTemp}, addr});
   out.append({ignil::Opcode::CALL, std::nullopt, {target}, addr});
 }
@@ -4294,7 +4297,9 @@ void dragon::x86::X86IGNILLifter::liftCall(const llvm::MCInst &mc,
                                            std::uint32_t &tmp) const {
   if (const auto &op = mc.getOperand(0); op.isImm()) {
     // Direct call: pc-relative offset from end of instruction
-    const std::uint64_t target = pcRelTarget(addr, insnSize, op.getImm());
+    const std::uint64_t target = pcRelTarget(addr, insnSize, op.getImm()) &
+        (instrInfo_->getName(mc.getOpcode())=="CALLpcrel16" ? 0xffffull :
+         architecture_==Architecture::X86_32 ? 0xffffffffull : ~0ull);
     out.append({ignil::Opcode::CALL,
                 std::nullopt,
                 {ignil::Const{target, 64}},

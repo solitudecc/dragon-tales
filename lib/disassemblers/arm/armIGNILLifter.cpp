@@ -2667,9 +2667,15 @@ void dragon::arm::ARMIGNILLifter::liftCall(const llvm::MCInst &mc,
 void dragon::arm::ARMIGNILLifter::liftRet(const llvm::MCInst &mc,
                                           std::uint64_t addr, ignil::Block &out,
                                           std::uint32_t &tmp) const {
-  // Both RET (explicit register operand) and RET_ReallyLR (implicit LR)
-  // are plain returns for intra-function IGNIL purposes - the target
-  // register is always LR in practice, and control simply transfers back
-  // to the caller.
-  out.append({ignil::Opcode::RET, std::nullopt, {}, addr});
+  ignil::Op ret{ignil::Opcode::RET,std::nullopt,{},addr};
+  const auto name=instrInfo_->getName(mc.getOpcode());
+  // Keep the operand-free IGNIL abstraction. Ordinary A64 RET records its
+  // actual register: aux 0 is legacy LR, aux 1..32 means X0..X31 (XZR).
+  if (name=="RET" || name=="RET_ReallyLR") {
+    ret.aux=31;
+    if (mc.getNumOperands() && mc.getOperand(0).isReg())
+      if (auto reg=toReg(mc.getOperand(0).getReg());reg && reg->width==64 && reg->offset<=248 && reg->offset%8==0)
+        ret.aux=reg->offset/8+1;
+  }
+  out.append(std::move(ret));
 }

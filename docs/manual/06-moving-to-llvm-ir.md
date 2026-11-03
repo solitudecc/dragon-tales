@@ -247,6 +247,43 @@ llvm::Module& mod = lifter.module();
 This is C++-only; the Python/C API only exposes the rendered IR text via
 `ir()`.
 
+## Executing Guest functions with StatefulV2
+
+The default Legacy interface keeps `void sub_<addr>(mem, regs)` and the trace
+API. It refuses CALL and transfers it cannot report. For complete Guest
+control flow, opt in before the first lift:
+
+```python
+lifter = dragon.LLVMLifter(
+    image.architecture,
+    execution_mode=dragon.LLVMExecutionMode.STATEFUL_V2)
+assert lifter.lift(function, graph)
+```
+
+V2 emits `void dragon_v2_<arch>_<addr>(state, memory, runtime, exit)`. All target
+implementations use this same four-pointer protocol, including external models.
+The shared C types are in `dragon/lifters/llvm/Execution.h`; C++ aliases and the
+runtime are in `Execution.hpp`, and C exposes `dragon_llvm_execute_v2`.
+Guest memory is a bounded flat mapping, and the caller owns all buffers and
+target implementations. This mode currently requires a 64-bit little-endian host.
+
+Compile or JIT the emitted module, then register each address in its
+`dragon.entrypoints` attribute to that implementation. These include exact CALL
+continuations; registering only the function start loses the resume entries.
+`executeV2` dispatches using the PC in the Guest register file and reports
+Return, NeedTarget, Unsupported or Budget explicitly. A Guest RET only ends the
+root execution when its actual target equals the supplied root exit address.
+A missing target can be registered and resumed from the committed PC; a CALL
+must not be executed a second time after its stack/LR effects have committed.
+
+Near x86 CALL/RET models the Guest stack and RET imm16, including i386 word
+forms; A64 BL/BLR updates X30 and RET uses its specified register. There is no
+assumed callee ABI: models can modify every Guest register and memory byte.
+Far/system/authenticated transfers and x64 66-prefixed CALL/RET remain
+Unsupported. An import name never invokes a host function automatically.
+See [the execution contract](../llvm-execution-contract.md) for exact layouts,
+preconditions, boundaries and unsupported conditions.
+
 ## Scope
 
 Same as chapter 5 — `LLVMLifter` consumes whatever `getIGNILBlock()` can

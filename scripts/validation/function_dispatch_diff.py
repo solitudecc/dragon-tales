@@ -1,8 +1,8 @@
-"""V2 state/dispatch prefixes vs Unicorn, O0 and O2.
+"""V2 function execution vs Unicorn, O0 and O2.
 
-Stops BEFORE RET (currently Unsupported); x64 direct CALL uses Guest state. This is not a full-function
-success claim. PC, SP and every mapped byte are compared without Legacy
-normalizations. Missing target exits stop Unicorn before executing that target.
+Executes Guest CALL/RET, or stops at each fixture's explicit terminal boundary.
+PC, SP and every mapped byte are compared without Legacy normalizations.
+Missing target exits stop Unicorn before executing that target.
 """
 import argparse
 import collections
@@ -18,12 +18,15 @@ import tempfile
 
 import function_llvm_diff as base
 
-def compile_case(fixture, entry, level, work, args, model_factory=None):
-    lifter=base.dragon.LLVMLifter(base.dragon.Architecture.X86_64,
+def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64'):
+    arch_id={'x86_64':2,'x86_32':1,'arm64':4}[architecture]
+    pc_offset=264 if architecture=='arm64' else 128
+    regs_size=800 if architecture=='arm64' else 512
+    lifter=base.dragon.LLVMLifter(arch_id,
                                 execution_mode=base.dragon.LLVMExecutionMode.STATEFUL_V2)
     call_sites=set()
     for address,code in [(entry,fixture['code_hex'])]+([] if model_factory else [(s['address'],s['code_hex']) for s in fixture['stubs']]):
-        dis=base.dragon.Disassembler(base.dragon.Architecture.X86_64,base.dragon.Configuration(strategy=0))
+        dis=base.dragon.Disassembler(arch_id,base.dragon.Configuration(strategy=0))
         graph=dis.analyze(bytes.fromhex(code),address)
         function=graph.get_function(address)
         if not function or not function.is_valid: raise RuntimeError('invalid function')
@@ -44,22 +47,22 @@ def compile_case(fixture, entry, level, work, args, model_factory=None):
             metadata=re.search(r'"dragon.entrypoints"="([^"]*)"',attributes[1]) if attributes else None
             if metadata:return [(int(pc,16),symbol) for pc in metadata[1].split(',')]
         return [(address,symbol)]
-    root_symbol=f'dragon_v2_x86_64_{entry:x}'
+    root_symbol=f'dragon_v2_{architecture}_{entry:x}'
     names=entries(entry,root_symbol);root_count=len(names)
     wrappers=[]
     for stub in fixture['stubs']:
-        address=stub['address'];symbol=f'dragon_v2_x86_64_{address:x}';wrapper=f'model_{address:x}'
+        address=stub['address'];symbol=f'dragon_v2_{architecture}_{address:x}';wrapper=f'model_{address:x}'
         if model_factory:
             wrappers.append(model_factory(stub));names.append((address,wrapper))
         else:
-            wrappers.append(f'void {symbol}(S*,M*,C*,E*); void {wrapper}(S*s,M*m,C*c,E*e) {{if(get64(s->regs_bytes+128)=={address})++calls{address:x}; {symbol}(s,m,c,e);}}')
+            wrappers.append(f'void {symbol}(S*,M*,C*,E*); void {wrapper}(S*s,M*m,C*c,E*e) {{if(get64(s->regs_bytes+{pc_offset})=={address})++calls{address:x}; {symbol}(s,m,c,e);}}')
             names.extend((pc,wrapper) for pc,_ in entries(address,symbol))
     declarations='\n'.join(f'void {symbol}(S*,M*,C*,E*);' for _,symbol in names)
     table=','.join(f'{{{address}ULL,{symbol}}}' for address,symbol in names)
     resume=''
     if fixture.get('initially_missing'):
         resume=f'if(e.reason!=DRAGON_EXIT_NEED_TARGET || get64(regs+32)!=0xc7f8 || calls2000) return 94; c.entry_count={len(names)};dragon_llvm_execute_v2(&s,&m,&c,&e,0xf000);'
-    driver=work/'driver.c';driver.write_text(DRIVER.replace('DECLARATIONS',declarations+'\n'+'\n'.join(wrappers)).replace('ENTRIES',table).replace('INITIAL_BUDGET',str(fixture.get('context_budget',1000))).replace('INITIAL_COUNT',str(root_count if fixture.get('initially_missing') else len(names))).replace('RESUME_CODE',resume))
+    driver=work/'driver.c';driver.write_text(DRIVER.replace('DECLARATIONS',declarations+'\n'+'\n'.join(wrappers)).replace('ENTRIES',table).replace('INITIAL_BUDGET',str(fixture.get('context_budget',1000))).replace('INITIAL_COUNT',str(root_count if fixture.get('initially_missing') else len(names))).replace('RESUME_CODE',resume).replace('regs[512]',f'regs[{regs_size}]').replace('DRAGON_ARCH_X86_64',{'x86_64':'DRAGON_ARCH_X86_64','x86_32':'DRAGON_ARCH_X86_32','arm64':'DRAGON_ARCH_ARM64'}[architecture]))
     obj=work/'module.o';exe=work/'native'
     triple={'aarch64':'aarch64-linux-gnu','x86_64':'x86_64-linux-gnu'}.get(platform.machine())
     if not triple: raise RuntimeError('Linux aarch64/x86_64 host required')
@@ -103,7 +106,7 @@ int main(int argc,char **argv) {
 }
 '''
 
-def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True):
+def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True, full_guest=False):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case',action='append',dest='cases')
     parser.add_argument('--trials',type=int,default=8)
@@ -117,7 +120,7 @@ def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True):
     selected=[f for f in fixtures['cases'] if not args.cases or f['id'] in args.cases]
     if not selected or (args.cases and set(args.cases)!={f['id'] for f in selected}):parser.error('unknown case')
     out=(args.out or Path(tempfile.mkdtemp(prefix='dragon-dispatch-'))).resolve();out.mkdir(parents=True,exist_ok=True)
-    rows=[]
+    rows=[];match_status='match' if full_guest else 'prefix_match'
     for fixture in selected:
         for level in ('O0','O2'):
             work=out/fixture['id']/level;work.mkdir(parents=True,exist_ok=True)
@@ -128,7 +131,7 @@ def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True):
             for trial in range(args.trials):
                 row=dict(case=fixture['id'],opt=level,trial=trial)
                 regs,memory=base.initial(fixture,trial,fixtures['entry'])
-                try:expected=base.reference(fixture,regs,memory,fixtures['entry'],sites,stop_before_control=True,stop_before_calls=stop_before_calls,skip_stub_returns=bool(model_factory))
+                try:expected=base.reference(fixture,regs,memory,fixtures['entry'],sites,stop_before_control=True,stop_before_calls=stop_before_calls,skip_stub_returns=bool(model_factory),full_guest=full_guest)
                 except Exception as error:row.update(status='reference_error',detail=str(error));rows.append(row);continue
                 actual,error=base.native(exe,regs,memory,work,trial,extra_bytes=64)
                 if error:row.update(status=error['kind'],detail=error)
@@ -139,11 +142,11 @@ def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True):
                     differences=base.compare(fixture,expected,actual,bad_ir,args.corrupt_output,include_pc=True)
                     record=struct.unpack('<8Q',actual[3]);exit=record[:7]
                     if exit!=expected[4]:differences.append(dict(field='exit',got=exit,expected=expected[4]))
-                    row.update(status='different' if differences else 'prefix_match',differences=differences,exit=exit,budget_left=record[7],undefined_flag_fields=len(fixture['undefined_flags']),undefined_fpsw_bits=len(fixture.get('undefined_fpsw_bits',[])),register_fields_compared=len(base.FIELDS)+1-len(fixture['undefined_flags']),memory_bytes_compared=base.MEM_SIZE)
+                    row.update(status='different' if differences else match_status,differences=differences,exit=exit,budget_left=record[7],undefined_flag_fields=len(fixture['undefined_flags']),undefined_fpsw_bits=len(fixture.get('undefined_fpsw_bits',[])),register_fields_compared=len(base.FIELDS)+1-len(fixture['undefined_flags']),memory_bytes_compared=base.MEM_SIZE)
                 rows.append(row)
             print(fixture['id'],level,dict(collections.Counter(r['status'] for r in rows if r['case']==fixture['id'] and r['opt']==level)),flush=True)
     statuses=dict(collections.Counter(r['status'] for r in rows))
-    summary=dict(stage=('before CALL/RET' if stop_before_calls else 'before RET; call models execute Guest RET')+' or explicit terminal boundary; NOT full-function success',cases=len(selected),trials_per_opt=args.trials,results=len(rows),statuses=statuses,skipped=0,legacy_normalizations=0,
+    summary=dict(stage='full Guest execution or declared terminal boundary' if full_guest else ('before CALL/RET' if stop_before_calls else 'before RET; call models execute Guest RET')+' or explicit terminal boundary; NOT full-function success',cases=len(selected),trials_per_opt=args.trials,results=len(rows),statuses=statuses,skipped=0,legacy_normalizations=0,
       undefined_flag_fields=sum(r.get('undefined_flag_fields',0) for r in rows),undefined_fpsw_bits=sum(r.get('undefined_fpsw_bits',0) for r in rows),
       register_fields_compared=sum(r.get('register_fields_compared',0) for r in rows),memory_bytes_compared=sum(r.get('memory_bytes_compared',0) for r in rows),
       llvm_lifter_sha256=hashlib.sha256((base.ROOT/'lib/LLVMLifter.cpp').read_bytes()).hexdigest(),artifacts=str(out))
@@ -155,7 +158,7 @@ def main(*, fixtures_path=None, model_factory=None, stop_before_calls=True):
     (out/'results.json').write_text(json.dumps(dict(summary=summary,results=rows),indent=2))
     print(json.dumps(summary,indent=2))
     for row in rows:
-        if row['status']!='prefix_match':print('FAIL',json.dumps(row,indent=2))
-    return 0 if all(r['status']=='prefix_match' for r in rows) and len(rows)==len(selected)*2*args.trials else 1
+        if row['status']!=match_status:print('FAIL',json.dumps(row,indent=2))
+    return 0 if all(r['status']==match_status for r in rows) and len(rows)==len(selected)*2*args.trials else 1
 
-if __name__=='__main__':sys.exit(main(stop_before_calls=False))
+if __name__=='__main__':sys.exit(main(stop_before_calls=False,full_guest=True))

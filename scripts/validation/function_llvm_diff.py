@@ -68,7 +68,7 @@ def initial(fixture, trial, entry):
     for name,value in fixture.get("set_gprs",{}).items(): put(regs,8*GPRS.index(name),value)
     return regs, memory
 
-def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=False, stop_before_calls=True, skip_stub_returns=False):
+def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=False, stop_before_calls=True, skip_stub_returns=False, full_guest=False):
     uc = Uc(UC_ARCH_X86, UC_MODE_64)
     uc.mem_map(0, MEM_SIZE); uc.mem_write(0, bytes(memory))
     for i, name in enumerate(GPRS): uc.reg_write(getattr(U, 'UC_X86_REG_'+name), get(regs, i*8))
@@ -91,7 +91,7 @@ def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=F
             if pc in fixture.get("missing_targets",[]):
                 is_call=previous[0] in call_sites
                 stop_info.extend([3,2 if is_call else 1,previous[0],pc,1,previous[0]+previous_size[0] if is_call else 0,0]);u.emu_stop();return
-            if (stop_before_calls and pc in call_sites) or (bytes(u.mem_read(pc,size)) == b"\xc3" and not (skip_stub_returns and any(lo<=pc<hi for lo,hi in stub_ranges))):
+            if not full_guest and ((stop_before_calls and pc in call_sites) or (bytes(u.mem_read(pc,size)) == b"\xc3" and not (skip_stub_returns and any(lo<=pc<hi for lo,hi in stub_ranges)))):
                 stop_info.extend([5,2 if pc in call_sites else 3,pc,pc,1,0,2]);u.emu_stop();return
             previous[0]=pc;previous_size[0]=size
         if pc in targets: events.update([pc])
@@ -101,6 +101,8 @@ def reference(fixture, regs, memory, entry, call_sites, *, stop_before_control=F
     uc.hook_add(UC_HOOK_MEM_WRITE,lambda u,access,address,size,value,data:writes.append((u.reg_read(U.UC_X86_REG_RIP),address,size)))
     uc.emu_start(entry, SENTINEL, count=10000)
     if not stop_before_control and uc.reg_read(U.UC_X86_REG_RIP) != SENTINEL: raise RuntimeError('reference did not return to root sentinel within budget')
+    if stop_before_control and not stop_info and full_guest and uc.reg_read(U.UC_X86_REG_RIP)==SENTINEL:
+        stop_info=[1,3,previous[0],SENTINEL,1,0,0]
     out = bytearray(regs)
     for i, name in enumerate(GPRS): put(out, i*8, uc.reg_read(getattr(U,'UC_X86_REG_'+name)))
     # Existing IGNIL RET abstraction only: undo exactly the root return pop.
@@ -188,7 +190,7 @@ def compile_case(fixture, entry, level, work, args):
 
 def no_core(): resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 
-def native(exe, regs, memory, work, trial, *, extra_bytes=0):
+def native(exe, regs, memory, work, trial, *, extra_bytes=0, regs_size=REGS_SIZE):
     source=work/f'input-{trial}.bin';output=work/f'output-{trial}.bin';source.write_bytes(regs+memory)
     output.unlink(missing_ok=True)
     try:
@@ -197,9 +199,9 @@ def native(exe, regs, memory, work, trial, *, extra_bytes=0):
     if run.returncode: return None,{'kind':'native_exit','returncode':run.returncode,'stderr':run.stderr.decode(errors='replace')}
     if not output.exists(): return None,{'kind':'native_protocol','detail':'no output'}
     data=output.read_bytes()
-    if len(data)!=24+REGS_SIZE+MEM_SIZE+extra_bytes or data[:8]!=b'DTFLOW1\0': return None,{'kind':'native_protocol','detail':'invalid snapshot'}
+    if len(data)!=24+regs_size+MEM_SIZE+extra_bytes or data[:8]!=b'DTFLOW1\0': return None,{'kind':'native_protocol','detail':'invalid snapshot'}
     a,b=struct.unpack_from('<QQ',data,8)
-    result=(data[24:24+REGS_SIZE],data[24+REGS_SIZE:24+REGS_SIZE+MEM_SIZE],collections.Counter({0x2000:a,0x3000:b}))
+    result=(data[24:24+regs_size],data[24+regs_size:24+regs_size+MEM_SIZE],collections.Counter({0x2000:a,0x3000:b}))
     return (result+(data[-extra_bytes:],) if extra_bytes else result),None
 
 def compare(fixture, expected, actual, bad_ir, corrupt, *, include_pc=False):
