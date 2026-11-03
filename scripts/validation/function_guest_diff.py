@@ -54,6 +54,7 @@ class Adapter:
             sp=base.get(regs,self.sp_offset);width=4 if self.x32 else 8
             base.put(memory,sp+f.get('root_return_offset',0),f.get('root_return_target',base.SENTINEL),width)
         for address in f.get('missing_targets',[]):memory[address]=0x90 if not self.a64 else 0
+        for cell in f.get('memory_values',[]):base.put(memory,cell['address'],cell['value'],cell['width'])
         return regs,memory
     def reference(self,f,regs,memory,entry):
         uc=Uc(self.arch_id,self.mode);uc.mem_map(0,base.MEM_SIZE);uc.mem_write(0,bytes(memory))
@@ -64,12 +65,13 @@ class Adapter:
         if not self.a64:
             for i in range(8):uc.reg_write(X.UC_X86_REG_FP0+i,(base.get(regs,400+10*i),base.get(regs,408+10*i,2)))
             uc.reg_write(X.UC_X86_REG_FPTAG,base.get(regs,482,2));uc.reg_write(X.UC_X86_REG_FPCW,base.get(regs,484,2));uc.reg_write(X.UC_X86_REG_FPSW,base.get(regs,486,2))
-        events=collections.Counter();targets={s['address'] for s in f['stubs']};last=[entry];stop=[]
+        events=collections.Counter();targets={s['address'] for s in f['stubs']};last=[entry,0];stop=[]
         def hook(u,pc,size,data):
             if pc in f.get('unsupported_before',[]):stop.extend([5,0,pc,pc,1,0,2]);u.emu_stop();return
-            if pc in f.get('missing_targets',[]):stop.extend([3,f.get('boundary_kind',1),last[0],pc,1,0,0]);u.emu_stop();return
+            if pc in f.get('missing_targets',[]):
+                kind=f.get('boundary_kind',1);stop.extend([3,kind,last[0],pc,1,last[0]+last[1] if kind==2 else 0,0]);u.emu_stop();return
             if pc in targets:events.update([pc])
-            last[0]=pc
+            last[:]=[pc,size]
         uc.hook_add(UC_HOOK_CODE,hook);uc.emu_start(entry,base.SENTINEL,count=10000)
         pc=uc.reg_read(self.pc_reg)
         if not stop:

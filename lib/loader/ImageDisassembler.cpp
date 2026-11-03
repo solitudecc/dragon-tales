@@ -1,6 +1,7 @@
 #include <dragon/loader/ImageDisassembler.hpp>
 
 #include <dragon/disassembler/Disassembler.hpp>
+#include "LLVMImportMetadata.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -20,6 +21,7 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
       cfg.callingConvention == CallingConvention::Default)
     cfg.callingConvention = CallingConvention::Win64;
   Graph graph(image.architecture(), cfg);
+  detail::GraphLLVMMetadata::setImports(graph,image.importSlots());
   if (image.architecture() == Architecture::Unknown)
     return graph;
 

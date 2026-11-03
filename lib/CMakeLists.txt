@@ -8,6 +8,7 @@ add_library(libdragon SHARED
         IGNILSimplify.cpp
         LLVMLifter.cpp
         LLVMExecution.cpp
+        LLVMImportMetadata.cpp
 )
 
 add_library(dragon::libdragon ALIAS libdragon)

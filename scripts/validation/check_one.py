@@ -50,7 +50,7 @@ for strat in (0, 1):
     # modules containing multiple V2 implementations and runtime dispatch.
     mode=dragon.LLVMExecutionMode.STATEFUL_V2 if llvm_mode=='v2' else dragon.LLVMExecutionMode.LEGACY
     chunk_size=128 if llvm_mode=='v2' else max(1,len(valid))
-    failed=verified=modules=0
+    failed=verified=modules=import_references=0
     verification_errors=[]
     for start in range(0,max(1,len(valid)),chunk_size):
         L=dragon.LLVMLifter(img.architecture,execution_mode=mode)
@@ -62,7 +62,10 @@ for strat in (0, 1):
             except Exception:failed+=1
         with tempfile.TemporaryDirectory(prefix='dragon-check-') as directory:
             path_ir=_os.path.join(directory,'module.ll')
-            with open(path_ir,'w') as f:f.write(L.ir())
+            ir=L.ir()
+            metadata=re.search(r'^!dragon\.imports = !\{([^\n]*)\}',ir,re.M)
+            if metadata:import_references+=len(re.findall(r'!\d+',metadata[1]))
+            with open(path_ir,'w') as f:f.write(ir)
             v=subprocess.run(['opt-21','-passes=verify','-disable-output',path_ir],capture_output=True,text=True)
         modules+=1
         if v.returncode==0:verified+=accepted
@@ -71,6 +74,7 @@ for strat in (0, 1):
     r['llvm_lift_failed']=failed
     r['llvm_verified_functions']=verified
     r['llvm_verified_modules']=modules
+    r['llvm_import_references']=import_references
     r['llvm_verify']='ok' if not verification_errors else verification_errors[0]
     out[key] = r
 print(json.dumps(out))

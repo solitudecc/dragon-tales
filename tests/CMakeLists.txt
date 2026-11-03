@@ -19,6 +19,7 @@ add_executable(dragon_tests
         lifters/TestLLVMFunctionFlow.cpp
         lifters/TestLLVMDispatch.cpp
         lifters/TestLLVMGuestReturns.cpp
+        lifters/TestLLVMImports.cpp
         loader/TestLoader.cpp
 )
 

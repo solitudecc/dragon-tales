@@ -395,7 +395,13 @@ by their actual Guest address. Far/system/authenticated transfers and long-mode
 66-prefixed CALL/RET remain explicit Unsupported. The new three-architecture
 function oracle and existing V2 runners execute the root RET and separately
 count normal returns and declared terminal boundaries. No V2 Legacy normalization.
-See `docs/llvm-flow-step4-validation.md`; naming/remaining indirect work is step 5.
+See `docs/llvm-flow-step4-validation.md`. Step 5 carries copied import-slot metadata
+through Graph's existing pimpl and records conservative `!dragon.imports` provenance
+(site, slot, name) without renaming any V2 symbol or calling the host by name.
+Provenance is local to a block, invalidates aliases/calls, and follows at most
+8 simple JMP thunks. Conflicting merged names stay discarded. Unknown names
+still dispatch by actual Guest address. See `docs/llvm-flow-step5-validation.md`;
+final whole-corpus execution/verification work remains step 6.
 x87 SW.TOP is materialized from authoritative FPTOP at V2 boundaries. The two
 call-x87 fixtures exclude only manual-undefined FSTP C0/C2/C3 bits (8/10/14),
 not TOP, C1 or exception bits; `--corrupt-fpsw` flips defined C1 and must fail.

@@ -9,6 +9,7 @@
 #include <format>
 #include <utility>
 #include "utils/FloatOps.hpp"
+#include "LLVMImportMetadata.hpp"
 #include <llvm/IR/Intrinsics.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -200,6 +201,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     llvm::IRBuilder<> out(unknown);
     emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regFile,regsPtr,out,DRAGON_DETAIL_ENTRY,0);
   }
+  if (stateful()) detail::recordLLVMImports(*module_,*llfn,fn,graph);
   return true;
 }
 void dragon::llvmlifter::LLVMLifter::collectRegsFromOps(

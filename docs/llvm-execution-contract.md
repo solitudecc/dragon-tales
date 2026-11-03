@@ -269,3 +269,16 @@ x86 far CALL/RETF/IRET、A64 带认证的调用/返回，以及 x64 66 前缀的
 也执行 root RET，不再将它当 Unsupported。只有达到 rootExitPC 的记录才计为 Return；
 NeedTarget/Unsupported/Budget 仍单独统计，不能计作正常返回。Legacy 专用正对照仍沿用
 第 8 节明确列出的适配，其数字不混入 V2。
+
+
+## 12. 第 5 步：导入名称是来源标识
+
+加载器复制导入槽位表进 Graph 的内部存储。V2 的 `!dragon.imports` 模块元数据逐项
+记录实现名、控制指令 PC、槽位 Guest 地址、加载器给出的名称。该名称只说明值的来源，
+不是运行时地址或宿主 ABI；真正调用仍只按 Guest 目标地址查注册表。未修改 LLVM
+被调函数名称/四指针签名，也不假定命名函数遵守任何 ABI 或效果限制。
+
+恢复只使用基本块内可证明的地址和精确宽度 LOAD；别名覆盖、CALL/opaque 和控制流 join
+会使不能证明的来源失效。直接 CALL 的目标可追踪有限的简单 JMP thunk；循环、复杂
+控制流或未知地址停止命名。Graph 合并有冲突的槽位名会丢弃，不进行任选其一。
+原始字节 Disassembler 的 Graph 没有加载器表时不猜名称；分发语义与名称独立。

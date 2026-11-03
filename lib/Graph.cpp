@@ -1,4 +1,5 @@
 #include <dragon/disassembler/Graph.hpp>
+#include "LLVMImportMetadata.hpp"
 #include <utility>
 
 // ---------------------------------------------------------------------------
@@ -86,7 +87,17 @@ struct Graph::Queues {
   GraphQueue instructions_q;
   GraphQueue blocks_q;
   GraphQueue functions_q;
+  std::map<std::uint64_t,std::string> importSlots;
+  std::set<std::uint64_t> conflictingImportSlots;
 };
+
+void detail::GraphLLVMMetadata::setImports(Graph &graph,const std::map<std::uint64_t,std::string>& slots) {
+  graph.queues_->importSlots=slots;
+  graph.queues_->conflictingImportSlots.clear();
+}
+const std::map<std::uint64_t,std::string>& detail::GraphLLVMMetadata::imports(const Graph &graph) {
+  return graph.queues_->importSlots;
+}
 
 } // namespace dragon
 
@@ -207,6 +218,12 @@ void dragon::Graph::merge(Graph other) {
 
   auto &dst = *queues_;
   const auto &src = *other.queues_;
+  dst.conflictingImportSlots.insert(src.conflictingImportSlots.begin(),src.conflictingImportSlots.end());
+  for (const auto &[slot,name]:src.importSlots) {
+    auto [it,inserted]=dst.importSlots.emplace(slot,name);
+    if (!inserted && it->second!=name) dst.conflictingImportSlots.insert(slot);
+  }
+  for (auto slot:dst.conflictingImportSlots) dst.importSlots.erase(slot);
 
   for (std::uint64_t addr : src.instructions_q.processed())
     dst.instructions_q.mark_processed(addr);

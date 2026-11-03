@@ -496,6 +496,210 @@
           "code_hex": "b80700000066c3"
         }
       ]
+    },
+    {
+      "id": "x86_64_indirect_register",
+      "architecture": "x86_64",
+      "code_hex": "b800200000ffd0c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_indirect_slot",
+      "architecture": "x86_64",
+      "code_hex": "ff15fa7f0000c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ],
+      "memory_values": [
+        {
+          "address": 36864,
+          "value": 8192,
+          "width": 8
+        }
+      ]
+    },
+    {
+      "id": "x86_64_indirect_slot_zero",
+      "architecture": "x86_64",
+      "code_hex": "ff15fa7f0000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "memory_values": [
+        {
+          "address": 36864,
+          "value": 0,
+          "width": 8
+        }
+      ],
+      "missing_targets": [
+        0
+      ],
+      "boundary_kind": 2
+    },
+    {
+      "id": "x86_64_import_thunk",
+      "architecture": "x86_64",
+      "code_hex": "e8fb0f0000c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "ff25fa6f0000"
+        },
+        {
+          "address": 12288,
+          "code_hex": "b807000000c3"
+        }
+      ],
+      "memory_values": [
+        {
+          "address": 36864,
+          "value": 12288,
+          "width": 8
+        }
+      ]
+    },
+    {
+      "id": "x86_64_indirect_tail",
+      "architecture": "x86_64",
+      "code_hex": "b800200000ffe0",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_indirect_register",
+      "architecture": "x86_32",
+      "code_hex": "b800200000ffd0c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_indirect_slot",
+      "architecture": "x86_32",
+      "code_hex": "ff1500900000c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ],
+      "memory_values": [
+        {
+          "address": 36864,
+          "value": 8192,
+          "width": 4
+        }
+      ]
+    },
+    {
+      "id": "x86_32_indirect_slot_zero",
+      "architecture": "x86_32",
+      "code_hex": "ff1500900000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "memory_values": [
+        {
+          "address": 36864,
+          "value": 0,
+          "width": 4
+        }
+      ],
+      "missing_targets": [
+        0
+      ],
+      "boundary_kind": 2
+    },
+    {
+      "id": "x86_32_import_thunk",
+      "architecture": "x86_32",
+      "code_hex": "e8fb0f0000c3",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "ff2500900000"
+        },
+        {
+          "address": 12288,
+          "code_hex": "b807000000c3"
+        }
+      ],
+      "memory_values": [
+        {
+          "address": 36864,
+          "value": 12288,
+          "width": 4
+        }
+      ]
+    },
+    {
+      "id": "x86_32_indirect_tail",
+      "architecture": "x86_32",
+      "code_hex": "b800200000ffe0",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "b807000000c3"
+        }
+      ]
+    },
+    {
+      "id": "arm64_indirect_register",
+      "architecture": "arm64",
+      "code_hex": "f4031eaa1e0084d2c0033fd680025fd6",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "e00080d2c0035fd6"
+        }
+      ],
+      "source": "mov x20,x30; mov x30,#0x2000; blr x30; ret x20"
+    },
+    {
+      "id": "arm64_blr_xzr",
+      "architecture": "arm64",
+      "code_hex": "e0033fd6",
+      "undefined_flags": [],
+      "stubs": [],
+      "missing_targets": [
+        0
+      ],
+      "boundary_kind": 2
+    },
+    {
+      "id": "arm64_indirect_tail",
+      "architecture": "arm64",
+      "code_hex": "000084d200001fd6",
+      "undefined_flags": [],
+      "stubs": [
+        {
+          "address": 8192,
+          "code_hex": "e00080d2c0035fd6"
+        }
+      ]
     }
   ]
 }

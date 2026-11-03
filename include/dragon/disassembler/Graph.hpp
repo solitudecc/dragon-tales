@@ -13,6 +13,7 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 
 namespace dragon {
+namespace detail { struct GraphLLVMMetadata; }
 
 /// A representation of whole disassembled code, Graph will be
 /// in charge of function generation. Graph also serves as the
@@ -83,6 +84,7 @@ class Graph {
   [[nodiscard]] const std::set<std::uint64_t> &validFunctionAddresses() const;
 
   private:
+  friend struct detail::GraphLLVMMetadata;
   void insert(Instruction insn);
 
   struct Queues;
