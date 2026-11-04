@@ -628,3 +628,82 @@ TEST_CASE("BackwardSlicer - conversion widths participate in join identity",
   // identical because toString does not print UnaryOp::resultWidth.
   CHECK_FALSE(evalConst(result).has_value());
 }
+
+// An unknown callee may change any register (return values, a stdcall
+// callee's argument pop, non-ABI code), so a register is not traced through
+// an IGNIL CALL. Found while auditing external API calls: a constant written
+// before `bl api` was reported as the register's value after it.
+TEST_CASE("BackwardSlicer - registers are unknown after a call", "[slicer][ignil][call]") {
+  using namespace dragon;
+  using O = ignil::Opcode;
+  auto isCallResult = [](const slice::Expr &e, std::uint64_t block, int op) {
+    INFO(slice::toString(e));
+    const auto *s = std::get_if<slice::SymReg>(&e.data);
+    REQUIRE(s);
+    REQUIRE(s->origin);
+    CHECK(s->origin->blockAddress == block);
+    CHECK(s->origin->opIndex == op);
+  };
+  SECTION("x86-64 return register in the same block") {
+    Graph g{Architecture::X86_64, Configuration{}};
+    ignil::Block b{0x1000};
+    b.append({O::COPY, x86::EAX, {ignil::Const{5, 32}}, 0x1000});
+    b.append({O::CALL, {}, {ignil::Const{0x2000, 64}}, 0x1005});
+    b.append({O::COPY, x86::ECX, {x86::EAX}, 0x100a});
+    b.append({O::RET, {}, {}, 0x100c});
+    addValidBlock(g, std::move(b));
+    isCallResult(BackwardSlicer{}.slice(ignil::Value{x86::ECX}, 0x1000, g), 0x1000, 1);
+    isCallResult(BackwardSlicer{}.slice(ignil::Value{x86::RAX}, 0x1000, g), 0x1000, 1);
+  }
+  SECTION("i386 stack pointer after a stdcall callee") {
+    // push 7; call f (f: ret 4) - ESP afterwards is the callee's choice.
+    Graph g{Architecture::X86_32, Configuration{}};
+    ignil::Block b{0x1000};
+    const ignil::Temp t{0, 32};
+    b.append({O::SUB, t, {x86::ESP, ignil::Const{4, 32}}, 0x1000});
+    b.append({O::COPY, x86::ESP, {t}, 0x1000});
+    b.append({O::STORE, {}, {x86::ESP, ignil::Const{7, 32}}, 0x1000});
+    b.append({O::CALL, {}, {ignil::Const{0x2000, 32}}, 0x1002});
+    b.append({O::RET, {}, {}, 0x1007});
+    addValidBlock(g, std::move(b));
+    isCallResult(BackwardSlicer{}.slice(ignil::Value{x86::ESP}, 0x1000, g), 0x1000, 3);
+  }
+  SECTION("across the call's fall-through edge") {
+    Graph g{Architecture::X86_64, Configuration{}};
+    ignil::Block a{0x1000};
+    a.append({O::COPY, x86::RAX, {ignil::Const{0x1060, 64}}, 0x1000});
+    a.append({O::CALL, {}, {ignil::Const{0x2000, 64}}, 0x1007});
+    a.append({O::JMP, {}, {ignil::Const{0x100c, 64}}, 0x1007});
+    ignil::Block c{0x100c};
+    c.append({O::JMP, {}, {x86::RAX}, 0x100c});
+    addValidBlock(g, std::move(a));
+    addValidBlock(g, std::move(c));
+    isCallResult(BackwardSlicer{}.slice(ignil::Value{x86::RAX}, 0x100c, g), 0x1000, 1);
+  }
+}
+
+// End to end: `mov x0, #0x1060; bl f; br x0` with f returning 0x1050. The
+// constant from before the call is not a target of the jump.
+TEST_CASE("Recursive A64 resolution does not carry a register across bl", "[slicer][call][arm]") {
+  using namespace dragon;
+  std::vector<std::uint8_t> code(0x200);
+  auto put = [&](std::size_t off, std::uint32_t w) {
+    for (int i = 0; i < 4; ++i) code[off + i] = static_cast<std::uint8_t>(w >> (8 * i));
+  };
+  for (std::size_t off = 0; off < code.size(); off += 4) put(off, 0xd503201f); // nop
+  put(0x00, 0xd2820c00);              // mov x0, #0x1060
+  put(0x04, 0x94000000 | (0xfc >> 2)); // bl 0x1100
+  put(0x08, 0xd61f0000);              // br x0
+  put(0x50, 0xd65f03c0);              // ret
+  put(0x60, 0xd65f03c0);              // ret
+  put(0x100, 0xd2820a00);             // f: mov x0, #0x1050
+  put(0x104, 0xd65f03c0);             // ret
+  Configuration cfg;
+  cfg.disassemblyStrategy = DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  Disassembler dis(Architecture::ARM64, cfg);
+  Graph g{Architecture::ARM64, cfg};
+  dis.disassemble(code, 0x1000, g);
+  const auto *jump = g.get(0x1008);
+  REQUIRE(jump);
+  CHECK_FALSE(jump->branches().contains(0x1060));
+}

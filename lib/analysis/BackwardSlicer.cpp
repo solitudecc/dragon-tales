@@ -484,6 +484,13 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
       continue;
     }
     const ignil::Op &op = ops[i];
+    // An unknown callee may write any register: the return value, a stdcall
+    // callee's argument pop, or non-ABI code. The register after the call is
+    // an unknown of its own, identified by the call (the same register read
+    // twice after one call is one value); nothing before it is traced.
+    if (op.opcode == Opc::CALL)
+      return slice::Expr{slice::SymReg{
+              r, slice::ValueOrigin{block.startAddress(), i, depth}}};
     if (!op.dst)
       continue;
     const auto *w = std::get_if<ignil::Reg>(&*op.dst);
