@@ -81,7 +81,7 @@ class Adapter:
             last[:]=[pc,size]
         uc.hook_add(UC_HOOK_CODE,hook)
         until=0 if any(a>=base.MEM_SIZE for a in f.get('missing_targets',[])) else base.SENTINEL
-        uc.emu_start(entry,until,count=10000)
+        uc.emu_start(entry,until,count=f.get('max_instructions',10000))
         pc=uc.reg_read(self.pc_reg)
         if not stop:
             if pc!=base.SENTINEL:raise RuntimeError('reference did not reach root exit within budget')

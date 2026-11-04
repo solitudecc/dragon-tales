@@ -204,7 +204,7 @@ def observables(snapshot):
     return base.get(regs, 0, 4), memory[base.DATA:base.DATA + 16]
 
 
-def compile_image(data, symbols, work, static, product, level, args):
+def compile_image(data, symbols, work, static, product, level, args, budget=10000):
     image = base.dragon.LoadedImage.load_bytes(data)
     graph = image.disassemble(base.dragon.Configuration(strategy=args.strategy))
     lifter = base.dragon.LLVMLifter(2, execution_mode=2 if static else 1)
@@ -241,7 +241,7 @@ def compile_image(data, symbols, work, static, product, level, args):
         names.extend((int(x, 16), symbol) for x in resume[1].split(',')) if resume else names.append((pc, symbol))
     declarations = '\n'.join(f'void {symbol}(S*,M*,C*,E*);' for symbol in sorted({s for _, s in names}))
     driver = compiler.DRIVER.replace('DECLARATIONS', declarations).replace('ENTRIES', ','.join(f'{{{pc}ULL,{symbol}}}' for pc, symbol in names))
-    driver = driver.replace('INITIAL_COUNT', str(len(names))).replace('INITIAL_BUDGET', '10000').replace('RESUME_CODE', '')
+    driver = driver.replace('INITIAL_COUNT', str(len(names))).replace('INITIAL_BUDGET', str(budget)).replace('RESUME_CODE', '')
     if static:
         # Unknown callees remain opaque during all optimization. The test-only
         # dispatcher is linked afterwards and executes only lifted Guest bytes.
