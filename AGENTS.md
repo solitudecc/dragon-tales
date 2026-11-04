@@ -206,6 +206,30 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Complete SHA-256 experiment (2026-11-04): `tigress_sha256.py` and
+`tests/fixtures/tigress-sha256.c` cover all 64 rounds, schedule, streaming updates,
+padding and actual internal calls. Tigress 2.1 seed 2561901 transforms compress,
+update and finish with switch Flatten or EncodeArithmetic then Flatten.
+C O0/O2, both strategies, V2 O0 and product static O2: 400 full-state matches
+(200 plain, 200 obfuscated O0), 200 incomplete obfuscated O2 exits. No complete
+semantic differences, exclusions, unexecuted comparisons or successful skips.
+Host C/hashlib checks 156/156 incl. million-a; Unicorn digest checks 150/150,
+25 inputs up to 4096 bytes. Million-a is NOT part of the LLVM memory experiment.
+Entries 12/12; unlifted 0. O0 compress grows from 10/249 blocks/instructions to
+59/351 (Flatten) and 59/1598 (arithmetic+Flatten). Obfuscated O2 has three
+unresolved dispatches per image; never claim the campaign passed or its tiny
+partial CFG is successful simplification. Observed-edge omission controls 12/12.
+IMPORTANT: Tigress moves K's initializer into K_i$nit/megaInit, called by its
+generated main. Library-entry validation must execute the real Guest megaInit
+before kernel; preserve its arguments. Do not inject correct K bytes instead.
+The initial omission failed both digest references while LLVM matched the wrong
+entry's bytes. Keep that diagnostic; it was a harness omission, not a Tigress bug.
+Controls reject wrong C digest (host/Unicorn 5 each), damaged RAX (10), and
+damaged memory (10); opposite layers stay correct. Four plain-C CTest checks
+need no proprietary generator: CTest 495/495, no Z3 346/346. No production
+interfaces/semantics changed; no new whole-corpus or single-instruction campaign.
+See docs/tigress-sha256-validation.md for exact failures, outputs and limits.
+
 Tigress function checks (2026-11-04): `tigress_function_diff.py` uses bounded
 unsigned C functions, a separate Python specification, original/transformed
 Unicorn observables, then each ELF image's own full-state LLVM comparison.

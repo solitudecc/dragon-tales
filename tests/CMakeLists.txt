@@ -234,6 +234,23 @@ if(Python3_Interpreter_FOUND)
                         "Validation - compiled C detects llvm-register"
                         "Validation - compiled C detects llvm-memory" PROPERTIES
                         ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                    add_test(NAME "Validation - complete SHA256 semantics"
+                        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/tigress_sha256.py
+                            --profile plain --c-level O0 --strategy 0 --quick
+                            --clang ${DRAGON_IMAGE_CLANG} --ld ${DRAGON_IMAGE_LD}
+                            --out ${CMAKE_CURRENT_BINARY_DIR}/sha256-semantics)
+                    foreach(control c-digest llvm-register llvm-memory)
+                        add_test(NAME "Validation - SHA256 detects ${control}"
+                            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/tigress_sha256.py
+                                --profile plain --c-level O0 --strategy 0 --quick --control ${control} --expect-control
+                                --clang ${DRAGON_IMAGE_CLANG} --ld ${DRAGON_IMAGE_LD}
+                                --out ${CMAKE_CURRENT_BINARY_DIR}/sha256-negative-${control})
+                    endforeach()
+                    set_tests_properties("Validation - complete SHA256 semantics"
+                        "Validation - SHA256 detects c-digest"
+                        "Validation - SHA256 detects llvm-register"
+                        "Validation - SHA256 detects llvm-memory" PROPERTIES
+                        ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
                 endif()
                 add_test(NAME "Validation - complete Guest CALL and RET"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py
