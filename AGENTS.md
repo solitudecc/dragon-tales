@@ -326,6 +326,32 @@ see docs/ignil-optimizer-hardening.md for scope and artifacts in
 ~/vmc-runs/simplify-widths-20261105. Do not claim arbitrary mixed-width ALU IR
 or the entire optimizer has been proved correct.
 
+IGNIL DSE transfer hardening (2026-11-05, baseline 5bcdb5e): later writes
+must not kill state observed at an earlier CALL/JMP/CJMP/RET. Mark all mentioned
+register bytes (including configured implicit parent clearing) live at CALL
+and interior transfers. A final CALL also retains unknown implicit callee
+inputs despite empty caller live-out; final non-CALL explicit live-out still
+works. CALL can occur before later ops in an actual analysed IGNIL block:
+mov rdi,rcx; call callee; mov rdi,9; ret was reduced from 4 to 3 ops by old DSE,
+losing its argument. Callee mov rax,rdi; ret then returned the initial RDI.
+Four old regressions fail: 432 assertions, including 416 wrong Unicorn fields;
+fixed 4/47350, no Z3 3/30. Permanent x64/A64 prefix matrix: 160 references,
+640 GPR/flags/64-byte-data comparisons, no exclusions/skips; it stops BEFORE
+the machine transfer, so do not count prefixes as complete CALL/RET execution.
+Actual caller/callee V2/native vs Unicorn: old original 16 full matches,
+old default/pipeline 32 wrong RAX results, new 48 full matches at O0/O2 across
+8 inputs, all 76 state fields and 64 KiB memory, actual CALL/RET and root exits,
+no exclusions/skips/normalizations. Latest CTest 542/542, no Z3 434/434,
+all five UBSan checks included. Random four plans x 1148 old/new comparisons
+pass, control 1145 differences, 13 unencodable candidates; same 450 real
+blocks/1235 compared trials rerun with 115 faults and previous limits intact.
+These real-block harnesses skip CALL/system blocks, so the new call checks
+cover a previously untested optimization path. No API/ABI/lifter/runtime
+semantic changes, no new raw-IR corpus/Tigress/single-instruction campaign.
+See docs/ignil-optimizer-hardening.md; artifacts
+~/vmc-runs/optimizer-transfers-20261105. Whole-optimizer correctness, callee
+effects and flattened dispatch coverage remain separate work.
+
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
 bugs: import provenance on fall-through edges/non-thunk blocks (wrong and

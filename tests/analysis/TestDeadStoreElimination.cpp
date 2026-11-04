@@ -217,6 +217,82 @@ TEST_CASE("DSE - precise live-out removes a final store that nullopt keeps",
   REQUIRE(out.ops()[0].opcode == Opcode::RET);
 }
 
+TEST_CASE("DSE preserves register state at interior transfers",
+          "[ignil][dse][dse-transfer]") {
+  for (auto opcode:{Opcode::CALL,Opcode::JMP,Opcode::CJMP,Opcode::RET}) {
+    INFO(dragon::ignil::opcodeName(opcode));
+    Block block{kAddr};
+    block.append({Opcode::COPY,x86::RAX,{Const{3,64}},kAddr});
+    block.append({Opcode::COPY,x86::RAX,{Const{7,64}},kAddr+1});
+    std::vector<Value> operands;
+    if (opcode==Opcode::CALL || opcode==Opcode::JMP) operands={Const{0x2000,64}};
+    if (opcode==Opcode::CJMP) operands={Const{1,1},Const{0x2000,64},Const{kAddr+3,64}};
+    block.append({opcode,std::nullopt,operands,kAddr+2});
+    block.append({Opcode::COPY,x86::RAX,{Const{8,64}},kAddr+3});
+    block.append({Opcode::COPY,x86::RAX,{Const{9,64}},kAddr+4});
+    SimplifyStats stats;
+    const auto out=deadStoreEliminate(block,std::nullopt,stats);
+    // Values are observable at the first transfer as well as at trace exit.
+    const auto writesAt=[&](std::uint64_t address) {
+      return std::any_of(out.begin(),out.end(),[&](const Op &op) {
+        return op.address==address && op.dst.has_value();
+      });
+    };
+    CHECK(writesAt(kAddr+1));
+    CHECK(writesAt(kAddr+4));
+    CHECK_FALSE(writesAt(kAddr));
+    CHECK_FALSE(writesAt(kAddr+3));
+    CHECK(stats.opsRemoved==2);
+  }
+}
+
+TEST_CASE("DSE keeps unknown callee inputs beyond the caller live out set",
+          "[ignil][dse][dse-transfer]") {
+  for (bool tail:{false,true}) {
+    INFO("continuation " << tail);
+    Block block{kAddr};
+    const std::vector<Reg> inputs{x86::RDI,x86::CF,Reg{x86::kOffXMM0H,64,"XMM0H"}};
+    for (unsigned i=0;i<inputs.size();++i)
+      block.append({Opcode::COPY,inputs[i],{Const{i+1,inputs[i].width}},kAddr+i});
+    block.append({Opcode::CALL,std::nullopt,{Const{0x2000,64}},kAddr+3});
+    if (tail) {
+      for (unsigned i=0;i<inputs.size();++i)
+        block.append({Opcode::COPY,inputs[i],{Const{0,inputs[i].width}},kAddr+4+i});
+    }
+    const auto out=deadStoreEliminate(block,std::vector<Reg>{});
+    for (unsigned i=0;i<inputs.size();++i) {
+      INFO("input " << inputs[i].name);
+      CHECK(std::any_of(out.begin(),out.end(),[&](const Op &op) {
+        return op.address==kAddr+i && op.dst.has_value();
+      }));
+    }
+  }
+}
+
+TEST_CASE("DSE retains the argument write in a lifted caller",
+          "[ignil][dse][dse-transfer]") {
+  // mov rdi,rcx; call 0x2000; mov rdi,9; ret. The callee returns RDI in RAX.
+  // A full V2/Unicorn run must return the original RCX, not the initial RDI.
+  const std::vector<std::uint8_t> bytes{0x48,0x89,0xcf,0xe8,0xf8,0x0f,0,0,
+      0x48,0xc7,0xc7,9,0,0,0,0xc3};
+  dragon::Configuration config;
+  config.disassemblyStrategy=dragon::DisassemblyStrategy::LINEAR_SWEEP;
+  dragon::Disassembler dis{dragon::Architecture::X86_64,config};
+  dragon::Graph graph{dragon::Architecture::X86_64,config};
+  dis.disassemble(bytes,kAddr,graph);
+  const auto *block=graph.getIGNILBlock(kAddr);REQUIRE(block);
+  REQUIRE(block->unlifted().empty());
+  for (bool simplify:{false,true}) {
+    INFO("simplify " << simplify);
+    const auto input=simplify ? dragon::ignil::simplifyBlock(*block) : *block;
+    const auto out=deadStoreEliminate(input);
+    CHECK(std::any_of(out.begin(),out.end(),[](const Op &op) {
+      return op.address==kAddr && op.opcode==Opcode::COPY && op.dst &&
+          std::holds_alternative<Reg>(*op.dst) && std::get<Reg>(*op.dst).offset==x86::RDI.offset;
+    }));
+  }
+}
+
 // ===========================================================================
 // Salwan's VMProtect dead-store example.
 // https://github.com/JonathanSalwan/Triton  (dead_store_elimination.py)

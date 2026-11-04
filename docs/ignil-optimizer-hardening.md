@@ -1,7 +1,8 @@
 # IGNIL 优化器正确性修补（2026-11-05）
 
 审计基线 `69ee6f1`。先前 CTest 和语料 IR verify 通过，仍不能证明优化器没有语义错误。
-本轮把寄存器快照、常量极值、COPY 位宽传播的已确认问题分别修补，下文保留各自基线和验证数字。
+本轮把寄存器快照、常量极值、COPY 位宽传播和 DSE 控制流边界的已确认问题分别修补，
+下文保留各自基线和验证数字。
 
 ## 寄存器快照与隐式清零
 
@@ -206,4 +207,83 @@ Reg/Const/NOT 产生的 Temp 三种源，零、全一、符号位及混合位模
 ```sh
 ./build/bin/dragon_tests '[simplify-copy-width]'
 ./build-noz3/bin/dragon_tests '[simplify-copy-width]'
+```
+
+## DSE 的控制转移边界与隐式调用输入
+
+第四个修复基线为 `5bcdb5e`。原先的 DSE 只跟踪显式寄存器读写和片段末尾活跃值，
+会把 CALL/JMP/CJMP/RET 后的写入当作之前写入已经无用的依据。例如：
+
+```text
+RAX = 7; CALL target; RAX = 9
+```
+
+默认执行器在 CALL 边界停止，原始 RAX 为 7，旧 DSE 删除第一条 COPY 后得到初始 RAX。
+JMP、CJMP、RET 均有同类反例。此外，即使 CALL 位于末尾，显式空 `liveOut` 也不能证明
+参数、标志或向量寄存器不是 callee 的输入；调用方返回后的活跃值不包含这项信息。
+
+这会影响真实提升结果。固定 x64 caller 为 `mov rdi,rcx; call 0x2000; mov rdi,9; ret`，
+callee 为 `mov rax,rdi; ret`。分析器把 caller 的 CALL 和后续写入放在同一 IGNIL 块，
+旧默认 DSE 将其从四条变为三条，删掉 `RDI=RCX`。初始 RDI=deadbeef、RCX=0 时，
+完整 Guest 返回后的 RAX 因而为 deadbeef，Unicorn 为 0。该样本所有指令均已提升。
+
+修复先收集片段中所有被提及的寄存器字节，包含配置指定的 32 位写入父寄存器清零范围；
+在每个 CALL 和非末尾 JMP/CJMP/RET 前将这些字节保守标记为活跃。它不猜 ABI、API 名称
+或 callee 的效果。末尾非 CALL 转移仍遵守显式 `liveOut`，同一直线片段内的死写仍能消除；
+原 VMProtect DSE 回归仍从 687 条变为 86 条。头文件补充了上述契约，没有 API/ABI 变化。
+
+先将前两个结构回归和 Unicorn 矩阵加入旧生产源码，三个测试全部失败：47346 条断言中
+430 条失败，其中 416 条为错误输出状态。随后加入实际 caller 的永久回归，使用完整的
+旧双共享库快照重跑全部四项；快照哈希与上一轮最终库一致。最终旧/新结果：
+
+```text
+old-oracle-final.log:
+  test cases: 4 | 0 passed | 4 failed
+  assertions: 47350 | 46918 passed | 432 failed
+new-oracle-final.log:
+  All tests passed (47350 assertions in 4 test cases)
+```
+
+持久化 Unicorn 矩阵有 x64/A64、8/16/32/64 位、四种内部控制转移和末尾 CALL、四个
+边界输入，共 160 次机器参考。原始、默认 DSE、显式空 live-out DSE、simplify+DSE
+共 640 组状态比较，全部匹配，零排除、零跳过。比较所有 GPR（含 SP、A64 XZR）、
+建模标志位和完整 64 字节数据区；Unicorn PC 必须准确到达转移指令之前。
+这项矩阵有意停在 CALL 压栈/BL 修改 LR、RET 读栈之前，验证的是转移前状态，
+不能把 640 次计作完整 CALL/RET 函数执行。
+
+额外对上述实际 caller/callee 分别导出原始、默认 DSE、simplify+DSE 的 StatefulV2 IR，
+编译为 VM 原生 AArch64，在 O0/O2 各执行八个边界输入。callee 使用实际 Guest 代码，
+没有宿主 C API 效果模型。旧库原始方案 16 次完整返回匹配，两种优化方案共 32 次
+完整返回均有唯一的 RAX 差异；新库三方案共 48 次完整返回全部匹配。比较全部 76 个
+状态字段（含 PC、SP、标志、XMM 两半、raw x87）、全部 64 KiB 内存及退出记录、
+callee 调用次数；CALL 栈写入和实际 Guest RET 均包含在内，零排除、零跳过、零归一化。
+
+首次原生驱动将旧默认方案误设为正对照，检查立即报告 RAX=deadbeef/期望 0，
+记录在 `native-call-first.log`。最终将两种旧优化方案明确列为故障基线，且只接受上述
+唯一 RAX 反例；新库仍要求所有字段匹配，比较器与排除规则没有改变。
+
+最终 CTest **542/542**，无 Z3 **434/434**，均含五项生产源码 UBSan 检查；
+无 Z3 的三项新增回归为 30 条断言。完整 simplify/DSE 分组 45 项、184302 条断言通过。
+随机优化等价检查旧/新各四方案 × 1148 次，无错误；负对照仍报告 1145 次差异，
+13 个不能编码的候选单独列出。固定随机样本的 simplify+DSE 操作数仍为 11444/25348。
+这不表示含 CALL 的任意片段压缩率不变：上述 caller 的四条操作现在全部保留，
+旧版删除参数后仅有三条，但数值错误。
+
+三架构 Lua 再次运行相同 450 块/1235 次比较，零 DIFFERENT，旧/新完整日志一致；
+115 次 Unicorn fault、234 个 call/system 选块跳过、7 个未提升块跳过和上表内存范围限制
+全部保留。这些真实块检查刻意跳过 CALL，原本不能验证本次调用问题；新增的边界矩阵
+和完整 Guest caller/callee 对照填补了这一具体空缺。重复运行不增加独立样本数。
+
+未重跑全套单指令、完整 Tigress 或两个原始 IR 语料矩阵：生产提升/CFG/原始 LLVM
+路径不调用 IGNIL DSE，指令和控制流执行语义均未修改；变化只在显式使用 DSE 的优化
+API 和示例。这次验证覆盖该优化路径及一个实际调用样本，不证明任意函数、复杂 callee
+或整个优化器无错误，也没有实现跨 CALL 的内存效果分析、值集合并或去平坦化。
+
+产物：VM `~/vmc-runs/optimizer-transfers-20261105/`，含旧双共享库和源码、首次及最终
+回归日志、真实块/随机等价检查、`native-call/` 的原始与优化 IR、驱动、完整输入输出，
+以及 `final-summary.json`。摘要确认旧库来自上一轮、实际比较数、零新增差异和故障基线。
+
+```sh
+./build/bin/dragon_tests '[dse-transfer]'
+./build-noz3/bin/dragon_tests '[dse-transfer]'
 ```

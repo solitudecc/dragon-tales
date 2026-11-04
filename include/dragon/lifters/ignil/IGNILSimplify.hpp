@@ -90,8 +90,8 @@ struct DeadStoreOptions {
 /// `liveOut` names the registers whose value is observable after the block:
 ///   - std::nullopt (the default) means "assume everything is live on exit",
 ///     the conservative model Triton uses. A store is then removed only when it
-///     is provably overwritten *within this block* before any read, which needs
-///     no ABI knowledge and is always sound. This reproduces Salwan's VMProtect
+///     is provably overwritten *within this block* before any read or interior
+///     control transfer, which needs no ABI knowledge. This reproduces Salwan's VMProtect
 ///     example: every junk write is clobbered by a later junk write or a pop,
 ///     while the pops themselves are the last writers and survive.
 ///   - a Reg list means precisely those registers (their byte ranges) are live
@@ -99,6 +99,12 @@ struct DeadStoreOptions {
 ///     aggressively (e.g. a RET-terminated block whose live-out is just the ABI
 ///     return + callee-saved registers). Correctness then rests entirely on the
 ///     caller supplying a sound live-out set.
+///
+/// CALL may read registers implicitly; caller live-out does not describe callee
+/// inputs. Without a callee summary, every register byte mentioned by the block
+/// is conservatively live at CALL, including a final CALL with empty live-out.
+/// Interior JMP/CJMP/RET likewise retain the register state at that prefix exit.
+/// A final non-CALL transfer still honors the caller's explicit live-out set.
 ///
 /// Block-local, semantics-preserving, and conservative: side-effecting ops
 /// (STORE/CALL/JMP/CJMP/RET, and per hasSideEffect any control transfer) are

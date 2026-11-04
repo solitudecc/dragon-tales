@@ -688,6 +688,19 @@ Block passRegDSE(const Block &in,
   std::unordered_set<std::uint32_t> liveBytes; // live register-space bytes
   std::unordered_set<std::uint32_t> liveTemps; // live temp ids
 
+  // A transfer may expose the current register state before trace exit.
+  // Collect every byte this trace can change/read, including implicit parent
+  // clearing, so a later overwrite cannot hide that earlier observation.
+  std::unordered_set<std::uint32_t> observableBytes;
+  for (const Op &op: ops) {
+    if (op.dst)
+      if (const auto *r = std::get_if<Reg>(&*op.dst))
+        insertBytes(observableBytes, r->offset, clobberByteCount(*r, opts));
+    for (const auto &s: op.srcs)
+      if (const auto *r = std::get_if<Reg>(&s))
+        insertBytes(observableBytes, r->offset, readByteCount(*r));
+  }
+
   if (liveOut) {
     for (const Reg &r: *liveOut)
       insertBytes(liveBytes, r.offset, readByteCount(r));
@@ -697,15 +710,7 @@ Block passRegDSE(const Block &in,
     // liveness is irrelevant; every byte that *is* defined starts live, so a
     // store is removable only once overwritten later in the block before any
     // read. This is Triton's block-DSE model and needs no ABI knowledge.
-    for (const Op &op: ops) {
-      if (op.dst)
-        if (const auto *r = std::get_if<Reg>(&*op.dst))
-          insertBytes(liveBytes, r->offset,
-                      clobberByteCount(*r, opts));
-      for (const auto &s: op.srcs)
-        if (const auto *r = std::get_if<Reg>(&s))
-          insertBytes(liveBytes, r->offset, readByteCount(*r));
-    }
+    liveBytes = observableBytes;
   }
 
   auto anyByteLive = [&](std::uint32_t offset, std::uint32_t count) {
@@ -719,6 +724,16 @@ Block passRegDSE(const Block &in,
 
   for (std::size_t i = ops.size(); i-- > 0;) {
     const Op &op = ops[i];
+
+    const bool transfer = op.opcode == Opcode::CALL || op.opcode == Opcode::JMP ||
+                          op.opcode == Opcode::CJMP || op.opcode == Opcode::RET;
+    if (op.opcode == Opcode::CALL || (transfer && i + 1 < ops.size())) {
+      // A CALL has implicit register inputs even with an empty caller live-out
+      // set; no callee effects/ABI summary is available here. Interior exits
+      // likewise observe a prefix, not the writes later in the trace. The
+      // caller's explicit live-out still applies at a final non-CALL transfer.
+      liveBytes.insert(observableBytes.begin(), observableBytes.end());
+    }
 
     bool removable = false;
     if (op.dst && !hasSideEffect(op.opcode)) {

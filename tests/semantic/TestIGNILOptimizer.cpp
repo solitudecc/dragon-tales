@@ -282,3 +282,129 @@ TEST_CASE("IGNIL COPY widths preserve register state against Unicorn",
     }
   }
 }
+
+TEST_CASE("IGNIL DSE preserves the Unicorn state before a transfer",
+          "[ignil][dse][dse-transfer]") {
+  using namespace dragon;
+  using namespace dragon::ignil;
+  const std::array<std::uint64_t,4> inputs{0,~std::uint64_t{0},
+      0x8000000000000000ULL,0x1122334455667788ULL};
+  for (auto architecture:{Architecture::X86_64,Architecture::ARM64}) {
+    const bool a64=architecture==Architecture::ARM64;
+    Assembler assembler{architecture,Configuration{}};
+    std::vector<std::pair<Reg,int>> regs;
+    std::vector<std::pair<Reg,unsigned>> flags;
+    if (a64) {
+      for (unsigned i=0;i<31;++i)
+        regs.push_back({Reg{i*8,64,"GPR"},i<29 ? UC_ARM64_REG_X0+int(i) :
+            i==29 ? UC_ARM64_REG_X29 : UC_ARM64_REG_X30});
+      regs.push_back({arm::SP,UC_ARM64_REG_SP});
+      regs.push_back({arm::XZR,UC_ARM64_REG_XZR});
+      flags={{arm::NF,31},{arm::ZF,30},{arm::CF,29},{arm::VF,28}};
+    } else {
+      const int ids[]={UC_X86_REG_RAX,UC_X86_REG_RCX,UC_X86_REG_RDX,UC_X86_REG_RBX,
+          UC_X86_REG_RSP,UC_X86_REG_RBP,UC_X86_REG_RSI,UC_X86_REG_RDI,
+          UC_X86_REG_R8,UC_X86_REG_R9,UC_X86_REG_R10,UC_X86_REG_R11,
+          UC_X86_REG_R12,UC_X86_REG_R13,UC_X86_REG_R14,UC_X86_REG_R15};
+      for (unsigned i=0;i<16;++i) regs.push_back({Reg{i*8,64,"GPR"},ids[i]});
+      flags={{x86::CF,0},{x86::PF,2},{x86::AF,4},{x86::ZF,6},
+          {x86::SF,7},{x86::DF,10},{x86::OF,11}};
+    }
+    DeadStoreOptions options;
+    options.registerFile=a64 ? arm::registerFile() : x86::registerFile();
+    for (auto transfer:{Opcode::CALL,Opcode::JMP,Opcode::CJMP,Opcode::RET}) {
+      for (bool continuation:{false,true}) {
+        if (!continuation && transfer!=Opcode::CALL) continue;
+        for (Width width:{Width{8},Width{16},Width{32},Width{64}}) {
+          std::string text;
+          if (a64) text=width<32 ? "bfxil x0, x1, #0, #"+std::to_string(width) :
+              width==32 ? "mov w0, w1" : "mov x0, x1";
+          else text=width==8 ? "mov al, cl" : width==16 ? "mov ax, cx" :
+              width==32 ? "mov eax, ecx" : "mov rax, rcx";
+          auto code=assembler.assemble(text);REQUIRE_FALSE(code.empty());
+          const auto boundary=0x1000+code.size();
+          // Only the prefix executes. Stop at the real instruction boundary,
+          // before CALL pushes/BL changes LR or RET consumes the guest stack.
+          std::vector<std::uint8_t> transferCode;
+          if (a64) transferCode=transfer==Opcode::CALL ? std::vector<std::uint8_t>{0,0,0,0x94} :
+              transfer==Opcode::JMP ? std::vector<std::uint8_t>{0,0,0,0x14} :
+              transfer==Opcode::CJMP ? std::vector<std::uint8_t>{0,0,0,0x54} :
+              std::vector<std::uint8_t>{0xc0,0x03,0x5f,0xd6};
+          else transferCode=transfer==Opcode::CALL ? std::vector<std::uint8_t>{0xe8,0,0,0,0} :
+              transfer==Opcode::JMP ? std::vector<std::uint8_t>{0xeb,0} :
+              transfer==Opcode::CJMP ? std::vector<std::uint8_t>{0x74,0} :
+              std::vector<std::uint8_t>{0xc3};
+          code.insert(code.end(),transferCode.begin(),transferCode.end());
+          const Reg destination{0,width,"output"},source{8,width,"input"};
+          Block block{0x1000};
+          block.append({Opcode::COPY,destination,{Const{3,width}},0x1000});
+          block.append({Opcode::COPY,destination,{source},0x1000});
+          const auto target=a64 ? boundary : boundary+transferCode.size();
+          std::vector<Value> operands;
+          if (transfer==Opcode::CALL || transfer==Opcode::JMP) operands={Const{target,64}};
+          if (transfer==Opcode::CJMP) operands={Const{1,1},Const{target,64},Const{boundary+transferCode.size(),64}};
+          block.append({transfer,std::nullopt,operands,boundary});
+          if (continuation) {
+            block.append({Opcode::COPY,destination,{Const{8,width}},boundary+transferCode.size()});
+            block.append({Opcode::COPY,destination,{Const{9,width}},boundary+transferCode.size()+1});
+          }
+          const std::vector<std::pair<std::string,Block>> variants{
+              {"original",block},{"DSE",deadStoreEliminate(block,std::nullopt,options)},
+              {"DSE empty live-out",deadStoreEliminate(block,std::vector<Reg>{},options)},
+              {"simplify and DSE",deadStoreEliminate(simplifyBlock(block),std::nullopt,options)}};
+          for (auto input:inputs) {
+            INFO("architecture " << int(architecture) << " transfer " << opcodeName(transfer)
+                 << " continuation " << continuation << " width " << unsigned(width) << " input " << input);
+            uc_engine *raw=nullptr;
+            REQUIRE(uc_open(a64 ? UC_ARCH_ARM64 : UC_ARCH_X86,
+                           a64 ? UC_MODE_ARM : UC_MODE_64,&raw)==UC_ERR_OK);
+            const std::unique_ptr<uc_engine,CloseOptimizerUnicorn> uc{raw};
+            REQUIRE(uc_mem_map(raw,0x1000,4096,UC_PROT_ALL)==UC_ERR_OK);
+            REQUIRE(uc_mem_write(raw,0x1000,code.data(),code.size())==UC_ERR_OK);
+            REQUIRE(uc_mem_map(raw,0x8000,4096,UC_PROT_ALL)==UC_ERR_OK);
+            std::mt19937_64 random{input^0x6383145};
+            std::vector<std::uint64_t> initial;
+            for (auto [reg,id]:regs) {
+              auto value=reg.offset==8 ? input : random();
+              if (id==(a64 ? int(UC_ARM64_REG_SP) : int(UC_X86_REG_RSP))) value=0x9000;
+              if (a64 && id==UC_ARM64_REG_XZR) value=0;
+              initial.push_back(value);REQUIRE(uc_reg_write(raw,id,&value)==UC_ERR_OK);
+            }
+            std::uint64_t flagBits=a64 ? 0 : 2;
+            for (auto [flag,bit]:flags) flagBits|=(random()&1)<<bit;
+            const auto flagId=a64 ? int(UC_ARM64_REG_NZCV) : int(UC_X86_REG_EFLAGS);
+            REQUIRE(uc_reg_write(raw,flagId,&flagBits)==UC_ERR_OK);
+            std::vector<std::uint8_t> memory(64);
+            for (unsigned i=0;i<memory.size();++i) memory[i]=std::uint8_t(input+i*11);
+            REQUIRE(uc_mem_write(raw,0x8000,memory.data(),memory.size())==UC_ERR_OK);
+            REQUIRE(uc_emu_start(raw,0x1000,boundary,0,10)==UC_ERR_OK);
+            std::uint64_t pc=0;const auto pcId=a64 ? int(UC_ARM64_REG_PC) : int(UC_X86_REG_RIP);
+            REQUIRE(uc_reg_read(raw,pcId,&pc)==UC_ERR_OK);REQUIRE(pc==boundary);
+            for (const auto &[name,variant]:variants) {
+              INFO(name);
+              SymbolicExecutor executor;
+              for (unsigned i=0;i<regs.size();++i) executor.setRegister(regs[i].first,initial[i]);
+              for (auto [flag,bit]:flags) executor.setRegister(flag,(flagBits>>bit)&1);
+              executor.mapMemory(0x8000,memory);
+              const auto result=executor.run(variant);REQUIRE(result.complete());
+              for (auto [reg,id]:regs) {
+                std::uint64_t expected=0;REQUIRE(uc_reg_read(raw,id,&expected)==UC_ERR_OK);
+                CHECK(executor.evaluate(executor.readRegister(reg))==expected);
+              }
+              std::uint64_t expectedFlags=0;REQUIRE(uc_reg_read(raw,flagId,&expectedFlags)==UC_ERR_OK);
+              for (auto [flag,bit]:flags)
+                CHECK(executor.evaluate(executor.readRegister(flag))==((expectedFlags>>bit)&1));
+              std::vector<std::uint8_t> expectedMemory(64);
+              REQUIRE(uc_mem_read(raw,0x8000,expectedMemory.data(),expectedMemory.size())==UC_ERR_OK);
+              for (unsigned i=0;i<expectedMemory.size();i+=8) {
+                std::uint64_t expected=0;
+                for (unsigned b=0;b<8;++b) expected|=std::uint64_t(expectedMemory[i+b])<<(b*8);
+                CHECK(executor.evaluate(executor.readMemory(0x8000+i,64))==expected);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
