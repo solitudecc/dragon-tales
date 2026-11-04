@@ -206,6 +206,32 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Tigress + external API study (2026-11-04): `tigress_external_api.py` builds real
+ELF caller/provider DSOs, eager RELA binding, PLT/GOT calls and anonymous targets.
+11 cases: return gates, alias writes, memcpy/memcmp/strlen, indirect call,
+callback, varargs, FP return, tail and unknown noreturn boundary. Independent
+ARM C/Python specifications and x64 Unicorn; provider IR is optimized separately
+and linked only after caller optimization. No production API effects models.
+Main 16-input campaign: 16128 executions = 3936 root matches (1984 obfuscated),
+6784 exact API boundaries, 5408 incomplete. 0 differences/errors/skips/exclusions.
+1920 host checks and 5920 C-spec observations match (1920 unique x64 inputs).
+528 caller + 8 provider modules verify; entry errors/unlifted/forbidden API
+attributes 0. Loader recognizes all 480 named checks; IR provenance absent in
+120 unresolved obfuscated O2 modules; anonymous pointers do not acquire names.
+Static PLT/tail transfers need a consumer; registered provider code does not
+automatically complete them. The 32 plain recursive tail runs that stop before
+the PLT were separately checked at that declared boundary: 32 exact matches;
+the remaining 5376 incomplete runs are obfuscated O2 dispatch gaps.
+Extra memcmp 17-input campaign includes equality: 408 root / 680 API boundary /
+544 incomplete, no differences; overlap with the original 16 is explicit.
+Current default is 17; main used the preserved harness snapshot with 16 inputs.
+Controls reject a wrong provider result (32 host + 32 C), stale RAX (16 of 32
+known returns; inputs whose API result is zero legitimately match), lost writes (32); unknown
+prefixes stay correct. Four plain-C CTests: 499/499, no Z3 350/350.
+No production/interface changes or new whole-corpus/single-instruction campaign.
+See docs/tigress-external-api-validation.md; never count API boundary snapshots
+as complete functions or the mixed O2 matrix as passed.
+
 Complete SHA-256 experiment (2026-11-04): `tigress_sha256.py` and
 `tests/fixtures/tigress-sha256.c` cover all 64 rounds, schedule, streaming updates,
 padding and actual internal calls. Tigress 2.1 seed 2561901 transforms compress,

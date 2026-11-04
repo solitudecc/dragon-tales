@@ -251,6 +251,29 @@ if(Python3_Interpreter_FOUND)
                         "Validation - SHA256 detects llvm-register"
                         "Validation - SHA256 detects llvm-memory" PROPERTIES
                         ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                    add_test(NAME "Validation - external API images and boundaries"
+                        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/tigress_external_api.py
+                            --profile plain --c-level O0 --strategy 0
+                            --clang ${DRAGON_IMAGE_CLANG} --ld ${DRAGON_IMAGE_LD}
+                            --out ${CMAKE_CURRENT_BINARY_DIR}/external-api-images)
+                    foreach(control c-result stale-register stale-memory)
+                        if(control STREQUAL "stale-memory")
+                            set(_dragon_external_case write)
+                        else()
+                            set(_dragon_external_case return)
+                        endif()
+                        add_test(NAME "Validation - external APIs detect ${control}"
+                            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/tigress_external_api.py
+                                --profile plain --c-level O0 --strategy 0 --form got --trials 16
+                                --case ${_dragon_external_case} --control ${control} --expect-control
+                                --clang ${DRAGON_IMAGE_CLANG} --ld ${DRAGON_IMAGE_LD}
+                                --out ${CMAKE_CURRENT_BINARY_DIR}/external-api-negative-${control})
+                    endforeach()
+                    set_tests_properties("Validation - external API images and boundaries"
+                        "Validation - external APIs detect c-result"
+                        "Validation - external APIs detect stale-register"
+                        "Validation - external APIs detect stale-memory" PROPERTIES
+                        ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
                 endif()
                 add_test(NAME "Validation - complete Guest CALL and RET"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py

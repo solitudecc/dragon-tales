@@ -40,6 +40,12 @@ Tigress 2.1 对 compress/update/finish 做平坦化及算术叠加平坦化。
 CTest 495/495、无 Z3 346/346；生产代码未改。
 样本、CFG/IR、缺失跳转和复现见 [SHA-256 实验](tigress-sha256-validation.md)。
 
+外部 API + Tigress 研究完成（2026-11-04；不表示完整覆盖通过）：11 场景、真实 ELF PLT/GOT，
+主矩阵 16128 次执行，3936 完整状态匹配、6784 API 边界匹配、5408 未完成；无状态差异。
+另补 memcmp 相等分支及静态尾跳前缀核对。未知 API 保留，未添加系统 API 效果模型。
+CTest 499/499、无 Z3 350/350；静态 PLT/尾跳接续和混淆 O2 分发仍有限制。
+数据、失败对照与复现见 [外部 API 研究](tigress-external-api-validation.md)。
+
 **分配建议**
 
 - 可以并行：任务 1、2、5、6、7 基本互不冲突。
