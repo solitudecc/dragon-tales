@@ -26,6 +26,7 @@ merely incomplete makes it 1: the run is a measurement).
 """
 import argparse
 import collections
+import os
 import hashlib
 import io
 import json
@@ -38,8 +39,13 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 import tigress_function_diff as tf
 from generated_function_diff import PLANS
+import block_deobf_study as block_deobf
 
 base, guest = tf.base, tf.guest
+# `junk` predicates and Flatten `flag` conditionals emit x86 inline assembly;
+# Tigress test-compiles its output with the host compiler, so on an aarch64
+# host it must use the x86-64 cross compiler.
+os.environ.setdefault('CILLY_NATIVE_CC', 'x86_64-linux-gnu-gcc')
 M = 0xffffffff
 ENTRY = tf.ENTRY
 MAX_GUEST_INSNS = 20_000_000
@@ -135,6 +141,10 @@ def build_image(c_source, work, level, args):
 
 PROFILES = ['plain', 'flatten-indirect', 'virt-switch', 'virt-indirect', 'virt-direct', 'virt-call',
             'virt-hard', 'virt-double', 'kitchen-sink']
+# Function-level MBA + control-flow + opaque predicates, on the guarded source
+# (`% 9` with a reachable default: the plain switch has a provable bound, so
+# what stays unresolved is due to the obfuscation).
+FUNCTION_PROFILES = ['f-plain', 'f-mba', 'f-opaque', 'f-cff', 'f-combo', 'f-combo-goto', 'f-combo-indirect']
 
 
 def constants(seed):
@@ -144,8 +154,9 @@ def constants(seed):
     return c, sbox
 
 
-def source(seed, wrong=False):
+def source(seed, wrong=False, guarded=False):
     (c0, c1, c2, c3, c4, c5), sbox = constants(seed)
+    modulus = 9 if guarded else 7
     table = ', '.join(f'{b}u' for b in sbox)
     return f'''typedef unsigned int u32;
 typedef unsigned long long u64;
@@ -167,7 +178,7 @@ __attribute__((noinline)) u32 kernel(u32 x, u32 *out) {{
   for (u32 i = 0u; i < 8u; ++i) out[i] = i * {c5}u;
   u32 state = x ^ {c0}u;
   for (u32 pc = 0u; pc < 12u; ++pc) {{
-    int code = (int)((state ^ (state >> 13) ^ pc) % 7u); /* Tigress 2.1 Virtualize rejects unsigned switch */
+    int code = (int)((state ^ (state >> 13) ^ pc) % {modulus}u); /* Tigress 2.1 Virtualize rejects unsigned switch */
     switch (code) {{
     case 0: state += SBOX[state & 63u]; break;
     case 1: state = ops[(state >> 3) & 3u](state, pc); break;
@@ -185,8 +196,9 @@ __attribute__((noinline)) u32 kernel(u32 x, u32 *out) {{
 '''
 
 
-def specification(seed, x):
+def specification(seed, x, guarded=False):
     (c0, c1, c2, c3, c4, c5), sbox = constants(seed)
+    modulus = 9 if guarded else 7
     def mix(a, b):
         return ((((a << 5) | (a >> 27)) & M) ^ ((b * 0x9e3779b9) & M))
     def fact(n):
@@ -199,7 +211,7 @@ def specification(seed, x):
     state = x ^ c0
     cases = collections.Counter()
     for pc in range(12):
-        code = (state ^ (state >> 13) ^ pc) % 7
+        code = (state ^ (state >> 13) ^ pc) % modulus
         cases[code] += 1
         if code == 0:
             state = (state + sbox[state & 63]) & M
@@ -239,8 +251,28 @@ def transforms(profile, seed):
     opaque = ['--Transform=InitEntropy', *k, '--Transform=InitOpaque', *k,
               '--InitOpaqueStructs=list', '--InitOpaqueSize=4']
     virt = lambda dispatch, *extra: ['--Transform=Virtualize', *k, '--VirtualizeDispatch=' + dispatch, *extra]
-    if profile == 'plain':
+    if profile in ('plain', 'f-plain'):
         return []
+    add_opaque = ['--Transform=AddOpaque', *k, '--AddOpaqueKinds=call,bug,true,junk,question',
+                  '--AddOpaqueCount=6', '--AddOpaqueObfuscate=true', '--AddOpaqueStructs=list']
+    mba = ['--Transform=EncodeArithmetic', *k]
+    def cff(dispatch):
+        return ['--Transform=Flatten', *k, '--FlattenDispatch=' + dispatch, '--FlattenRandomizeBlocks=true',
+                '--FlattenSplitBasicBlocks=true', '--FlattenObfuscateNext=true',
+                '--FlattenConditionalKinds=branch,compute,flag', '--FlattenOpaqueStructs=list']
+    if profile == 'f-mba':
+        return mba
+    if profile == 'f-opaque':
+        return opaque + add_opaque
+    if profile == 'f-cff':
+        return ['--Transform=Flatten', *k, '--FlattenDispatch=switch', '--FlattenRandomizeBlocks=true',
+                '--FlattenSplitBasicBlocks=true']
+    if profile.startswith('f-combo'):
+        dispatch = {'f-combo': 'switch', 'f-combo-goto': 'goto', 'f-combo-indirect': 'indirect'}[profile]
+        # Flatten's compute/flag conditionals cannot convert the opaque list
+        # pointer comparisons (Tigress 2.1 internal error), so the predicates
+        # are inserted into the flattened blocks afterwards.
+        return opaque + mba + cff(dispatch) + add_opaque + mba
     if profile == 'flatten-indirect':
         return ['--Transform=Flatten', *k, '--FlattenDispatch=indirect',
                 '--FlattenRandomizeBlocks=true', '--FlattenSplitBasicBlocks=true']
@@ -323,7 +355,7 @@ def cfg_view(data, strategy):
     unlifted = sum(len(graph.get_ignil_block(b).unlifted()) for b in graph.block_addresses()
                    if graph.get_ignil_block(b))
     return dict(sites=sites, decoded=decoded, entries=entries, unlifted=unlifted,
-                instructions=len(decoded))
+                instructions=len(decoded), graph=graph)
 
 
 def ir_instructions(path, symbol):
@@ -334,11 +366,24 @@ def ir_instructions(path, symbol):
     return sum(1 for line in m[1].splitlines() if line.startswith('  ') and not line.strip().startswith(';'))
 
 
+def ir_cfg(path, symbol):
+    """Basic blocks, conditional branches and switches of one IR function."""
+    text = path.read_text()
+    m = re.search(r'^define [^\n]*@' + re.escape(symbol) + r'\([^\n]*\{\n(.*?)^\}', text, re.M | re.S)
+    if not m:
+        return None
+    body = m[1]
+    return dict(blocks=1 + len(re.findall(r'^[\w.]+:', body, re.M)),
+                conditional_br=len(re.findall(r'^\s+br i1 ', body, re.M)),
+                switches=len(re.findall(r'^\s+switch ', body, re.M)))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--out', type=Path, required=True)
     ap.add_argument('--tigress', required=True)
-    ap.add_argument('--profile', action='append', choices=PROFILES)
+    ap.add_argument('--profile', action='append', choices=PROFILES + FUNCTION_PROFILES)
+    ap.add_argument('--function-level', action='store_true', help='run FUNCTION_PROFILES by default')
     ap.add_argument('--seed', type=int, default=4242)
     ap.add_argument('--trials', type=int, default=24)
     ap.add_argument('--strategy', type=int, choices=[0, 1], default=0)
@@ -348,7 +393,7 @@ def main():
     for name, default in [('clang', 'clang-21'), ('ld', 'ld.lld-21'), ('opt', 'opt-21'), ('llc', 'llc-21'), ('cc', 'gcc')]:
         ap.add_argument('--' + name, default=default)
     args = ap.parse_args()
-    profiles = args.profile or PROFILES
+    profiles = args.profile or (FUNCTION_PROFILES if args.function_level else PROFILES)
     levels = args.c_level or ['O0', 'O2']
     plans = [p for p in PLANS if p[0] in args.plans.split(',')]
     out = args.out.resolve()
@@ -357,13 +402,14 @@ def main():
     xs = inputs(args.seed, args.trials)
     seen_cases = collections.Counter()
     for x in xs:
-        seen_cases.update(specification(args.seed, x)[2])
+        seen_cases.update(specification(args.seed, x, guarded=any(p.startswith('f-') for p in profiles))[2])
     meta = dict(seed=args.seed, inputs=xs, strategy=args.strategy, profiles=profiles, levels=levels,
                 plans=[p[0] for p in plans], spec_switch_case_hits=dict(sorted(seen_cases.items())),
                 library_sha256=hashlib.sha256(Path(base.dragon._LIB).read_bytes()).hexdigest(),
                 tigress_version=tf.run([args.tigress, '--version'], out, 'tigress-version').strip().splitlines()[-1][:200],
                 control=args.control)
     (out / 'source.c').write_text(source(args.seed))
+    (out / 'source-guarded.c').write_text(source(args.seed, guarded=True))
     c_rows, rows, analyses = [], [], []
     def save():
         st = lambda rs: dict(collections.Counter(r['status'] for r in rs))
@@ -376,9 +422,10 @@ def main():
         work = out / profile
         work.mkdir(exist_ok=True)
         input_c, output_c = work / 'input.c', work / 'transformed.c'
-        input_c.write_text(source(args.seed, wrong=args.control == 'c-result'))
+        guarded = profile.startswith('f-')
+        input_c.write_text(source(args.seed, wrong=args.control == 'c-result', guarded=guarded))
         try:
-            if profile == 'plain':
+            if profile in ('plain', 'f-plain'):
                 output_c.write_text(input_c.read_text())
             else:
                 tf.run([args.tigress, '--Environment=x86_64:Linux:Gcc:4.6', '--Seed=' + str(args.seed),
@@ -408,6 +455,15 @@ def main():
                             extra_function_entries=sorted(set(view['entries']) - set(v[0] for v in sizes.values())),
                             unlifted=view['unlifted'], indirect_sites=len(view['sites']),
                             resolved_sites=sum(1 for s in view['sites'].values() if s['targets']))
+            graph = view['graph']
+            kblocks = [bb for bb in graph.block_addresses() if ka <= bb < ka + ks and graph.get_block(bb).is_valid]
+            conditional = [bb for bb in kblocks
+                           if (lambda i: i.is_jump and i.is_conditional)(graph.get_instruction(graph.get_block(bb).terminator_address))]
+            edges = block_deobf.branch_edges(graph, conditional)
+            analysis.update(kernel_blocks=len(kblocks), kernel_conditional_branches=len(conditional),
+                            branches_decided_single_edge=sum(1 for v in edges.values() if v == 1),
+                            branches_both_edges=sum(1 for v in edges.values() if v == 2),
+                            branches_symbolic_error=sum(1 for v in edges.values() if v is None))
             # C level + dynamic CFG edges, one Unicorn run per input.
             expected, executed_all, edges_all = [], set(), set()
             for trial, x in enumerate(xs):
@@ -419,7 +475,7 @@ def main():
                     continue
                 executed_all |= executed
                 edges_all |= edges
-                want_r, want_out, _ = specification(args.seed, x)
+                want_r, want_out, _ = specification(args.seed, x, guarded=guarded)
                 got = (base.get(result[0], 0, 4), bytes(result[1][base.DATA:base.DATA + 32]))
                 c_rows.append(dict(case=case, trial=trial, x=x,
                                    status='match' if got == (want_r, want_out) else 'different',
@@ -441,6 +497,7 @@ def main():
                             executed_pcs=len(executed_all),
                             executed_undecoded=len(executed_all - view['decoded']))
             analyses.append(analysis)
+            view.pop('graph', None)
             for plan, static, product, opt_level in plans:
                 if not expected:
                     break
@@ -456,6 +513,7 @@ def main():
                     continue
                 args.control = saved
                 if plan == 'product-O2':
+                    analysis['kernel_ir_cfg_product_O2'] = ir_cfg(pw / 'optimized.ll', f'dragon_static_x86_64_{ka:x}')
                     analysis['kernel_ir_product_O2'] = ir_instructions(pw / 'optimized.ll', f'dragon_static_x86_64_{ka:x}')
                     analysis['kernel_ir_raw'] = ir_instructions(pw / 'unoptimized.ll', f'dragon_static_x86_64_{ka:x}')
                 for trial, regs, memory, want in expected:
@@ -476,8 +534,9 @@ def main():
             summary = save()
             print(case, json.dumps({k: analysis.get(k) for k in ('kernel_instructions', 'indirect_sites', 'resolved_sites',
                                                                  'executed_indirect_sites', 'executed_resolved_sites',
-                                                                 'wrong_sites', 'executed_undecoded', 'unlifted',
-                                                                 'kernel_ir_product_O2')}),
+                                                                 'wrong_sites', 'executed_undecoded', 'unlifted', 'kernel_blocks',
+                                                                 'kernel_conditional_branches', 'branches_decided_single_edge',
+                                                                 'kernel_ir_product_O2', 'kernel_ir_cfg_product_O2')}),
                   dict(collections.Counter(r['status'] for r in c_rows if r['case'] == case)),
                   dict(collections.Counter(r['status'] for r in rows if r['case'] == case)), flush=True)
     summary = save()

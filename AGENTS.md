@@ -206,6 +206,17 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Tigress VM and function-level study (2026-11-04, `docs/tigress-vm-challenge.md`,
+`tigress_vm_challenge.py [--function-level]`): Virtualize switch and MBA +
+switch-Flatten + true/false opaque predicates execute fully (all 6 plans);
+computed-goto/indirect dispatch, nested VMs and junk-byte instruction overlap
+stay explicit incomplete; C, dynamic-CFG and LLVM wrong 0. Fixed two x86 table
+gaps: SMT timeouts on computed indices (abstraction for UNSAT, concrete
+witnesses for SAT only) and register-state flattening dispatchers (last-resort
+one-block slice at the guard). Corpus tables now 1086/0/190/526/38.
+Tigress needs `CILLY_NATIVE_CC=x86_64-linux-gnu-gcc` on the aarch64 VM, its
+`megaInit` must run before the kernel, and `/tmp` there is a 1.7 GB tmpfs.
+
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
 bugs: import provenance on fall-through edges/non-thunk blocks (wrong and
