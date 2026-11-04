@@ -1,5 +1,6 @@
 #include "disassemblers/x86/x86Analysis.hpp"
 #include "disassemblers/x86/X86IGNILLifter.hpp"
+#include "analysis/ConstantValue.hpp"
 
 // Public headers
 #include <dragon/analysis/BackwardSlicer.hpp>
@@ -484,7 +485,7 @@ void dragon::x86::X86Analysis::liftPendingBlocks(
 std::vector<std::uint64_t>
 dragon::x86::X86Analysis::collectTargets(const slice::Expr &result,
                                          std::uint64_t blockAddr) const {
-  if (const auto *c = std::get_if<slice::Const>(&result.data))
+  if (const auto c = slice::detail::constantValue(result))
     return {c->value};
 
 #ifdef DRAGON_WITH_Z3
@@ -656,12 +657,16 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
 
     const auto result = BackwardSlicer{depth}.slice(
             last.srcs[0], block.startAddress(), cfg, &cfgPreds);
-    // A free LOAD must never be enumerated as arbitrary addresses; linear
-    // sweep additionally requires a recognised table at decoded boundaries.
+    // A free LOAD must never be enumerated as arbitrary addresses; nonconstant
+    // linear targets require a recognised table at decoded boundaries.
     const bool tablesOnly =
             linear || std::holds_alternative<ignil::Temp>(last.srcs[0]);
     std::vector<std::uint64_t> values;
-    if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
+    if (auto c = slice::detail::constantValue(result)) {
+      // This includes a LOAD already proved constant by store forwarding.
+      // No image-memory assumption or optional SMT enumeration is needed.
+      values = {c->value};
+    } else if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
                                               cfg, depth, &cfgPreds);
         sw && sw->numCases > 0) {
       values = slice::readTableTargets(*sw, bytes, baseAddr);
@@ -723,7 +728,11 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
       Graph cfg = reachableGraph(tentative, hints);
       // cfg is not modified in this round (new edges go to `tentative`), so
       // one predecessor map serves every slice taken in it.
-      const auto cfgPreds = BackwardSlicer::predecessors(cfg);
+      const std::set<std::uint64_t> entries = hints.entryPoints.empty()
+          ? std::set<std::uint64_t>(cfg.validFunctionAddresses().begin(),
+                                    cfg.validFunctionAddresses().end())
+          : std::set<std::uint64_t>(hints.entryPoints.begin(), hints.entryPoints.end());
+      const auto cfgPreds = BackwardSlicer::predecessors(cfg, entries);
       // Views only for blocks whose IGNIL ends in an indirect JMP (the only
       // ones targetsFor can resolve), not for every block every round.
       std::map<std::uint64_t, BasicBlock> jumps;

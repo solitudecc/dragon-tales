@@ -7,6 +7,7 @@
 
 #include "utils/Utils.hpp"
 #include "utils/FloatOps.hpp"
+#include "analysis/ConstantValue.hpp"
 
 #include <algorithm>
 #include <type_traits>
@@ -171,6 +172,15 @@ BackwardSlicer::predecessors(const Graph &graph) {
   return result;
 }
 
+BackwardSlicer::Predecessors BackwardSlicer::predecessors(
+        const Graph &graph, const std::set<std::uint64_t> &entries) {
+  auto result = predecessors(graph);
+  for (auto entry : entries)
+    if (auto it = result.find(entry); it != result.end())
+      it->second.clear();
+  return result;
+}
+
 namespace {
 
 // An address as base + offset: the constant terms of its ADD tree summed, the
@@ -192,6 +202,8 @@ void addTerms(const slice::Expr &e, std::vector<const slice::Expr *> &out) {
 }
 
 std::optional<SplitAddress> splitAddress(const slice::Expr &e) {
+  if (const auto c = slice::detail::constantValue(e))
+    return SplitAddress{nullptr, c->value, c->width};
   std::vector<const slice::Expr *> terms;
   addTerms(e, terms);
   SplitAddress a;

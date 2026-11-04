@@ -551,6 +551,185 @@ TEST_CASE("SwitchDetector - late overlap relifts every owner of a split suffix",
   CHECK(g.getIGNILBlock(0x110a));
 }
 
+TEST_CASE("X86Analysis resolves constant expression targets without enumeration",
+          "[switch][e2e][constant-target]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                          dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      DYNAMIC_SECTION("architecture " << static_cast<int>(arch) << " strategy "
+                                     << static_cast<int>(strategy)) {
+        std::vector<std::uint8_t> code;
+        code.reserve(12);
+        SECTION("zero extension") {
+          code = {0xb8, 0x00, 0x11, 0x00, 0x00, 0xff, 0xe0}; // mov eax,1100; jmp eax/rax
+        }
+        SECTION("arithmetic") {
+          code = {0xb8, 0xf0, 0x10, 0x00, 0x00, 0x83, 0xc0, 0x10,
+                  0xff, 0xe0}; // mov eax,10f0; add eax,16; jmp eax/rax
+        }
+        SECTION("wrapping arithmetic") {
+          code = {0xb8, 0xff, 0xff, 0xff, 0xff,
+                  0x05, 0x01, 0x11, 0x00, 0x00, 0xff, 0xe0}; // -1 + 1101 = 1100
+        }
+        auto bytes = layout(code, 1, 8);
+        dragon::Configuration cfg;
+        cfg.disassemblyStrategy = strategy;
+        dragon::Disassembler dis{arch, cfg};
+        dragon::Graph g{arch, cfg};
+        dis.disassemble(bytes, kBase, g);
+        const auto jumpAddress = kBase + code.size() - 2;
+        REQUIRE(g.get(jumpAddress));
+        CHECK(g.get(jumpAddress)->branches() == std::set<std::uint64_t>{kCase0});
+        CHECK(g.getIGNILBlock(kCase0));
+        CHECK(dragon::Function{&g, kBase}.block(kCase0));
+      }
+    }
+  }
+}
+
+TEST_CASE("X86Analysis rechecks constant targets after new incoming state",
+          "[switch][e2e][constant-target]") {
+  for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                        dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    DYNAMIC_SECTION("strategy " << static_cast<int>(strategy)) {
+      std::vector<std::uint8_t> bytes(0x1120 - kBase, 0xcc);
+      const std::uint8_t entry[] = {0xb8, 0x00, 0x11, 0x00, 0x00, 0xeb, 0x39};
+      std::copy(std::begin(entry), std::end(entry), bytes.begin());
+      bytes[0x40] = 0xff; bytes[0x41] = 0xe0; // dispatch at 1040
+      const std::uint8_t next[] = {0xb8, 0x10, 0x11, 0x00, 0x00, 0xe9, 0x36, 0xff, 0xff, 0xff};
+      std::copy(std::begin(next), std::end(next), bytes.begin() + 0x100);
+      bytes[0x110] = 0xc3; // case 0 changes EAX then loops; case 1 returns
+      dragon::Configuration cfg;
+      cfg.disassemblyStrategy = strategy;
+      dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+      dragon::Graph g{dragon::Architecture::X86_64, cfg};
+      dis.disassemble(bytes, kBase, g);
+      REQUIRE(g.get(0x1040));
+      CHECK(g.get(0x1040)->branches().empty());
+      CHECK_FALSE(g.isValidBlock(0x1100));
+      CHECK(g.getIGNILBlock(0x1100) == nullptr);
+      if (strategy == dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL)
+        CHECK(g.get(0x1100) == nullptr);
+    }
+  }
+}
+
+TEST_CASE("X86Analysis does not inherit constants through an independent entry",
+          "[switch][e2e][constant-target]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                          dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      DYNAMIC_SECTION("architecture " << static_cast<int>(arch) << " strategy "
+                                     << static_cast<int>(strategy)) {
+        auto bytes = layout({0xb8,0x00,0x11,0x00,0x00,0xff,0xe0}, 1, 8);
+        dragon::Configuration cfg;
+        cfg.disassemblyStrategy = strategy;
+        dragon::Disassembler dis{arch, cfg};
+        dragon::Graph graph{arch, cfg};
+        dragon::Disassembler::AnalysisHints hints;
+        hints.entryPoints = {kBase, kBase + 5};
+        dis.disassemble(bytes, kBase, graph, hints);
+        REQUIRE(graph.get(kBase + 5));
+        CHECK(graph.get(kBase + 5)->branches().empty());
+      }
+    }
+  }
+}
+
+TEST_CASE("X86Analysis resolves stored fixed pointers only across proven memory",
+          "[switch][e2e][constant-target]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                          dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      DYNAMIC_SECTION("architecture " << static_cast<int>(arch) << " strategy "
+                                     << static_cast<int>(strategy)) {
+        const bool x64 = arch == dragon::Architecture::X86_64;
+        std::vector<std::uint8_t> code = x64
+            ? std::vector<std::uint8_t>{0x48,0xc7,0x04,0x25,0x00,0x30,0x00,0x00,0x00,0x11,0x00,0x00}
+            : std::vector<std::uint8_t>{0xc7,0x05,0x00,0x30,0x00,0x00,0x00,0x11,0x00,0x00};
+        code.reserve(64);
+        bool known = true;
+        bool independentEntry = false;
+        SECTION("exact pointer store") {}
+        SECTION("independent entry after the store") {
+          independentEntry = true;
+          known = false;
+        }
+        SECTION("image bytes alone are not a stable pointer") {
+          code.clear();
+          known = false;
+        }
+        SECTION("disjoint store") {
+          if (x64) code.insert(code.end(), {0xc7,0x04,0x25,0x10,0x30,0x00,0x00,7,0,0,0});
+          else code.insert(code.end(), {0xc7,0x05,0x10,0x30,0x00,0x00,7,0,0,0});
+        }
+        SECTION("overlapping byte store") {
+          if (x64) code.insert(code.end(), {0xc6,0x04,0x25,0x00,0x30,0x00,0x00,0x10});
+          else code.insert(code.end(), {0xc6,0x05,0x00,0x30,0x00,0x00,0x10});
+          known = false;
+        }
+        SECTION("unknown alias store") {
+          if (x64) code.push_back(0x48);
+          code.insert(code.end(), {0x89,0x07}); // mov [rdi/edi],rax/eax
+          known = false;
+        }
+        SECTION("call barrier") {
+          code.push_back(0xe8);
+          const auto offset = code.size();
+          code.resize(offset + 4);
+          putLE(code, offset, 0x1180 - (kBase + code.size()), 4);
+          known = false;
+        }
+        const auto jumpAddress = kBase + code.size();
+        if (x64) code.insert(code.end(), {0xff,0x24,0x25,0x00,0x30,0x00,0x00});
+        else code.insert(code.end(), {0xff,0x25,0x00,0x30,0x00,0x00});
+        auto bytes = layout(code, 2, 8);
+        bytes[0x1180 - kBase] = 0xc3;
+        dragon::Configuration cfg;
+        cfg.disassemblyStrategy = strategy;
+        dragon::Disassembler dis{arch, cfg};
+        dragon::Graph g{arch, cfg};
+        dragon::Disassembler::AnalysisHints hints;
+        if (independentEntry) hints.entryPoints = {kBase, jumpAddress};
+        hints.readMemory = [](std::uint64_t address, std::span<std::uint8_t> out) {
+          if (address != 0x3000 || out.size() > 8) return false;
+          for (std::size_t i = 0; i < out.size(); ++i)
+            out[i] = static_cast<std::uint8_t>(kCase0 >> (8 * i));
+          return true;
+        };
+        dis.disassemble(bytes, kBase, g, hints);
+        REQUIRE(g.get(jumpAddress));
+        CHECK(g.get(jumpAddress)->branches() == (known ? std::set<std::uint64_t>{kCase0}
+                                                       : std::set<std::uint64_t>{}));
+      }
+    }
+  }
+}
+
+TEST_CASE("X86Analysis rechecks entry state of newly decoded callees",
+          "[switch][e2e][constant-target]") {
+  // The first constant jump reveals a callee also reached by a tail jump.
+  // A store before the tail jump does not define its independent CALL entry.
+  auto bytes = layout({0xb8,0x00,0x11,0x00,0x00,0xff,0xe0}, 2, 8);
+  const std::uint8_t body[] = {
+      0xe8,0x7b,0x00,0x00,0x00, // call 1180
+      0x48,0xc7,0x04,0x25,0x00,0x30,0x00,0x00,0x20,0x11,0x00,0x00,
+      0xe9,0x6a,0x00,0x00,0x00}; // store pointer 1120; jmp 1180
+  const std::uint8_t callee[] = {0xff,0x24,0x25,0x00,0x30,0x00,0x00};
+  std::copy(std::begin(body), std::end(body), bytes.begin() + 0x100);
+  std::copy(std::begin(callee), std::end(callee), bytes.begin() + 0x180);
+  bytes[0x120] = 0xc3;
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+  dragon::Graph graph{dragon::Architecture::X86_64, cfg};
+  dis.disassemble(bytes, kBase, graph);
+  REQUIRE(graph.get(kBase + 5));
+  CHECK(graph.get(kBase + 5)->branches() == std::set<std::uint64_t>{kCase0});
+  REQUIRE(graph.get(0x1180));
+  CHECK(graph.get(0x1180)->branches().empty());
+}
+
 TEST_CASE("SwitchDetector - code reachable from a case is decoded too",
           "[switch][e2e][cfg]") {
   // Case 0 branches on: 0x1100 test edi, edi ; je 0x1180 ; ret / 0x1180 ret.

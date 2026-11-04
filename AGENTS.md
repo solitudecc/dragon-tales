@@ -243,6 +243,34 @@ remaining exact stop sites and staged repair plan are in
 docs/tigress-vm-challenge.md. No whole-corpus semantic proof, new full
 single-instruction campaign or generic de-flattening/MBA cleanup is claimed.
 
+Constant x86 control-flow targets (stage 2, 2026-11-04/05): private APInt evaluator
+handles pure integer slice trees without optional SMT enumeration, including
+wide intermediates and explicit bit widths. Unknowns, free LOADs, floating point,
+faulting divisions and exhausted budgets stay unknown. Proven STORE-to-LOAD
+values can now resolve memory JMPs; constant address expressions participate in
+the existing alias checks. Image bytes/readMemory are not immutability proofs.
+New BackwardSlicer::predecessors(graph, entries) overload stops backward walks at
+independent entries; x86 recomputes them after expansions, including newly decoded
+callees. Candidate rejection/final completeness checks are unchanged. Tests-only
+on 1c61039: 33 failed assertions; final e2e tests with its frozen libraries:
+44 failures. Fixed: 8 tests/9397 assertions, including 3082 APInt/Z3 expressions;
+no Z3: 7 tests/151 assertions. Intermediate entry mistakes fail 4 and 1 assertions.
+Four permanent i386/x64 full-function fixtures: old V2 64 different (early
+unresolved exits), fixed V2
+64/64 and static 64/64 root returns, all modelled state/64 KiB memory, no new
+exclusions/skips. CTest 520/520, no Z3 + Unicorn 416/416; guard/slice harnesses
+clean. Lua unlifted records/forms identical 188/49/90. Tigress goto O2 first
+target 0x103d8 -> 0x106be is now recognized then withdrawn after CFG expansion:
+its complete target set is still unknown. Indirect O2 0x1017a still loads an
+unproven image pointer. These are incomplete, not completed deobfuscation.
+Final identical-image matrix remains 2880 match / 1152 incomplete / 0 different,
+C 672/672, CFG wrong 0. All 69 corpus inputs freshly rerun: 206649 function
+checks / 1686 V2 raw modules verify; structural counts exactly match stage 1,
+including its existing alerts. All input hashes unchanged; table records remain
+1086/0/190/526/38 in all 138 strategy records. This is not whole-corpus semantic
+proof. Artifacts ~/vmc-runs/constant-flow-20261104; final matrix/corpus checks and scope
+are recorded in docs/tigress-vm-challenge.md.
+
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
 bugs: import provenance on fall-through edges/non-thunk blocks (wrong and

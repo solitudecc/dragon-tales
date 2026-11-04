@@ -3,6 +3,38 @@
   "entry": 4096,
   "cases": [
     {
+      "id": "x86_64_constant_target",
+      "architecture": "x86_64",
+      "code_hex": "b8f0ffffff0530100000ffe0cccccccccccccccccccccccccccccccccccccccc01f88903c3",
+      "source": "mov eax,0xfffffff0; add eax,0x1030; jmp eax/rax -> 1020; add eax,edi; mov [ebx/rbx],eax; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_stored_pointer_target",
+      "architecture": "x86_64",
+      "code_hex": "48c704250030000020100000b800300000ff20cccccccccccccccccccccccccc01f88903c3",
+      "source": "store pointer 0x1020 at 0x3000; mov eax,0x3000; jmp [eax/rax]; add eax,edi; mov [ebx/rbx],eax; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_constant_target",
+      "architecture": "x86_32",
+      "code_hex": "b8f0ffffff0530100000ffe0cccccccccccccccccccccccccccccccccccccccc01f88903c3",
+      "source": "mov eax,0xfffffff0; add eax,0x1030; jmp eax/rax -> 1020; add eax,edi; mov [ebx/rbx],eax; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_stored_pointer_target",
+      "architecture": "x86_32",
+      "code_hex": "c7050030000020100000b800300000ff20cccccccccccccccccccccccccccccc01f88903c3",
+      "source": "store pointer 0x1020 at 0x3000; mov eax,0x3000; jmp [eax/rax]; add eax,edi; mov [ebx/rbx],eax; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
       "id": "x86_64_overlapping_paths",
       "architecture": "x86_64",
       "code_hex": "85ff7403b8909089e801f8c3",

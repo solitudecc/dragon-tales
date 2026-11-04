@@ -52,9 +52,16 @@ class BackwardSlicer {
           std::unordered_map<std::uint64_t, std::vector<std::uint64_t>>;
   [[nodiscard]] static Predecessors predecessors(const Graph &graph);
 
-  /// `precomputed`, when given, must be predecessors(graph) for the graph
-  /// as it is now - building it walks the whole graph, so a caller slicing
-  /// many values in an unchanged graph computes it once and passes it.
+  /// External entries admit arbitrary register/memory state, independently
+  /// of their in-graph predecessors. Stop backward walks at their entry;
+  /// definitions inside the entry block are still usable.
+  [[nodiscard]] static Predecessors predecessors(
+          const Graph &graph, const std::set<std::uint64_t> &entries);
+
+  /// `precomputed`, when given, must be predecessors(graph), optionally with
+  /// external entries, for the graph as it is now. Building it walks the whole
+  /// graph, so a caller slicing many values in an unchanged graph computes it
+  /// once and passes it.
   [[nodiscard]] slice::Expr slice(const ignil::Value &root,
                                   std::uint64_t blockAddr, const Graph &graph,
                                   const Predecessors *precomputed = nullptr) const;
