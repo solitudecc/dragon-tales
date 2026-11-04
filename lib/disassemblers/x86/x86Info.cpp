@@ -38,11 +38,11 @@ dragon::X86Info::X86Info(const Architecture architecture,
       opLeave_ = i;
     else if (name == "RET64")
       opRet64_ = i;
-    else if (name == "RETL")
+    else if (name == "RETL" || name == "RET32")
       opRetL_ = i;
     else if (name == "RETI64")
       opRetI64_ = i;
-    else if (name == "RETIL")
+    else if (name == "RETIL" || name == "RETI32")
       opRetIL_ = i;
     else if (name == "ADD64ri8" || name == "ADD64ri32")
       addSP64Opcodes_.insert(i);

@@ -30,8 +30,9 @@ static void exchange_cases(void){struct Raw80 a,b;uint16_t sw;
  if(which==2)__asm__ volatile("fninit;fld1;fldz;ffree %%st(0);ffree %%st(1);fxch %%st(1);fnstsw %2;fstpt %0;fstpt %1;fninit":"=m"(a),"=m"(b),"=m"(sw)::"st","memory");
  printf("%d %016llx %04x %016llx %04x %04x\n",which,(unsigned long long)a.lo,a.hi,(unsigned long long)b.lo,b.hi,sw);
  }
- struct Raw80 v[]={ {0x8000000000000000ULL,0},{0x1234,0x3fff},{0x1234,0x7fff},{1,0},{0xc000000000000001ULL,0x7fff} };
- for(int i=0;i<5;i++){__asm__ volatile("fninit;fldt %1;fxam;fnstsw %0;fninit":"=m"(sw):"m"(v[i]):"st","memory");printf("XAM %016llx %04x %04x\n",(unsigned long long)v[i].lo,v[i].hi,sw);}
+ struct Raw80 v[]={ {0x8000000000000000ULL,0},{0x1234,0x3fff},{0x1234,0x7fff},{1,0},{0xc000000000000001ULL,0x7fff},
+                    {0x4474d2addbb03b5bULL,0x7a5c} };
+ for(unsigned i=0;i<sizeof(v)/sizeof(v[0]);i++){__asm__ volatile("fninit;fldt %1;fxam;fnstsw %0;fninit":"=m"(sw):"m"(v[i]):"st","memory");printf("XAM %016llx %04x %04x\n",(unsigned long long)v[i].lo,v[i].hi,sw);}
 }
 
 static void special_cases(void) {

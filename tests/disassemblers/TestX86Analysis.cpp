@@ -185,6 +185,107 @@ TEST_CASE("X86Analysis x86_64 - call target becomes a function start",
 // Block discovery via conditional branch
 // -----------------------------------------------------------------------
 
+TEST_CASE("X86Analysis - INT3 alignment does not create a function",
+          "[x86][analysis][int3-padding]") {
+  // lld fills the gap between compiled functions with 0xcc. The bytes at
+  // 0x1001..0x1003 are padding, not an extra function before the leaf at 1004.
+  const std::vector<std::uint8_t> bytes = {
+      0xc3, 0xcc, 0xcc, 0x90, 0xb8, 0x07, 0x00, 0x00, 0x00, 0xc3};
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    auto dis = makeAnalyzer(arch);
+    auto graph = makeGraph(arch);
+    dis.disassemble(bytes, 0x1000, graph);
+    REQUIRE(graph.validFunctionAddresses() == std::set<std::uint64_t>{0x1000, 0x1004});
+    REQUIRE_FALSE(graph.get(0x1001)->isFunctionStart());
+    REQUIRE_FALSE(graph.get(0x1002)->isFunctionStart());
+  }
+}
+
+TEST_CASE("X86Analysis - explicit INT3 entry survives alignment discovery",
+          "[x86][analysis][int3-padding]") {
+  const std::vector<std::uint8_t> bytes = {0xc3, 0xcc, 0x90, 0xc3};
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    auto dis = makeAnalyzer(arch);
+    auto graph = makeGraph(arch);
+    dragon::Disassembler::AnalysisHints hints;
+    hints.entryPoints = {0x1000, 0x1001};
+    dis.disassemble(bytes, 0x1000, graph, hints);
+    REQUIRE(graph.validFunctionAddresses() == std::set<std::uint64_t>{0x1000, 0x1001, 0x1003});
+    REQUIRE(graph.get(0x1001)->isFunctionStart());
+    // It remains an actual breakpoint instruction, never rewritten as a NOP.
+    REQUIRE(graph.get(0x1001)->bytes()[0] == 0xcc);
+  }
+}
+
+TEST_CASE("X86Analysis x86_32 - RET imm16 discovers the following leaf",
+          "[x86][analysis][int3-padding]") {
+  // LLVM 21 calls these opcodes RET32/RETI32 rather than RETL/RETIL.
+  const std::vector<std::uint8_t> bytes = {
+      0xc2, 0x08, 0x00, 0xb8, 0x07, 0x00, 0x00, 0x00, 0xc3};
+  auto dis = makeAnalyzer(dragon::Architecture::X86_32);
+  auto graph = makeGraph(dragon::Architecture::X86_32);
+  dis.disassemble(bytes, 0x1000, graph);
+  REQUIRE(graph.validFunctionAddresses() == std::set<std::uint64_t>{0x1000, 0x1003});
+  REQUIRE(graph.get(0x1003)->isFunctionStart());
+}
+
+TEST_CASE("X86Analysis - unresolved indirect cases do not seed functions",
+          "[x86][analysis][int3-padding]") {
+  // Unknown dispatch followed by two generated case bodies. A RET alone
+  // cannot establish that the next body is a different function. An
+  // explicitly separate function, however, starts a fresh analysis region.
+  const std::vector<std::uint8_t> bytes = {
+      0xff, 0xe0, 0xb8, 1, 0, 0, 0, 0xc3, 0xb8, 2, 0, 0, 0, 0xc3};
+  for (bool separateFunction : {false, true}) {
+    DYNAMIC_SECTION("known separate function " << separateFunction) {
+      auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+      auto graph = makeGraph(dragon::Architecture::X86_64);
+      dragon::Disassembler::AnalysisHints hints;
+      if (separateFunction)
+        hints.entryPoints = {0x1000, 0x1002};
+      dis.disassemble(bytes, 0x1000, graph, hints);
+      if (separateFunction) {
+        REQUIRE(graph.validFunctionAddresses() == std::set<std::uint64_t>{0x1000, 0x1002, 0x1008});
+        REQUIRE(graph.get(0x1008)->isFunctionStart());
+      } else {
+        REQUIRE(graph.validFunctionAddresses() == std::set<std::uint64_t>{0x1000});
+        REQUIRE_FALSE(graph.get(0x1008)->isFunctionStart());
+      }
+    }
+  }
+}
+
+TEST_CASE("X86Analysis - data references keep post RET entries ambiguous",
+          "[x86][analysis][int3-padding]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (bool explicitCode : {false, true}) {
+      DYNAMIC_SECTION("arch " << static_cast<int>(arch) << " explicit code " << explicitCode) {
+        // Read the bytes at 1010 as data, then return. The same bytes can
+        // also encode a leaf, but layout alone cannot certify that entry.
+        // Explicit entry evidence must still preserve such dual use.
+        std::vector<std::uint8_t> bytes = {0x8b, 0x05, 0, 0, 0, 0, 0xc3};
+        const std::uint32_t displacement = arch == dragon::Architecture::X86_32 ? 0x1010 : 10;
+        for (unsigned i=0; i<4; ++i) bytes[2+i] = displacement >> (8*i);
+        bytes.resize(16, 0x90);
+        bytes.insert(bytes.end(), {0xb8, 7, 0, 0, 0, 0xc3, 0x90, 0x90,
+                                   0xb8, 9, 0, 0, 0, 0xc3});
+        auto dis = makeAnalyzer(arch);
+        auto graph = makeGraph(arch);
+        dragon::Disassembler::AnalysisHints hints;
+        hints.entryPoints = {0x1000, 0x1018};
+        if (explicitCode) hints.entryPoints.push_back(0x1010);
+        dis.disassemble(bytes, 0x1000, graph, hints);
+        const auto expected = explicitCode
+            ? std::set<std::uint64_t>{0x1000, 0x1010, 0x1018}
+            : std::set<std::uint64_t>{0x1000, 0x1018};
+        REQUIRE(graph.validFunctionAddresses() == expected);
+        REQUIRE(graph.get(0x1010)->isFunctionStart() == explicitCode);
+        REQUIRE(graph.get(0x1018)->isFunctionStart());
+      }
+    }
+  }
+}
+
 TEST_CASE("X86Analysis x86_64 - conditional branch creates multiple blocks",
           "[x86][analysis][x86_64]") {
   // 0x1000: 74 05  je  0x1007  (0x1000 + 2 + 5 = 0x1007)

@@ -209,6 +209,32 @@ if(Python3_Interpreter_FOUND)
                     "Validation - generated functions detect wrong branch"
                     "Validation - generated functions detect stale callee state" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                find_program(DRAGON_IMAGE_CLANG NAMES clang-21)
+                find_program(DRAGON_IMAGE_LD NAMES ld.lld-21)
+                execute_process(COMMAND ${Python3_EXECUTABLE} -c "import elftools"
+                    RESULT_VARIABLE _dragon_image_elf_missing OUTPUT_QUIET ERROR_QUIET)
+                if(DRAGON_IMAGE_CLANG AND DRAGON_IMAGE_LD AND _dragon_image_elf_missing EQUAL 0)
+                    # Always validate the compiled-image harness and both oracle
+                    # layers. Real Tigress campaigns are explicit standalone jobs;
+                    # absence of that proprietary tool is never a semantic pass.
+                    add_test(NAME "Validation - compiled C image semantics"
+                        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/tigress_function_diff.py
+                            --profile plain --seeds 1 --trials 16
+                            --clang ${DRAGON_IMAGE_CLANG} --ld ${DRAGON_IMAGE_LD}
+                            --out ${CMAKE_CURRENT_BINARY_DIR}/compiled-c-semantics)
+                    foreach(control c-result llvm-register llvm-memory)
+                        add_test(NAME "Validation - compiled C detects ${control}"
+                            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/tigress_function_diff.py
+                                --profile plain --seeds 1 --trials 16 --control ${control} --expect-control
+                                --clang ${DRAGON_IMAGE_CLANG} --ld ${DRAGON_IMAGE_LD}
+                                --out ${CMAKE_CURRENT_BINARY_DIR}/compiled-c-negative-${control})
+                    endforeach()
+                    set_tests_properties("Validation - compiled C image semantics"
+                        "Validation - compiled C detects c-result"
+                        "Validation - compiled C detects llvm-register"
+                        "Validation - compiled C detects llvm-memory" PROPERTIES
+                        ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                endif()
                 add_test(NAME "Validation - complete Guest CALL and RET"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_guest_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}

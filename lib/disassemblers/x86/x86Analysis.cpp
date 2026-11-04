@@ -10,6 +10,10 @@
 #include <dragon/disassembler/Instruction.hpp>
 #include <dragon/disassembler/x86/x86Info.hpp>
 
+#include <llvm/MC/MCInst.h>
+#include <llvm/MC/MCInstrInfo.h>
+#include <llvm/MC/MCRegisterInfo.h>
+
 #ifdef DRAGON_WITH_Z3
 #include <dragon/analysis/ValueEnumerator.hpp>
 #endif
@@ -149,6 +153,70 @@ void dragon::x86::X86Analysis::discoverEpilogues(
         std::vector<Instruction> &instructions,
         std::unordered_set<std::uint64_t> &blockStarts,
         std::unordered_set<std::uint64_t> &functionStarts) const {
+  // lld uses 0xcc alignment after a function, but LLVM's INT3 descriptor
+  // lacks isTrap. Recognize it only while skipping post-epilogue padding:
+  // classifying every INT3 as an epilogue also promotes unrelated following
+  // instructions inside jump-table regions to new functions.
+  const auto isInt3Padding = [](const Instruction &insn) {
+    const auto &bytes = insn.bytes();
+    return bytes.size() == 1 && bytes[0] == 0xcc;
+  };
+  const auto isPadding = [this, &isInt3Padding](const Instruction &insn) {
+    return x86Info_->isNop(insn) || x86Info_->isTrap(insn) || isInt3Padding(insn);
+  };
+  // A literal pool can follow RET just like another function. A concrete
+  // memory reference to that address makes a layout-only guess ambiguous;
+  // direct calls, explicit entries and prologue candidates still take priority.
+  std::unordered_set<std::uint64_t> dataReferences;
+  for (const auto &insn : instructions) {
+    const auto *mc = insn.mcInst();
+    if (!mc) continue;
+    const auto &desc = instrInfo_.get(mc->getOpcode());
+    if (!desc.mayLoad() && !desc.mayStore()) continue;
+    bool addressOverride = false;
+    for (auto byte : insn.bytes()) {
+      if (byte == 0x67) { addressOverride = true; break; }
+      if (byte == 0x66 || byte == 0xf0 || byte == 0xf2 || byte == 0xf3 ||
+          byte == 0x26 || byte == 0x2e || byte == 0x36 || byte == 0x3e ||
+          byte == 0x64 || byte == 0x65 ||
+          (architecture_ == Architecture::X86_64 && byte >= 0x40 && byte <= 0x4f))
+        continue;
+      break;
+    }
+    if (addressOverride) continue; // do not guess a different address width
+    // LLVM's x86 memory tuple is base/scale/index/displacement/segment.
+    for (unsigned k=0; k+4<mc->getNumOperands(); ++k) {
+      const auto &base=mc->getOperand(k), &scale=mc->getOperand(k+1);
+      const auto &index=mc->getOperand(k+2), &disp=mc->getOperand(k+3);
+      const auto &segment=mc->getOperand(k+4);
+      if (!base.isReg() || !scale.isImm() || scale.getImm()!=1 ||
+          !index.isReg() || index.getReg()!=0 || !disp.isImm() ||
+          !segment.isReg() || segment.getReg()!=0)
+        continue;
+      std::uint64_t address=static_cast<std::uint64_t>(disp.getImm());
+      if (base.getReg()!=0) {
+        const std::string_view name=regInfo_.getName(base.getReg());
+        if (name!="RIP" && name!="EIP") continue;
+        address += insn.address()+insn.size();
+      }
+      if (architecture_ == Architecture::X86_32) address &= 0xffffffffULL;
+      dataReferences.insert(address);
+      break;
+    }
+  }
+  // Use the entries known before epilogue guessing to delimit regions. A
+  // dispatch in one function must not disable discovery in a separate known
+  // function, and a RET inside an unresolved dispatch must not split its cases.
+  std::vector<std::uint64_t> knownEntries(functionStarts.begin(), functionStarts.end());
+  std::sort(knownEntries.begin(), knownEntries.end());
+  const auto regionFor = [&](std::uint64_t address) {
+    auto next = std::upper_bound(knownEntries.begin(), knownEntries.end(), address);
+    return next == knownEntries.begin() ? instructions.front().address() : *std::prev(next);
+  };
+  std::unordered_set<std::uint64_t> indirectRegions;
+  for (const auto &insn : instructions)
+    if (insn.isJump() && insn.hasIndirectTarget() && insn.branches().empty())
+      indirectRegions.insert(regionFor(insn.address()));
   const size_t n = instructions.size();
   size_t i = 0;
   while (i < n) {
@@ -178,7 +246,7 @@ void dragon::x86::X86Analysis::discoverEpilogues(
     std::uint64_t paddingBytes = 0;
     while (j < n && paddingBytes < kMaxPadding) {
       const auto &pad = instructions[j];
-      if (!x86Info_->isNop(pad) && !x86Info_->isTrap(pad))
+      if (!isPadding(pad))
         break;
       paddingBytes += pad.size();
       ++j;
@@ -187,12 +255,9 @@ void dragon::x86::X86Analysis::discoverEpilogues(
     // Still padding after the cap - a run of zero words (`udf #0`) or nops
     // longer than any alignment, i.e. data. Not a function; and resume past
     // the whole run so each pad is not taken for another epilogue.
-    const bool stillPadding =
-            j < n && (x86Info_->isNop(instructions[j]) ||
-                      x86Info_->isTrap(instructions[j]));
+    const bool stillPadding = j < n && isPadding(instructions[j]);
     if (stillPadding) {
-      while (j < n && (x86Info_->isNop(instructions[j]) ||
-                       x86Info_->isTrap(instructions[j])))
+      while (j < n && isPadding(instructions[j]))
         ++j;
       i = j;
       continue;
@@ -210,6 +275,18 @@ void dragon::x86::X86Analysis::discoverEpilogues(
         logger_.log("Epilogue at 0x{:x}: 0x{:x} is a branch target, skipping "
                     "function-start promotion",
                     instructions[i].address(), next.address());
+      } else if (dataReferences.contains(next.address()) &&
+                 !functionStarts.contains(next.address())) {
+        logger_.log("Post-RET candidate at 0x{:x} is also referenced as data; "
+                    "not promoting it to a function", next.address());
+      } else if (indirectRegions.contains(regionFor(next.address())) &&
+                 !functionStarts.contains(next.address())) {
+        // RET (with or without alignment) also separates jump-table cases.
+        // Until the indirect targets are proved, layout cannot distinguish a
+        // case from an uncalled leaf. Retain explicit/call/prologue entries;
+        // let resolution establish other case block starts conservatively.
+        logger_.log("Post-RET candidate at 0x{:x} may be an indirect case; "
+                    "not promoting it to a function", next.address());
       } else {
         functionStarts.insert(next.address());
         blockStarts.insert(next.address());

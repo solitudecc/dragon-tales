@@ -89,6 +89,21 @@ TEST_CASE("x87 physical stack preserves extended bits and handles masked faults"
     for(const auto r:{x86::CF,x86::PF,x86::AF,x86::SF,x86::OF})CHECK(ex.evaluate(ex.readRegister(r))==0);
     CHECK(ex.evaluate(ex.readRegister(x86::ZF))==1);
   }
+  SECTION("FXAM keeps unsupported extended encodings distinct from normals") {
+    // Lua block 0x43319d: Unicorn dev incorrectly sets C2=1. Intel SDM and
+    // x87_native.c on Rosetta give C3/C2/C0=000 for this J=0 E!=0 encoding.
+    // This oracle regression already passes the old Dragon backend.
+    for (const auto arch:{Architecture::X86_32,Architecture::X86_64}) {
+      ignil::SymbolicExecutor ex;initial(ex);
+      ex.mapMemory(0x200000,{0x5b,0x3b,0xb0,0xdb,0xad,0xd2,0x74,0x44,0x5c,0x7a});
+      auto b=lift("fld tbyte ptr [ebx]; fxam; fnstsw ax; and ax, 17664; cmp ax, 256",arch);
+      REQUIRE(b.unlifted().empty());REQUIRE(ex.run(b).ok());
+      CHECK(ex.evaluate(ex.readRegister(sw)&ex.bv(0x4500,16))==0);
+      CHECK(ex.evaluate(ex.readRegister(x86::EAX))==0x9abc0000);
+      CHECK(ex.evaluate(ex.readRegister(x86::CF))==1);
+      CHECK(ex.evaluate(ex.readRegister(x86::SF))==1);
+    }
+  }
   SECTION("unmodelled environment stores invalidate memory") {ignil::SymbolicExecutor ex;initial(ex);auto b=lift("fnstenv [ebx]");REQUIRE_FALSE(b.unlifted().empty());REQUIRE(ex.run(b).ok());CHECK_FALSE(ex.evaluate(ex.readMemory(0x200000,64)).has_value());}
   SECTION("MMX aliases invalidate x87 and EMMS empties tags") {ignil::SymbolicExecutor ex;initial(ex);auto b=lift("paddb mm0, mm1");REQUIRE_FALSE(b.unlifted().empty());REQUIRE(ex.run(b).ok());CHECK_FALSE(ex.evaluate(ex.readRegister(low(0))).has_value());
     auto clear=lift("emms");REQUIRE(clear.unlifted().empty());REQUIRE(ex.run(clear).ok());CHECK(ex.evaluate(ex.readRegister(tag))==0xffff);}

@@ -206,6 +206,64 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Tigress function checks (2026-11-04): `tigress_function_diff.py` uses bounded
+unsigned C functions, a separate Python specification, original/transformed
+Unicorn observables, then each ELF image's own full-state LLVM comparison.
+It preserves ELF code/data/BSS, uses actual Guest memcpy code, and checks
+function entries against STT_FUNC symbols without injecting them as repairs.
+Public GitHub Tigress 2.1 revision 2128 is pinned in
+`docs/tigress-function-validation.md`; no newer-version coverage is claimed.
+Three seeds / six profiles / C O0/O2 / six LLVM plans in both strategies:
+3840 complete returns match; 1152 explicit incomplete exits; 1920 planned LLVM
+comparisons unexecuted after reference errors. No exclusions or successful skips.
+The old array opaque output has a zero divisor; the first example also raises
+SIGFPE under Rosetta. Do not count these as Dragon semantic comparisons.
+Three controls detect wrong C results (32/32), damaged LLVM RAX (192/192), and
+damaged LLVM memory (192/192); `--expect-control` also requires the other oracle
+layer and function-entry checks to pass. Four CTest cases exercise the harness
+with plain C, independently of proprietary Tigress availability.
+The new checks found LLVM's INT3 descriptor lacks isTrap: x86Analysis now skips
+single-byte 0xcc only as post-epilogue alignment. Do not classify every INT3 as
+an epilogue: that invents entries in jump-table regions and breaks three
+SwitchDetector regressions. Instruction execution/public interfaces stay intact.
+RET and padding can also separate indirect cases. Regions use the entry
+candidates present before epilogue guessing; an unresolved indirect jump in
+that region prevents RET-only promotion of another unsupported entry candidate.
+Separate known regions and existing call/symbol/prologue candidates remain.
+x86Info also recognizes
+LLVM 21's RET32/RETI32 names when discovering i386 epilogues.
+RET-only candidates that are also concrete memory-reference targets stay
+ambiguous unless another entry cue already exists. Recognize only default-width
+absolute/RIP-relative addresses with no index/segment; skip address overrides.
+This prevents i386 `one/limit` literal pools from becoming functions (an
+intermediate RET32 fix exposed six spurious AAS/POP unlifted records).
+Five C++ tests fail on the original backend and pass after
+(30 assertions, i386/x64, explicit INT3 entry, RET imm16, separate known regions,
+and code/data dual use with explicit entry evidence).
+With the same 26 executable ELFs, 24 padding entries and three internal case
+entries disappear; linear entry failures 26 -> 0, recursive stays 0.
+Switch O2 and goto O0 unresolved dispatches remain incomplete, never successful
+whole-function validations. CTest 491/491; no Z3 342/342.
+All 32 SwitchDetector tests / 199 assertions pass. Snapshot both libdragon_c.so
+and its libdragon.so dependency for old/new comparisons; set LD_LIBRARY_PATH
+to the complete snapshot. The harness hashes its actually mapped backend.
+Real-corpus final audit: 69 inputs / 138 strategies / 206651 function checks /
+1686 V2 raw IR modules, zero new baseline anomalies. Reran all 38 x86 inputs
+after the last x86-only change; reused 31 unchanged ARM records with input
+hashes/provenance. This is IR verification, not whole-corpus semantic proof.
+Lua table checks: exact 104, wrong 0, unresolved 10, no bound 76. Unlifted
+records/forms remain identical: i386 188, x64 49, A64 90.
+Real blocks: 450 executions, 449 strict matches, one retained reference DIFF;
+144 skips (83 high address, 57 Unicorn faults, 4 unlifted). The i386 block
+0x43319d loads raw80 7a5c4474d2addbb03b5b (J=0 E!=0). Unicorn dev's FXAM
+classifies it as normal; Intel SDM Vol1 8.2.2 and Rosetta support Dragon's
+unsupported classification (C3/C2/C0=000). x87_native.c reproduces it;
+TestX87.cpp fixes the correct status/EAX/CF/SF in 12 assertions, passing old
+and new backends. No production change or new exclusion/normalization; the
+strict real-block DIFF remains visible. See the Tigress document for raw logs.
+Real Lua still has internal false entries (84 GCC, 83 Clang) and GCC recall
+699/700; do not describe arbitrary stripped function recovery as correct.
+
 Generated function semantics (2026-11-04): `generated_function_diff.py` builds
 seeded x64 diamond/alias/bounded-loop/call functions and NOP layout variants.
 Unicorn independently executes each version's bytes; six V2/static/product
