@@ -35,7 +35,7 @@ if(DRAGON_USE_Z3)
 endif()
 
 if(DRAGON_USE_UNICORN AND DRAGON_USE_Z3)
-    target_sources(dragon_tests PRIVATE semantic/TestX86Strings.cpp)
+    target_sources(dragon_tests PRIVATE semantic/TestX86Strings.cpp semantic/TestIGNILOptimizer.cpp)
 endif()
 
 if(DRAGON_USE_UNICORN)

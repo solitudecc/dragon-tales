@@ -271,6 +271,25 @@ including its existing alerts. All input hashes unchanged; table records remain
 proof. Artifacts ~/vmc-runs/constant-flow-20261104; final matrix/corpus checks and scope
 are recorded in docs/tigress-vm-challenge.md.
 
+IGNIL snapshot hardening (2026-11-05): simplifyBlock's Reg copy/expression
+records now all invalidate on a 32-bit Reg write. This architecture-neutral
+API has no parent extents, so guessing eight bytes misses wider parents;
+retain the original Temp snapshots instead. Byte/word disjoint propagation
+and constant/Temp propagation stay available. Tests-only on 69ee6f1: 26 failed
+assertions; adding the x64/A64 Unicorn oracle gives 78 (52 wrong output fields).
+Fixed: 4 tests / 13151 assertions, 96 machine references / 192 IGNIL state
+comparisons, no exclusions/skips. CTest 524/524, no Z3 419/419. Random opt
+equivalence: each old/new four plans x 1148 comparisons, 0 wrong; control
+1145 differences (13 unencodable generator candidates reported separately).
+Optimized real blocks: 450 blocks / 1235 compared trials / 115 faults,
+0 DIFFERENT, old/new logs identical; existing memory/high-address and block
+selection limits remain explicit in docs/ignil-optimizer-hardening.md. Slight
+precision cost: simplify+DSE ops 11437 -> 11444 out of 25348 initial ops.
+No new raw-IR corpus/Tigress campaign: those production paths do not call
+simplifyBlock; changed optimization paths and full CTest were rerun.
+Artifacts ~/vmc-runs/simplify-snapshots-20261105; original dirty VM worktree
+preserved, development/builds still use ~/dragon-tales-overlap.
+
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
 bugs: import provenance on fall-through edges/non-thunk blocks (wrong and

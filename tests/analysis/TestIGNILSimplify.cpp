@@ -574,3 +574,79 @@ TEST_CASE("IGNILSimplify - does not propagate a Reg past a write to it",
     REQUIRE(std::get<dragon::ignil::Reg>(last.srcs[0]).offset == x86::ECX.offset);
   }
 }
+
+TEST_CASE("IGNILSimplify preserves snapshots across implicit parent clearing",
+          "[ignil][simplify][simplify-snapshot]") {
+  using dragon::ignil::Reg;
+  // The simplifier has no architecture/register-file argument. An upper
+  // view may belong to an eight-byte GPR or a wider vector parent.
+  for (auto base : {0u, 80u, 272u}) {
+    for (auto view : {Reg{base+4,8,"upper byte"}, Reg{base+4,16,"upper word"},
+                      Reg{base+4,32,"upper dword"}, Reg{base+8,64,"upper lane"}}) {
+      DYNAMIC_SECTION("base " << base << " view " << view.offset << " width " << unsigned(view.width)) {
+        Block block{kAddr};
+        Temp saved{0,view.width};
+        block.append({Opcode::COPY,saved,{view},kAddr});
+        SECTION("direct snapshot") {}
+        SECTION("transitive snapshot") {
+          block.append({Opcode::COPY,Temp{1,view.width},{saved},kAddr});
+          saved.id=1;
+        }
+        block.append({Opcode::COPY,Reg{base,32,"low"},{Const{7,32}},kAddr+1});
+        block.append({Opcode::COPY,Reg{base+32,view.width,"result"},{saved},kAddr+2});
+        const auto out=simplifyBlock(block);
+        REQUIRE_FALSE(out.empty());
+        const auto &last=out.ops().back();
+        REQUIRE(last.srcs.size()==1);
+        CHECK(std::holds_alternative<Temp>(last.srcs[0]));
+      }
+    }
+  }
+}
+
+TEST_CASE("IGNILSimplify invalidates expression identities across implicit clears",
+          "[ignil][simplify][simplify-snapshot]") {
+  using dragon::ignil::Reg;
+  Block block{kAddr};
+  const Reg high{4,32,"RAX[63:32]"};
+  const Temp a{0,32},b{1,32},c{2,32};
+  SECTION("double NOT must retain the original snapshot") {
+    block.append({Opcode::NOT,a,{high},kAddr});
+    block.append({Opcode::COPY,x86::EAX,{Const{7,32}},kAddr+1});
+    block.append({Opcode::NOT,x86::EBX,{a},kAddr+2});
+  }
+  SECTION("half adder must not mix old and new register values") {
+    block.append({Opcode::XOR,a,{high,x86::ECX},kAddr});
+    block.append({Opcode::COPY,x86::EAX,{Const{7,32}},kAddr+1});
+    block.append({Opcode::AND,b,{high,x86::ECX},kAddr+2});
+    block.append({Opcode::SHL,c,{b,Const{1,32}},kAddr+3});
+    block.append({Opcode::ADD,x86::EBX,{a,c},kAddr+4});
+  }
+  const auto out=simplifyBlock(block);
+  REQUIRE_FALSE(out.empty());
+  CHECK(std::holds_alternative<Temp>(out.ops().back().srcs[0]));
+}
+
+TEST_CASE("IGNILSimplify retains safe propagation around narrow writes",
+          "[ignil][simplify][simplify-snapshot]") {
+  using dragon::ignil::Reg;
+  SECTION("byte and word writes preserve disjoint upper snapshots") {
+    for (auto width : {dragon::ignil::Width{8},dragon::ignil::Width{16}}) {
+      Block block{kAddr};
+      block.append({Opcode::COPY,Temp{0,32},{Reg{4,32,"upper"}},kAddr});
+      block.append({Opcode::COPY,Reg{0,width,"low"},{Const{7,width}},kAddr+1});
+      block.append({Opcode::COPY,x86::EBX,{Temp{0,32}},kAddr+2});
+      auto out=simplifyBlock(block);
+      CHECK(std::holds_alternative<Reg>(out.ops().back().srcs[0]));
+    }
+  }
+  SECTION("constant propagation survives a 32-bit write") {
+    Block block{kAddr};
+    block.append({Opcode::COPY,Temp{0,32},{Const{42,32}},kAddr});
+    block.append({Opcode::COPY,x86::EAX,{Const{7,32}},kAddr+1});
+    block.append({Opcode::COPY,x86::EBX,{Temp{0,32}},kAddr+2});
+    auto out=simplifyBlock(block);
+    REQUIRE(std::holds_alternative<Const>(out.ops().back().srcs[0]));
+    CHECK(std::get<Const>(out.ops().back().srcs[0]).value==42);
+  }
+}

@@ -526,7 +526,11 @@ Block passForward(const Block &in, SimplifyStats &stats) {
     // canonical victim (t0 = COPY(EAX); EAX = COPY(t1); ECX = COPY(t0) would
     // collapse to ECX = COPY(EAX), i.e. no swap at all), and any lifter that
     // snapshots a register it then overwrites hits the same thing.
-    // Sub-register aliasing counts, so the test is on overlapping byte ranges.
+    // Sub-register aliasing counts, including implicit parent clearing. This
+    // architecture-neutral pass has no register-file extents: a 32-bit write
+    // may clear an eight-byte GPR or a wider vector parent. Invalidate every
+    // register-based record then, rather than guessing that parent's extent.
+    // The original Temp snapshots remain in the block and retain their values.
     if (newOp.dst) {
       if (const auto *dr = std::get_if<Reg>(&*newOp.dst)) {
         const std::uint64_t lo = dr->offset;
@@ -535,6 +539,8 @@ Block passForward(const Block &in, SimplifyStats &stats) {
           const auto *r = std::get_if<Reg>(&v);
           if (!r)
             return false;
+          if (dr->width == 32)
+            return true;
           const std::uint64_t rlo = r->offset;
           const std::uint64_t rhi = rlo + (r->width + 7u) / 8u;
           return rlo < hi && lo < rhi;
