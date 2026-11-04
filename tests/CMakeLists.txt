@@ -281,6 +281,17 @@ if(Python3_Interpreter_FOUND)
                         --out ${CMAKE_CURRENT_BINARY_DIR}/function-guest-controls)
                 set_tests_properties("Validation - complete Guest CALL and RET" PROPERTIES
                     ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                add_test(NAME "Validation - import API calls through Guest code"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/external_guest_diff.py
+                        --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/external-guest)
+                add_test(NAME "Validation - import API static boundaries"
+                    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/external_guest_diff.py
+                        --static --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}
+                        --out ${CMAKE_CURRENT_BINARY_DIR}/external-guest-static)
+                set_tests_properties("Validation - import API calls through Guest code"
+                    "Validation - import API static boundaries" PROPERTIES
+                    ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
                 add_test(NAME "Validation - LLVM V2 branch and loop execution"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_dispatch_diff.py
                         --trials 2 --llc ${DRAGON_FLOW_LLC} --opt ${DRAGON_FLOW_OPT} --cc ${DRAGON_FLOW_CC}

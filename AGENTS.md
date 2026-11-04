@@ -206,6 +206,19 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
+69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
+bugs: import provenance on fall-through edges/non-thunk blocks (wrong and
+spurious names on Lua/zlib/sqlite/C++) and register slicing across CALL (wrong
+A64 `br x0` target after `bl`). After both: provenance wrong 0, spurious 0.
+Tables 1124/0/116/558/42 -> 1084/0/192/526/38 (exact/wrong/unresolved/
+nobound/unreadable). Guest semantics: 80/80 V2 and 80/80 static boundary
+matches, also on the old code (execution was already correct). Measured, not
+changed: fall-through edges after noreturn APIs (no API-name model), `endbr64`
+after `_setjmp` taken as a function start, missing names after unlifted PAC.
+CTest 504/504, no Z3 355/355; slicer harnesses unchanged (3000, 448/192,
+128/4, 27 CFGs/20736 executions, 0 wrong).
+
 Tigress + external API study (2026-11-04): `tigress_external_api.py` builds real
 ELF caller/provider DSOs, eager RELA binding, PLT/GOT calls and anonymous targets.
 11 cases: return gates, alias writes, memcpy/memcmp/strlen, indirect call,
@@ -363,6 +376,8 @@ themselves. Binaries are passed as paths (`~/bench/...`).
 | `realblock_diff.py BIN [BLOCKS] [TRIALS]` | Real basic blocks of a binary vs Unicorn from random states (x86-64/i386/AArch64). Expected: only the deliberate x86 OF difference after multi-bit shifts (see `emitGatedShiftFlags`). Unicorn truncates addresses >= 2^47; the script keeps values below that and compares only writes into known regions. `REALBLOCK_OPT=1` runs `simplify()` + `dead_store_eliminate()` first. |
 | `realblock_llvm.py BIN [BLOCKS]` | Real blocks lifted to LLVM IR, compiled with llc-21, run natively on the AArch64 VM vs Unicorn. Needs `sysctl vm.mmap_min_addr=4096` (shared objects are based at 0). Skips trials that load a 64-bit value >= 2^47 (Unicorn truncates). `REALBLOCK_ONLY=0xADDR` runs one block and keeps its work dir. |
 | `asm_roundtrip.py BIN [N]` | Every distinct instruction: text -> Assembler -> Disassembler must give the same text (110k+ instructions, all same). |
+| `external_call_audit.py BIN OBJDUMP` | Every call/jump through an import slot of a real ELF/PE (truth: pyelftools/pefile slots + objdump stubs, thunk chains, `rex.W`/`bnd` forms, register-loaded slots): decoding, callee edge, continuation, noreturn fall-through edges, and `!dragon.imports` correct/missing/wrong/spurious of every lifted caller. `--control names|fallthrough` must fail. `external_call_corpus.py OUT DIR...` runs it on corpora, both strategies. |
+| `external_guest_diff.py [--static]` | Import-slot calls through actual Guest API code vs Unicorn (i386 stdcall `ret 8`, non-ABI clobbers, API returning a function pointer, Win64 home space, A64 PLT); fixtures `tests/fixtures/llvm-external-guest.json`. `--static` compares at the declared API-entry boundary. |
 | `fuzz_loader.py OUT N SEED...` | Damaged ELF/PE inputs through load/disassemble/LLVM in a child process. Only a loader ValueError is a clean rejection; crashes, hangs and later exceptions are failures and make the script exit nonzero. |
 
 The `[join-width]` C++ tests cover partial join knowledge on x86-64/AArch64,
@@ -470,6 +485,15 @@ add/sub (x86) computed flags from the result when the destination is also
 a source; LLVM IR lacked a dedicated entry block and terminators after
 traps; a store to disjoint bytes of the same object ended a load's
 snapshot. Every lifted module of the corpus verifies.
+
+An IGNIL CALL ends register slicing: every register after a call is a fresh
+unknown identified by that call (`SymReg` origin = block, CALL index, context).
+No callee-saved/ABI preservation is assumed (stdcall pops, non-ABI code, APIs
+returning function pointers); verified corpus tables 1124 -> 1084 (x86-64
+-42, sqlite A64 +2), the owner-approved choice. Recovering them needs a *proven*
+callee summary, never an ABI assumption. `!dragon.imports` names only machine
+call/jump transfers and pure thunks (temps, PC, A64 X16/X17 writes only);
+block fall-through JMPs are never import transfers.
 
 Slice values carry producing-op/program-point identity, including a bounded
 loop context. LOADs share values only for the same event or a proven equal
@@ -603,7 +627,12 @@ item, with a status table to update when a task is done): `docs/agent-tasks.md`.
    tests: `tests/TestCAnalysisHints.cpp`, `tests/python/test_analysis_hints.py`.
 5. Extend the speculative resolver to ARM when useful. Failed hypotheses remain
    unresolved; never publish partial target sets or skip the final recheck.
-6. Design questions, not bugs (ask the owner before changing): CALL/RET
+6. External calls (see `docs/external-call-audit.md`): proven callee-saved
+   summaries for analysed internal callees would recover the 40 x86-64 tables
+   lost by strict CALL slicing; noreturn/returns_twice knowledge of imports
+   (fall-through edges, `endbr64` after `_setjmp`) is an API-model design
+   question - ask the owner; A64 PAC lifting would restore missing names.
+7. Design questions, not bugs (ask the owner before changing): CALL/RET
    abstraction; the loader marks defined `.symtab` globals of an executable
    (e.g. `__bss_start`) as exported.
 

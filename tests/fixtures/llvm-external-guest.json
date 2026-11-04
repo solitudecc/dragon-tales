@@ -1,0 +1,155 @@
+{
+ "schema": 1,
+ "entry": 4096,
+ "cases": [
+  {
+   "id": "x86_32_import_stdcall",
+   "architecture": "x86_32",
+   "note": "push 0x11; push 0x22; call thunk; mov ecx, esp; mov [ebx], eax; ret. The API pops its 8 argument bytes (ret 8).",
+   "code_hex": "6a116a22e8f701000089e18903c3",
+   "stubs": [
+    {
+     "address": 8192,
+     "code_hex": "8b44240403442408c20800"
+    }
+   ],
+   "local_functions": [
+    {
+     "address": 4608,
+     "code_hex": "ff2500900000"
+    }
+   ],
+   "image_format": "elf",
+   "image_slot": 36864,
+   "expected_import_name": "puts",
+   "memory_values": [
+    {
+     "address": 36864,
+     "value": 8192,
+     "width": 4
+    }
+   ],
+   "undefined_flags": []
+  },
+  {
+   "id": "x86_64_import_clobbers",
+   "architecture": "x86_64",
+   "note": "The API changes caller-saved RCX/R11/XMM0 and also callee-saved RBX (non-ABI); the caller stores through RBX afterwards.",
+   "code_hex": "b905000000e8f601000048890348894b084c895b10c3",
+   "stubs": [
+    {
+     "address": 8192,
+     "code_hex": "488d5b4048c7c13300000049c7c34400000066480f6ec1b807000000c3"
+    }
+   ],
+   "local_functions": [
+    {
+     "address": 4608,
+     "code_hex": "ff25fa7d0000"
+    }
+   ],
+   "image_format": "elf",
+   "image_slot": 36864,
+   "expected_import_name": "puts",
+   "memory_values": [
+    {
+     "address": 36864,
+     "value": 8192,
+     "width": 8
+    }
+   ],
+   "undefined_flags": []
+  },
+  {
+   "id": "x86_64_import_returns_pointer",
+   "architecture": "x86_64",
+   "note": "mov eax, 0x1300 (decoy, no code there); call thunk; call rax; mov [rbx], rax; ret. The API returns 0x3000, a function reached only through the returned pointer.",
+   "code_hex": "b800130000e8f6010000ffd0488903c3",
+   "stubs": [
+    {
+     "address": 8192,
+     "code_hex": "b800300000c3"
+    },
+    {
+     "address": 12288,
+     "code_hex": "b802000000c3"
+    }
+   ],
+   "local_functions": [
+    {
+     "address": 4608,
+     "code_hex": "ff25fa7d0000"
+    }
+   ],
+   "image_format": "elf",
+   "image_slot": 36864,
+   "expected_import_name": "puts",
+   "memory_values": [
+    {
+     "address": 36864,
+     "value": 8192,
+     "width": 8
+    }
+   ],
+   "undefined_flags": []
+  },
+  {
+   "id": "x86_64_pe_win64_home_space",
+   "architecture": "x86_64",
+   "note": "sub rsp, 0x28; mov ecx, 5; call thunk; the API writes its home slot [rsp+8]; caller reloads it; add rsp, 0x28; ret.",
+   "code_hex": "4883ec28b905000000e8f2010000488b1424488913488943084883c428c3",
+   "stubs": [
+    {
+     "address": 8192,
+     "code_hex": "48894c24088d0409c3"
+    }
+   ],
+   "local_functions": [
+    {
+     "address": 4608,
+     "code_hex": "ff255a0e0000"
+    }
+   ],
+   "image_format": "pe",
+   "image_slot": 8288,
+   "expected_import_name": "GetTickCount",
+   "memory_values": [
+    {
+     "address": 8288,
+     "value": 8192,
+     "width": 8
+    }
+   ],
+   "undefined_flags": []
+  },
+  {
+   "id": "arm64_import_plt_clobbers",
+   "architecture": "arm64",
+   "note": "mov x0, #3; bl PLT; x0+1, x1 and x16 stored through x19. The API changes caller-saved x1/x2 and returns x0*7.",
+   "code_hex": "fd7bbfa9600080d27e00009400040091600200f9610600f9700a00f9fd7bc1a8c0035fd6",
+   "stubs": [
+    {
+     "address": 8192,
+     "code_hex": "a10a80d2e20080d2007c029bc0035fd6"
+    }
+   ],
+   "local_functions": [
+    {
+     "address": 4608,
+     "code_hex": "50000090110240f920021fd6"
+    }
+   ],
+   "image_format": "elf",
+   "image_slot": 36864,
+   "expected_import_name": "puts",
+   "memory_values": [
+    {
+     "address": 36864,
+     "value": 8192,
+     "width": 8
+    }
+   ],
+   "undefined_flags": []
+  }
+ ]
+}

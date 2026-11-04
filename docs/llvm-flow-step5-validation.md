@@ -14,6 +14,12 @@ V2 入口和 Guest 地址注册表，没有重命名函数或改变 IGNIL CALL/R
 循环或超预算不命名。因此支持可证明的 PE IAT、ELF GOT/PLT、导入 thunk 以及槽位先
 加载到寄存器的调用；不能证明时宁可缺少名称。
 
+2026-11-04 修正（[外部调用审计](external-call-audit.md)）：只有机器 call 指令处的 IGNIL
+CALL、机器 jump（非 call）指令处的 IGNIL JMP 才是转移；块的落空 JMP（`lea`、`nop` 或
+`bl __stack_chk_fail` 之后）不是。跳板除临时值外只能写 PC（x86 RIP 相对寻址）和
+AArch64 IP0/IP1（X16/X17）；`mov w4, #-1; b compress2@plt` 这类先做计算再尾跳的块不是跳板。
+旧规则在真实 Lua/zlib/sqlite/C++ 上给出过错误或多余的名称。
+
 名称写为模块的 `!dragon.imports` 诊断元数据，逐项为：
 
 ```
