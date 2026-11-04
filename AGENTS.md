@@ -306,6 +306,26 @@ existing 115 faults and memory limits stay visible, repeated inputs are not
 counted as new unique samples. No instruction/API/ABI changes. See
 docs/ignil-optimizer-hardening.md; artifacts ~/vmc-runs/simplify-integer-20261105.
 
+IGNIL COPY-width hardening (2026-11-05, baseline 5aaf6f0): copy propagation
+now resizes constants to the destination Temp width, masking source payload
+first; Reg/Temp copies propagate directly only at equal nonzero widths.
+Keep actual COPY truncation/zero extension otherwise. This fixes wrong signed
+values, lost truncation/double-NOT cancellation and invalid mixed-width LLVM.
+Tests-only: all 5 regressions fail, 545 assertions (449 wrong Unicorn fields,
+48 invalid modules); fixed 5/119074, no Z3 4/550. Reference matrix: 720 A64
+Unicorn executions / 1440 original-optimized GPR/flags/64-byte-data comparisons,
+no exclusions/skips; 120 x64/A64 LLVM modules verify. Four minimal IR fixtures
+compiled natively at O0/O2: old 8 original matches, 6 optimized differences,
+2 optimized compiler rejections; new 16 matches. Latest CTest 538/538,
+no Z3 431/431 including all five UBSan checks. Random four plans x 1148
+old/new comparisons pass, control 1145 differences; 13 unencodable candidates.
+Same 450 real blocks/1235 compared trials rerun, no new differences; 115 faults
+and previous memory/selection limits remain. simplify+DSE still 11444/25348 ops.
+No new raw-IR corpus/Tigress/single-instruction campaign, no ABI/lifter changes;
+see docs/ignil-optimizer-hardening.md for scope and artifacts in
+~/vmc-runs/simplify-widths-20261105. Do not claim arbitrary mixed-width ALU IR
+or the entire optimizer has been proved correct.
+
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
 bugs: import provenance on fall-through edges/non-thunk blocks (wrong and

@@ -187,3 +187,98 @@ TEST_CASE("IGNIL integer folding matches Unicorn at signed boundaries",
     }
   }
 }
+
+TEST_CASE("IGNIL COPY widths preserve register state against Unicorn",
+          "[ignil][simplify][simplify-copy-width]") {
+  using namespace dragon;
+  using namespace dragon::ignil;
+  Assembler assembler{Architecture::ARM64,Configuration{}};
+  const std::vector<std::pair<Reg,unsigned>> flags{{arm::NF,31},{arm::ZF,30},{arm::CF,29},{arm::VF,28}};
+  for (Width source:{Width{1},Width{8},Width{16},Width{32},Width{64}}) {
+    for (Width target:{Width{1},Width{8},Width{16},Width{32},Width{64},Width{128}}) {
+      const unsigned effective=std::min<unsigned>(source,target);
+      const auto sourceMask=source==64 ? ~std::uint64_t{0} : (std::uint64_t{1}<<source)-1;
+      const auto sourceSign=std::uint64_t{1}<<(source-1);
+      const auto effectiveSign=std::uint64_t{1}<<(effective-1);
+      const std::array values{std::uint64_t{0},std::uint64_t{1},sourceMask,sourceSign,
+          sourceSign-1,effectiveSign,std::uint64_t{0x1122334455667788ULL},~std::uint64_t{0}};
+      for (unsigned kind=0;kind<3;++kind) {
+        std::vector<std::uint8_t> code;
+        auto append=[&](const std::string &text) {
+          const auto bytes=assembler.assemble(text);REQUIRE_FALSE(bytes.empty());
+          code.insert(code.end(),bytes.begin(),bytes.end());
+        };
+        append(kind==2 ? "mvn x1, x0" : "mov x1, x0");
+        if (effective<64) append("ubfx x1, x1, #0, #"+std::to_string(effective));
+        append("mov x2, #2");append("sdiv x3, x1, x2");append("add x1, x1, #3");
+        for (auto input:values) {
+          INFO("source " << unsigned(source) << " target " << unsigned(target)
+               << " kind " << kind << " input " << input);
+          Block block{0x1000};
+          block.append({Opcode::COPY,arm::X2,{Const{2,64}},0x1000});
+          Value value=Reg{0,source,"input"};
+          if (kind==1) value=Const{input,source};
+          if (kind==2) {
+            block.append({Opcode::NOT,Temp{0,source},{value},0x1001});value=Temp{0,source};
+          }
+          block.append({Opcode::COPY,Temp{1,target},{value},0x1002});
+          block.append({Opcode::COPY,Temp{2,64},{Temp{1,target}},0x1003});
+          block.append({Opcode::SDIV,arm::X3,{Temp{2,64},Const{2,64}},0x1004});
+          block.append({Opcode::ADD,arm::X1,{Temp{2,64},Const{3,64}},0x1005});
+          const auto optimized=simplifyBlock(block);
+          uc_engine *raw=nullptr;REQUIRE(uc_open(UC_ARCH_ARM64,UC_MODE_ARM,&raw)==UC_ERR_OK);
+          const std::unique_ptr<uc_engine,CloseOptimizerUnicorn> uc{raw};
+          REQUIRE(uc_mem_map(raw,0x1000,4096,UC_PROT_ALL)==UC_ERR_OK);
+          REQUIRE(uc_mem_write(raw,0x1000,code.data(),code.size())==UC_ERR_OK);
+          REQUIRE(uc_mem_map(raw,0x8000,4096,UC_PROT_ALL)==UC_ERR_OK);
+          SymbolicExecutor before,after;
+          std::mt19937_64 random{input^0x7a332551};
+          for (unsigned i=0;i<31;++i) {
+            const auto id=i<29 ? UC_ARM64_REG_X0+int(i) : i==29 ? UC_ARM64_REG_X29 : UC_ARM64_REG_X30;
+            auto initial=i==0 ? input : random();
+            REQUIRE(uc_reg_write(raw,id,&initial)==UC_ERR_OK);
+            const Reg reg{i*8,64,"GPR"};before.setRegister(reg,initial);after.setRegister(reg,initial);
+          }
+          std::uint64_t sp=0x9000,nzcv=0;
+          REQUIRE(uc_reg_write(raw,UC_ARM64_REG_SP,&sp)==UC_ERR_OK);
+          before.setRegister(arm::SP,sp);after.setRegister(arm::SP,sp);
+          before.setRegister(arm::XZR,0);after.setRegister(arm::XZR,0);
+          for (auto [flag,bit]:flags) {
+            const auto value=random()&1;nzcv|=value<<bit;
+            before.setRegister(flag,value);after.setRegister(flag,value);
+          }
+          REQUIRE(uc_reg_write(raw,UC_ARM64_REG_NZCV,&nzcv)==UC_ERR_OK);
+          std::vector<std::uint8_t> memory(64);
+          for (unsigned i=0;i<memory.size();++i) memory[i]=std::uint8_t(input+i*7);
+          REQUIRE(uc_mem_write(raw,0x8000,memory.data(),memory.size())==UC_ERR_OK);
+          before.mapMemory(0x8000,memory);after.mapMemory(0x8000,memory);
+          REQUIRE(uc_emu_start(raw,0x1000,0x1000+code.size(),0,100)==UC_ERR_OK);
+          REQUIRE(before.run(block).ok());REQUIRE(after.run(optimized).ok());
+          for (unsigned i=0;i<31;++i) {
+            const auto id=i<29 ? UC_ARM64_REG_X0+int(i) : i==29 ? UC_ARM64_REG_X29 : UC_ARM64_REG_X30;
+            std::uint64_t expected=0;REQUIRE(uc_reg_read(raw,id,&expected)==UC_ERR_OK);
+            const Reg reg{i*8,64,"GPR"};
+            CHECK(before.evaluate(before.readRegister(reg))==expected);
+            CHECK(after.evaluate(after.readRegister(reg))==expected);
+          }
+          CHECK(before.evaluate(before.readRegister(arm::SP))==sp);
+          CHECK(after.evaluate(after.readRegister(arm::SP))==sp);
+          CHECK(before.evaluate(before.readRegister(arm::XZR))==0);
+          CHECK(after.evaluate(after.readRegister(arm::XZR))==0);
+          REQUIRE(uc_reg_read(raw,UC_ARM64_REG_NZCV,&nzcv)==UC_ERR_OK);
+          for (auto [flag,bit]:flags) {
+            CHECK(before.evaluate(before.readRegister(flag))==((nzcv>>bit)&1));
+            CHECK(after.evaluate(after.readRegister(flag))==((nzcv>>bit)&1));
+          }
+          REQUIRE(uc_mem_read(raw,0x8000,memory.data(),memory.size())==UC_ERR_OK);
+          for (unsigned i=0;i<memory.size();i+=8) {
+            std::uint64_t expected=0;
+            for (unsigned b=0;b<8;++b) expected|=std::uint64_t(memory[i+b])<<(b*8);
+            CHECK(before.evaluate(before.readMemory(0x8000+i,64))==expected);
+            CHECK(after.evaluate(after.readMemory(0x8000+i,64))==expected);
+          }
+        }
+      }
+    }
+  }
+}

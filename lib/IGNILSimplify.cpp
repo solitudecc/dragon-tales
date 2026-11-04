@@ -428,9 +428,10 @@ Block passForward(const Block &in, SimplifyStats &stats) {
   Block out{in.startAddress()};
   for (std::uint64_t address : in.unlifted())
     out.noteUnlifted(address);
-  // Records `t = COPY(v)` so later uses of `t` substitute `v` directly -
-  // general copy propagation, not just constant propagation: `v` may be a
-  // Const, a Reg, or another (already-resolved) Temp. Temp-only, since Temps
+  // Records `t = COPY(v)` with the value at t's width: constants are resized,
+  // while Reg/Temp sources propagate only when their widths already match.
+  // Otherwise replacing t with v would lose COPY's truncation/zero extension.
+  // Temp-only, since Temps
   // are the only IGNIL value guaranteed single-assignment within a block
   // (same invariant BackwardSlicer::sliceValue relies on for Temps vs Reg).
   std::unordered_map<std::uint32_t, Value> copyOf;
@@ -555,8 +556,20 @@ Block passForward(const Block &in, SimplifyStats &stats) {
       if (const auto *dt = std::get_if<Temp>(&*newOp.dst)) {
         copyOf.erase(dt->id);
         defOf.erase(dt->id);
-        if (newOp.opcode == Opcode::COPY && newOp.srcs.size() == 1)
-          copyOf.emplace(dt->id, newOp.srcs[0]);
+        if (newOp.opcode == Opcode::COPY && newOp.srcs.size() == 1 &&
+            dt->width != 0 && widthOf(newOp.srcs[0]) != 0) {
+          const Value &source = newOp.srcs[0];
+          if (const auto *constant = std::get_if<Const>(&source)) {
+            // Const has a 64-bit payload; bits above it are zero, including
+            // for a destination wider than 64 bits. Mask the source first:
+            // unused payload bits must not appear when COPY widens it.
+            copyOf.emplace(dt->id,
+                Const{maskTo(maskTo(constant->value, constant->width), dt->width),
+                      dt->width});
+          } else if (widthOf(source) == dt->width) {
+            copyOf.emplace(dt->id, source);
+          }
+        }
         // Recorded for every opcode, regardless of operand kind (Reg or
         // Temp) - it's dt->id (a Temp, guaranteed single-assignment) that
         // makes this record safe to trust later. Lookups above restrict

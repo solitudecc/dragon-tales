@@ -701,3 +701,54 @@ TEST_CASE("IGNILSimplify preserves malformed zero width constants for validation
     CHECK(out.ops()[0].opcode==opcode);
   }
 }
+
+TEST_CASE("IGNILSimplify propagates constants at the COPY destination width",
+          "[ignil][simplify][simplify-copy-width]") {
+  using dragon::ignil::Width;
+  const Width widths[]={1,8,16,32,64,128};
+  for (auto source:widths) for (auto target:widths) {
+    for (auto bits:{std::uint64_t{0},std::uint64_t{1},std::uint64_t{0x100},~std::uint64_t{0}}) {
+      INFO("source " << unsigned(source) << " target " << unsigned(target) << " bits " << bits);
+      Block block{kAddr};
+      block.append({Opcode::COPY,Temp{0,target},{Const{bits,source}},kAddr});
+      block.append({Opcode::COPY,Temp{1,64},{Temp{0,target}},kAddr+1});
+      block.append({Opcode::UDIV,x86::RAX,{Temp{1,64},Const{2,64}},kAddr+2});
+      const auto out=simplifyBlock(block);
+      const auto value=constWrittenTo(out,x86::RAX.offset);
+      CHECK(value.has_value());
+      const auto sourceMask=source>=64 ? ~std::uint64_t{0} : (std::uint64_t{1}<<source)-1;
+      const auto targetMask=target>=64 ? ~std::uint64_t{0} : (std::uint64_t{1}<<target)-1;
+      if (value) CHECK(*value==((bits&sourceMask&targetMask)/2));
+    }
+  }
+}
+
+TEST_CASE("IGNILSimplify keeps zero extension before signed constant arithmetic",
+          "[ignil][simplify][simplify-copy-width]") {
+  Block block{kAddr};
+  block.append({Opcode::COPY,Temp{0,64},{Const{0xff,8}},kAddr});
+  block.append({Opcode::SDIV,x86::RAX,{Temp{0,64},Const{2,64}},kAddr+1});
+  const auto value=constWrittenTo(simplifyBlock(block),x86::RAX.offset);
+  REQUIRE(value);
+  CHECK(*value==127); // Unicorn: zero-extended 255 / 2, not signed i8 -1 / 2
+}
+
+TEST_CASE("IGNILSimplify retains narrowing between matching unary operations",
+          "[ignil][simplify][simplify-copy-width]") {
+  // Expected values from the A64 Unicorn NOT/NEG -> byte mask -> NOT/NEG oracle.
+  struct Case {std::uint64_t input,notResult,negResult;};
+  const Case cases[]={{0,0xffffffffffffff00ULL,0},{1,0xffffffffffffff01ULL,0xffffffffffffff01ULL},
+      {0x100,0xffffffffffffff00ULL,0},{0x1234,0xffffffffffffff34ULL,0xffffffffffffff34ULL},
+      {~0ULL,~0ULL,~0ULL}};
+  for (auto opcode:{Opcode::NOT,Opcode::NEG}) for (auto c:cases) {
+    INFO("opcode " << int(opcode) << " input " << c.input);
+    Block block{kAddr};
+    block.append({opcode,Temp{0,64},{Const{c.input,64}},kAddr});
+    block.append({Opcode::COPY,Temp{1,8},{Temp{0,64}},kAddr+1});
+    block.append({Opcode::COPY,Temp{2,64},{Temp{1,8}},kAddr+2});
+    block.append({opcode,x86::RAX,{Temp{2,64}},kAddr+3});
+    const auto value=constWrittenTo(simplifyBlock(block),x86::RAX.offset);
+    REQUIRE(value);
+    CHECK(*value==(opcode==Opcode::NOT ? c.notResult : c.negResult));
+  }
+}

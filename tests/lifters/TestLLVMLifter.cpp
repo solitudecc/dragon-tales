@@ -3,6 +3,7 @@
 #include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
+#include <dragon/lifters/ignil/IGNILSimplify.hpp>
 
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/Instructions.h>
@@ -220,4 +221,31 @@ TEST_CASE("LLVMLifter - execution starts at the entry, not the lowest block",
                                  0x85, 0xff, 0x74, 0xf6, 0x31, 0xc0, 0xc3},
                                 0x1006, {0x1006});
   CHECK(ir.find("br label %bb_4102") != std::string::npos); // 0x1006
+}
+
+TEST_CASE("LLVM verification survives width changing COPY propagation",
+          "[llvm][simplify-copy-width]") {
+  using namespace dragon;
+  using namespace dragon::ignil;
+  for (auto arch:{Architecture::X86_64,Architecture::ARM64}) {
+    for (Width source:{Width{1},Width{8},Width{16},Width{32},Width{64}}) {
+      for (Width target:{Width{1},Width{8},Width{16},Width{32},Width{64},Width{128}}) {
+        INFO("arch " << int(arch) << " source " << unsigned(source) << " target " << unsigned(target));
+        Block block{0x1000};
+        block.append({Opcode::COPY,Temp{0,target},{Reg{0,source,"input"}},0x1000});
+        block.append({Opcode::COPY,Temp{1,64},{Temp{0,target}},0x1001});
+        block.append({Opcode::SDIV,Reg{8,64,"result"},{Temp{1,64},Const{2,64}},0x1002});
+        auto optimized=simplifyBlock(block);
+        for (const auto *current:{&block,&optimized}) {
+          INFO((current==&block ? "original" : "optimized"));
+          llvmlifter::LLVMLifter lifter{arch};
+          REQUIRE(lifter.liftBlock(*current));
+          std::string error;llvm::raw_string_ostream os{error};
+          const bool invalid=llvm::verifyModule(lifter.module(),&os);
+          INFO(error);
+          CHECK_FALSE(invalid);
+        }
+      }
+    }
+  }
 }
