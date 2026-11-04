@@ -292,6 +292,84 @@ public:
     });
   }
 };
+
+// Satisfiability with a 50 ms solver budget. An index computed through a
+// multiply (`x % 9` as a magic-number reciprocal) can exhaust it while
+// searching for an input. A concrete assignment of the free inputs that makes
+// the formula true is itself a proof, so on UNKNOWN deterministic sample
+// inputs are tried. Unsatisfiability is never concluded from samples.
+bool satisfiable(z3::context &ctx, const z3::expr &formula) {
+  {
+    z3::solver solver{ctx};
+    solver.set("timeout", 50u);
+    solver.add(formula);
+    switch (solver.check()) {
+      case z3::sat: return true;
+      case z3::unsat: return false;
+      default: break;
+    }
+  }
+  z3::expr_vector inputs{ctx};
+  std::vector<unsigned> seen;
+  std::vector<z3::expr> work{formula};
+  while (!work.empty()) {
+    const z3::expr e = work.back();
+    work.pop_back();
+    if (std::ranges::find(seen, e.id()) != seen.end()) continue;
+    seen.push_back(e.id());
+    if (!e.is_app()) return false; // quantifiers, variables: no sampling
+    if (e.decl().decl_kind() == Z3_OP_UNINTERPRETED) {
+      if (e.num_args() != 0) return false; // uninterpreted function
+      if (!(e.is_bool() || (e.is_bv() && e.get_sort().bv_size() <= 64))) return false;
+      inputs.push_back(e);
+      continue;
+    }
+    for (unsigned i = 0; i < e.num_args(); ++i) work.push_back(e.arg(i));
+  }
+  std::uint64_t state = 0x9e3779b97f4a7c15ull; // fixed seed: reproducible
+  auto next = [&state] {
+    state ^= state << 13; state ^= state >> 7; state ^= state << 17;
+    return state;
+  };
+  for (unsigned trial = 0; trial < 1024; ++trial) {
+    z3::expr_vector values{ctx};
+    for (unsigned i = 0; i < inputs.size(); ++i) {
+      const auto input = inputs[static_cast<int>(i)];
+      // First trials use the uniform edge values 0, all-ones and 1.
+      const std::uint64_t r = trial == 0 ? 0 : trial == 1 ? ~std::uint64_t{0} :
+                              trial == 2 ? 1 : next();
+      values.push_back(input.is_bool() ? ctx.bool_val(r & 1)
+                                       : ctx.bv_val(r & mask(input.get_sort().bv_size()),
+                                                    input.get_sort().bv_size()));
+    }
+    if (z3::expr(formula).substitute(inputs, values).simplify().is_true()) return true;
+  }
+  return false;
+}
+
+// Unsatisfiability with a 50 ms solver budget. When the solver gives up on a
+// computed index, the guard and the index usually test one shared value
+// (`cmp r13d, 5` and `jmp [8*r13 + t]` on the same `x % 9`). Replacing every
+// occurrence of that value by a free variable only adds behaviours, so an
+// unsatisfiable abstraction proves the original unsatisfiable; the solver no
+// longer needs to bit-blast how the value was computed.
+bool unsatisfiable(z3::context &ctx, const z3::expr &formula, const z3::expr &shared) {
+  z3::solver solver{ctx};
+  solver.set("timeout", 50u);
+  solver.add(formula);
+  const auto direct = solver.check();
+  if (direct != z3::unknown) return direct == z3::unsat;
+  if (shared.is_numeral()) return false;
+  z3::expr_vector from{ctx}, to{ctx};
+  from.push_back(shared);
+  to.push_back(shared.is_bool() ? ctx.bool_const("guard_shared")
+                                 : ctx.bv_const("guard_shared", shared.get_sort().bv_size()));
+  const auto abstracted = z3::expr(formula).substitute(from, to);
+  z3::solver coarse{ctx};
+  coarse.set("timeout", 50u);
+  coarse.add(abstracted);
+  return coarse.check() == z3::unsat;
+}
 #endif
 } // namespace
 
@@ -312,20 +390,12 @@ bool proveGuardBound(const Expr &condition, const Expr &index, const Expr &core,
     if (cases > mask(w)) return false;
     const auto allows = (c.extract(0, 0) == ctx.bv_val(taken ? 1 : 0, 1));
     const auto outside = z3::uge(x, ctx.bv_val(cases, w));
-    z3::solver solver{ctx};
-    solver.set("timeout", 50u);
-    solver.add(allows && outside);
-    if (solver.check() != z3::unsat) return false;
-    solver.reset();
-    solver.set("timeout", 50u);
-    solver.add(allows && x == ctx.bv_val(cases - 1, w));
-    if (solver.check() != z3::sat) return false;
+    if (!unsatisfiable(ctx, allows && outside, lowerer.lower(inputs.rewrite(core))))
+      return false;
+    if (!satisfiable(ctx, allows && x == ctx.bv_val(cases - 1, w))) return false;
     // Width/masking alone is not evidence of a table's length: the guard
     // itself must exclude some otherwise possible out-of-range index.
-    solver.reset();
-    solver.set("timeout", 50u);
-    solver.add(!allows && outside);
-    return solver.check() == z3::sat;
+    return satisfiable(ctx, !allows && outside);
   } catch (const z3::exception &) { return false; }
     catch (const std::runtime_error &) { return false; }
 #else

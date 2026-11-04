@@ -936,3 +936,62 @@ TEST_CASE("SwitchDetector - index re-read after a store to another field",
   auto blocks = blockStarts(dragon::Architecture::X86_32, build(0x4d));
   CHECK_FALSE(blocks.count(kCase0));
 }
+
+#ifdef DRAGON_WITH_Z3
+namespace {
+// clang -O2 for `switch ((s ^ s >> 13 ^ pc) % 9)` with six cases and a
+// default: the index is computed through a magic multiply, then guarded.
+std::vector<std::uint8_t> remainderDispatch(std::uint8_t guard) {
+  std::vector<std::uint8_t> bytes(0x1130, 0xcc);
+  const std::vector<std::uint8_t> code = {
+          0x44, 0x89, 0xe0,                          // mov eax, r12d
+          0xc1, 0xe8, 0x0d,                          // shr eax, 13
+          0x45, 0x89, 0xe5,                          // mov r13d, r12d
+          0x45, 0x31, 0xfd,                          // xor r13d, r15d
+          0x41, 0x31, 0xc5,                          // xor r13d, eax
+          0x49, 0x69, 0xc5, 0x39, 0x8e, 0xe3, 0x38,  // imul rax, r13, 0x38e38e39
+          0x48, 0xc1, 0xe8, 0x21,                    // shr rax, 33
+          0x8d, 0x04, 0xc0,                          // lea eax, [rax + 8*rax]
+          0x41, 0x29, 0xc5,                          // sub r13d, eax  (r13 = x % 9)
+          0x41, 0x83, 0xfd, guard,                   // cmp r13d, guard
+          0x0f, 0x87, 0x76, 0, 0, 0,                 // ja 0x10a0 (default)
+          0x42, 0xff, 0x24, 0xed, 0x00, 0x11, 0, 0}; // jmp [8*r13 + 0x1100]
+  std::copy(code.begin(), code.end(), bytes.begin());
+  for (unsigned i = 0; i <= 8; ++i) {
+    bytes[0x40 + 0x10 * i] = 0xc3;
+    putLE(bytes, 0x100 + 8 * i, kBase + 0x40 + 0x10 * i, 8);
+  }
+  bytes[0xa0] = 0xc3;
+  return bytes;
+}
+} // namespace
+
+// Found by the Tigress function-level study: the computed index goes to SMT,
+// whose satisfiability queries (a reachable final case, an excluded index)
+// timed out on the multiply. A concrete input that satisfies them is a proof;
+// unsatisfiability still needs the solver.
+TEST_CASE("SwitchDetector - a guarded remainder index is bounded",
+          "[switch][e2e][bound-proof]") {
+  std::set<std::uint64_t> cases;
+  for (unsigned i = 0; i < 6; ++i)
+    cases.insert(kBase + 0x40 + 0x10 * i);
+  for (auto strategy: {dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL,
+                       dragon::DisassemblyStrategy::LINEAR_SWEEP}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = strategy;
+    dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+    dragon::Graph g{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(remainderDispatch(5), kBase, g);
+    REQUIRE(g.get(kBase + 0x2a));
+    CHECK(g.get(kBase + 0x2a)->branches() == cases);
+  }
+}
+
+// `x % 9 <= 8` holds for every input: the guard excludes nothing, so it says
+// nothing about the table's length and must not be accepted.
+TEST_CASE("SwitchDetector - a guard implied by the remainder is not a bound",
+          "[switch][e2e][bound-proof]") {
+  CHECK(jumpSuccessors(dragon::Architecture::X86_64, remainderDispatch(8), kBase + 0x2a).empty());
+}
+#endif
