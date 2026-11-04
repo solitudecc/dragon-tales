@@ -4,6 +4,7 @@
 #include <llvm/IR/Verifier.h>
 #include "../loader/fixtures/fixtures.hpp"
 #include <cstring>
+#include <set>
 
 namespace {
 std::uint64_t read(const std::vector<std::uint8_t>& b,std::size_t p,unsigned n) {
@@ -135,4 +136,47 @@ TEST_CASE("V2 identifies i386 absolute GOT calls and PLT thunks", "[llvm][import
     CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
     CHECK(lifter.module().getNamedMetadata("dragon.imports"));CHECK(lifter.ir().find("puts")!=std::string::npos);
   }
+}
+
+namespace {
+// (site, name) of every !dragon.imports entry for the image's entry function.
+std::multiset<std::pair<std::uint64_t,std::string>> importSites(const std::vector<std::uint8_t>& code,bool a64) {
+  auto loaded=image(false,code,a64);REQUIRE(loaded);
+  auto graph=dragon::loader::disassembleImage(*loaded,dragon::Configuration{});
+  dragon::Function root{&graph,*loaded->entryPoint()};REQUIRE(root.isValid());
+  dragon::llvmlifter::LLVMLifter lifter{loaded->architecture()};
+  REQUIRE(lifter.setExecutionMode(dragon::llvmlifter::ExecutionMode::StatefulV2));REQUIRE(lifter.lift(root,graph));
+  CHECK_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+  std::multiset<std::pair<std::uint64_t,std::string>> out;
+  if(const auto *metadata=lifter.module().getNamedMetadata("dragon.imports"))
+    for(const auto *node:metadata->operands()) {
+      auto *site=llvm::mdconst::dyn_extract<llvm::ConstantInt>(node->getOperand(1));REQUIRE(site);
+      auto *name=llvm::dyn_cast<llvm::MDString>(node->getOperand(3));REQUIRE(name);
+      out.emplace(site->getZExtValue(),name->getString().str());
+    }
+  return out;
+}
+}
+// Found on real Lua/zlib/sqlite builds: a block's fall-through JMP (after
+// `lea`/`nop`, or after `bl __stack_chk_fail`) and jumps into blocks that do
+// work before a tail call were labelled as transfers to the import.
+TEST_CASE("Import provenance names only machine transfers into pure thunks", "[llvm][imports]") {
+  constexpr std::uint64_t base=0x400100;
+  // je 4; inc edx; 4: jmp [rip+GOT puts]. The `inc` block falls into the
+  // jump; only the machine jump at +4 transfers to puts.
+  CHECK(importSites({0x74,0x02,0xff,0xc2,0xff,0x25,0x0e,0x07,0,0},false)==
+        std::multiset<std::pair<std::uint64_t,std::string>>{{base+4,"puts"}});
+  // jmp 0x10; 0x10: mov rcx, rbx; jmp 0x20; 0x20: jmp [rip+GOT puts].
+  // The first jump reaches puts with RCX changed: not a thunk. The jump at
+  // 0x20 is a member block of this function and itself a real transfer.
+  std::vector<std::uint8_t> work{0xeb,0x0e};work.resize(0x10,0xcc);
+  for(auto b:{0x48,0x89,0xd9,0xe9,0x08,0,0,0})work.push_back(b);
+  work.resize(0x20,0xcc);
+  for(auto b:{0xff,0x25,0xf2,0x06,0,0})work.push_back(b);
+  CHECK(importSites(work,false)==std::multiset<std::pair<std::uint64_t,std::string>>{{base+0x13,"puts"},{base+0x20,"puts"}});
+  // A64: cbz x0, 8; bl stub; 8: mov w4, #-1; b stub; stub: adrp/ldr/add/br.
+  // The call's fall-through into `mov w4; b stub` is not a second transfer.
+  const std::vector<std::uint8_t> a64{0x40,0,0,0xb4, 0x03,0,0,0x94, 0x04,0,0x80,0x12, 0x01,0,0,0x14,
+      0x10,0,0,0x90,0x11,0x0e,0x44,0xf9,0x10,0x62,0x20,0x91,0x20,0x02,0x1f,0xd6};
+  CHECK(importSites(a64,true)==std::multiset<std::pair<std::uint64_t,std::string>>{{base+4,"puts"},{base+0xc,"puts"}});
 }
