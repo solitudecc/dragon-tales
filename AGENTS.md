@@ -209,13 +209,39 @@ Gotchas:
 Tigress VM and function-level study (2026-11-04, `docs/tigress-vm-challenge.md`,
 `tigress_vm_challenge.py [--function-level]`): Virtualize switch and MBA +
 switch-Flatten + true/false opaque predicates execute fully (all 6 plans);
-computed-goto/indirect dispatch, nested VMs and junk-byte instruction overlap
-stay explicit incomplete; C, dynamic-CFG and LLVM wrong 0. Fixed two x86 table
+computed-goto/indirect dispatch and nested VMs stay explicit incomplete;
+junk-byte overlap is fixed by the follow-up below. C, dynamic-CFG and LLVM wrong 0. Fixed two x86 table
 gaps: SMT timeouts on computed indices (abstraction for UNSAT, concrete
 witnesses for SAT only) and register-state flattening dispatchers (last-resort
 one-block slice at the guard). Corpus tables now 1086/0/190/526/38.
 Tigress needs `CILLY_NATIVE_CC=x86_64-linux-gnu-gcc` on the aarch64 VM, its
 `megaInit` must run before the kernel, and `/tmp` there is a 1.7 GB tmpfs.
+
+Overlapping x86 decode paths (2026-11-04 follow-up): linear Graph analysis
+recovers missing direct jump/call/explicit-entry targets, both strategies split
+common exact-address suffixes, and late splits relift every owning decode path
+via exact sequential predecessors. No Graph redesign, lifter/API change or
+relaxed guard/final-candidate validation. Five regressions: tests-only on
+773196f gives 4 failures/17 failed assertions (negative control passes);
+fixed 5/5 and 209 assertions. A partial fix retaining stale IGNIL fails 20
+assertions. Permanent i386/x64 full-function fixtures: old V2 12 different / 20
+match; new V2 32/32 and static 32/32, no exclusions/skips. Same f-opaque O2 ELF:
+both strategies x six plans x 24 inputs = 288 complete full-state matches.
+Entire matrix per strategy: C 336/336, LLVM 1440 match / 576 incomplete /
+0 different; remaining goto/indirect are not passes. CTest 512/512; no Z3 with
+Unicorn enabled 409/409 (older no-Z3 builds disabled Unicorn). Guard/slice
+harnesses unchanged and clean. All 69 corpus inputs freshly checked: 206649
+valid-function checks / 1686 V2 raw modules verify, no lift failures; tables
+1086/0/190/526/38 unchanged. Historical structural differences for 24 inputs
+were rerun on the frozen old libraries: only this change is two extra decoded
+instructions in C++ i386 exception-table data, not a semantic success. Its
+linear missing-IGNIL/undecoded-edge counts 2/14 -> 1/13; existing alerts stay
+visible. Lua unlifted records/forms unchanged 188/49/90. Worktree/builds on VM:
+~/dragon-tales-overlap/{build,build-noz3}; original ~/dragon-tales dirty checkout
+preserved. Artifacts ~/vmc-runs/context-audit-20261104. The corrected diagnosis,
+remaining exact stop sites and staged repair plan are in
+docs/tigress-vm-challenge.md. No whole-corpus semantic proof, new full
+single-instruction campaign or generic de-flattening/MBA cleanup is claimed.
 
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis

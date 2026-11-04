@@ -97,6 +97,17 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
   for (auto &insn: instructions)
     graph.addInstruction(std::move(insn));
 
+  // A linear sweep can consume a real entry inside another instruction's
+  // immediate (junk-byte anti-disassembly). Follow only explicit control-flow
+  // evidence, retaining both decodes. integrateNewBlock follows any further
+  // direct targets revealed by the new path and stops at known instructions.
+  // Copy the seeds: integration can add more starts to the sets.
+  const std::vector<std::uint64_t> directStarts(blockStarts.begin(),
+                                                blockStarts.end());
+  for (auto target : directStarts)
+    integrateNewBlock(target, bytes, baseAddr, graph, blockStarts, fnStarts);
+  discoverFallthroughJoins(graph, blockStarts);
+
   // Indirect-jump resolution. Under linear sweep only recognised jump tables
   // whose targets are instructions the sweep already decoded are used (see
   // resolveIndirectJumps): a free-form slice or Z3 guess can land
@@ -437,13 +448,33 @@ void dragon::x86::X86Analysis::liftPendingBlocks(
   }
   std::set<std::uint64_t> todo(state.lacking.begin(), state.lacking.end());
   const auto &valid = graph.validBlockAddresses();
-  for (std::uint64_t s: newStarts) {
-    todo.insert(s);
-    // The block below a new start may have been split by it - or, having
-    // ended where the decoded code ended, now runs on into it.
-    auto it = valid.lower_bound(s);
-    if (it != valid.begin())
-      todo.insert(*std::prev(it));
+  todo.insert(newStarts.begin(), newStarts.end());
+  // A new boundary can split several overlapping decode paths. Walk their
+  // exact sequential predecessors back to their block starts; the nearest
+  // start in numeric order need not own this suffix. Each address is visited
+  // once across all new starts, without rescanning every block in the image.
+  std::vector<std::uint64_t> work(newStarts.begin(), newStarts.end());
+  std::unordered_set<std::uint64_t> seen;
+  const auto &listing = graph.listing();
+  while (!work.empty()) {
+    const auto address = work.back();
+    work.pop_back();
+    if (!seen.insert(address).second)
+      continue;
+    auto it = listing.lower_bound(address);
+    while (it != listing.begin()) {
+      --it;
+      if (address - it->first > 15)
+        break; // x86 instructions cannot span more than 15 bytes
+      const auto &insn = it->second;
+      if (insn.address() + insn.size() != address || insn.isJump() ||
+          insn.isReturn() || insn.isTrap())
+        continue;
+      if (valid.contains(it->first))
+        todo.insert(it->first);
+      else
+        work.push_back(it->first);
+    }
   }
   const std::set<std::uint64_t> fresh(newStarts.begin(), newStarts.end());
   for (std::uint64_t addr: todo)
@@ -527,6 +558,26 @@ bool dragon::x86::X86Analysis::integrateNewBlock(
       graph.addInstruction(std::move(insn));
   }
   return true;
+}
+
+void dragon::x86::X86Analysis::discoverFallthroughJoins(
+        const Graph &graph,
+        std::unordered_set<std::uint64_t> &blockStarts) const {
+  // In address order, only instruction ends ahead of the current address
+  // can still meet another decode. This keeps the set bounded by x86's
+  // maximum instruction length rather than by the size of the whole image.
+  std::set<std::uint64_t> ends;
+  for (const auto &[address, insn] : graph.listing()) {
+    ends.erase(ends.begin(), ends.lower_bound(address));
+    if (insn.isReturn() || insn.isTrap() ||
+        (insn.isJump() && !insn.isConditional()))
+      continue;
+    const auto next = address + insn.size();
+    if (next <= address)
+      continue;
+    if (!ends.insert(next).second && graph.get(next))
+      blockStarts.insert(next);
+  }
 }
 
 namespace {
@@ -728,8 +779,10 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
         jump->setEdges(jump->branches().size());
         changed = true;
       }
-      if (changed)
+      if (changed) {
+        discoverFallthroughJoins(tentative, starts);
         continue;
+      }
 
       // Publish only a fixed point that survived a complete recheck. Update
       // existing objects in place so borrowed Instruction/IGNIL pointers stay

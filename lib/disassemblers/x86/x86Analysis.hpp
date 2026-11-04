@@ -77,9 +77,9 @@ class X86Analysis {
 
   /// Lift IGNIL for every block in the graph that has not been lifted yet.
   // Which blocks still need (re-)lifting. The first call lifts every block;
-  // later calls look only at the block starts committed since, the block
-  // just below each (split by it, or extended up to it after ending at the
-  // end of the decoded code), and blocks that had no valid view before.
+  // later calls look only at the block starts committed since, all blocks
+  // whose exact decode paths run into those starts (split or extended by
+  // them), and blocks that had no valid view before.
   // Rebuilding every BasicBlock view each round was quadratic on large
   // binaries (minutes for a 7 MB python3).
   struct LiftState {
@@ -103,6 +103,12 @@ class X86Analysis {
                          std::uint64_t baseAddr, Graph &graph,
                          std::unordered_set<std::uint64_t> &blockStarts,
                          std::unordered_set<std::uint64_t> &fnStarts) const;
+
+  /// Split the common suffix when independently decoded instruction paths
+  /// converge at the same exact next address.
+  void discoverFallthroughJoins(
+          const Graph &graph,
+          std::unordered_set<std::uint64_t> &blockStarts) const;
 
   /// Tentatively resolve reachable indirect JMPs to a CFG fixed point.
   /// Recheck every candidate after expansion; discard rejected candidates

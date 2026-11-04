@@ -3,6 +3,22 @@
   "entry": 4096,
   "cases": [
     {
+      "id": "x86_64_overlapping_paths",
+      "architecture": "x86_64",
+      "code_hex": "85ff7403b8909089e801f8c3",
+      "source": "test edi,edi; je 1007; mov eax,0xe8899090 / mov eax,ebp at 1007; common add eax,edi at 1009; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_overlapping_paths",
+      "architecture": "x86_32",
+      "code_hex": "85ff7403b8909089e801f8c3",
+      "source": "test edi,edi; je 1007; mov eax,0xe8899090 / mov eax,ebp at 1007; common add eax,edi at 1009; ret",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
       "id": "x86_64_ret",
       "architecture": "x86_64",
       "code_hex": "c70307000000c3",

@@ -482,6 +482,75 @@ TEST_CASE("SwitchDetector - a table outside the code bytes is read through "
   CHECK(jumpBlock.successors().size() == 7);
 }
 
+TEST_CASE("SwitchDetector - overlapping paths share one guard block",
+          "[switch][e2e][overlap-recovery]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                          dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      DYNAMIC_SECTION("architecture " << static_cast<int>(arch) << " strategy "
+                                     << static_cast<int>(strategy)) {
+        const unsigned entrySize = arch == dragon::Architecture::X86_32 ? 4 : 8;
+        std::vector<std::uint8_t> code = {
+            0x85, 0xf6, 0x74, 0x03,       // test esi,esi; je 1007
+            0xb8, 0x90, 0x90, 0x89, 0xe8, // mov eax,imm / mov eax,ebp
+            0x83, 0xff, 0x02,             // shared cmp edi,2 at 1009
+            0x0f, 0x87, 0, 0, 0, 0,       // ja default
+            0x89, 0xff,                   // mov edi,edi (clears RDI high)
+            0xff, 0x24,                   // jmp [edi/rdi*scale + table]
+            static_cast<std::uint8_t>(entrySize == 4 ? 0xbd : 0xfd),
+            0, 0, 0, 0};
+        putLE(code, 14, kDefault - 0x1012, 4);
+        putLE(code, 23, kTable, 4);
+        dragon::Configuration cfg;
+        cfg.disassemblyStrategy = strategy;
+        dragon::Disassembler dis{arch, cfg};
+        dragon::Graph g{arch, cfg};
+        dis.disassemble(layout(code, 3, entrySize), kBase, g);
+        REQUIRE(g.isValidBlock(0x1009));
+        const auto predecessors = dragon::BackwardSlicer::predecessors(g);
+        REQUIRE(predecessors.contains(0x1012));
+        CHECK(predecessors.at(0x1012) == std::vector<std::uint64_t>{0x1009});
+        REQUIRE(g.get(0x1014));
+        CHECK(g.get(0x1014)->branches() ==
+              std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
+        for (const auto target : g.get(0x1014)->branches()) {
+          CHECK(g.getIGNILBlock(target));
+          CHECK(dragon::Function{&g, kBase}.block(target));
+        }
+      }
+    }
+  }
+}
+
+TEST_CASE("SwitchDetector - late overlap relifts every owner of a split suffix",
+          "[switch][e2e][overlap-recovery]") {
+  auto bytes = nonPicDispatch();
+  // The existing path at 1100 is a ten-byte MOVABS followed by shared XOR/RET.
+  // An unrelated entry at 1102 is a JMP out of the image, occupying bytes
+  // inside that MOVABS. Case 0 later discovers MOV EAX,EBP at 1105, followed
+  // by three NOPs, converging with 1100 at 110a. Numeric predecessor lookup
+  // alone picks 1102/1105 and misses the older 1100 block that also splits.
+  const std::uint8_t overlap[] = {
+      0x48, 0xb8, 0xe9, 0x00, 0x00, 0x89, 0xe8, 0x90, 0x90, 0x90,
+      0x31, 0xd2, 0xc3};
+  std::copy(std::begin(overlap), std::end(overlap), bytes.begin() + 0x100);
+  putLE(bytes, kTable - kBase, 0x1105, 8);
+  dragon::Configuration cfg;
+  cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
+  dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+  dragon::Graph g{dragon::Architecture::X86_64, cfg};
+  dragon::Disassembler::AnalysisHints hints;
+  hints.entryPoints = {kBase, 0x1100, 0x1102};
+  dis.disassemble(bytes, kBase, g, hints);
+  REQUIRE(g.get(0x1105));
+  REQUIRE(g.isValidBlock(0x110a));
+  CHECK(dragon::BasicBlock{&g, 0x1100}.terminatorAddress() == 0x1100);
+  const auto *ib = g.getIGNILBlock(0x1100);
+  REQUIRE(ib);
+  for (const auto &op : ib->ops()) CHECK(op.address < 0x110a);
+  CHECK(g.getIGNILBlock(0x110a));
+}
+
 TEST_CASE("SwitchDetector - code reachable from a case is decoded too",
           "[switch][e2e][cfg]") {
   // Case 0 branches on: 0x1100 test edi, edi ; je 0x1180 ; ret / 0x1180 ret.

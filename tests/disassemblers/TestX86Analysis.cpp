@@ -392,8 +392,124 @@ TEST_CASE("X86Analysis x86_64 - branch target overlapping the fall-through's "
 }
 
 // -----------------------------------------------------------------------
-// Full if/else function
+// Recovery and convergence of overlapping instruction paths
 // -----------------------------------------------------------------------
+
+TEST_CASE("X86Analysis - direct targets inside swept instructions are decoded",
+          "[x86][analysis][overlap-recovery]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                          dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      INFO("architecture " << static_cast<int>(arch) << " strategy "
+                           << static_cast<int>(strategy));
+      DYNAMIC_SECTION("architecture " << static_cast<int>(arch) << " strategy "
+                                     << static_cast<int>(strategy)) {
+        dragon::Configuration cfg;
+        cfg.disassemblyStrategy = strategy;
+        dragon::Disassembler dis{arch, cfg};
+        dragon::Graph g{arch, cfg};
+
+        SECTION("forward conditional target") {
+          const std::vector<std::uint8_t> bytes = {
+              0x85, 0xff, 0x74, 0x02,       // test edi,edi; je 1006
+              0xb8, 0x90, 0xc3, 0x34, 0x12, // mov eax,1234c390
+              0xc3};                       // ret at 1009; ret at 1006
+          dis.disassemble(bytes, 0x1000, g);
+          REQUIRE(g.get(0x1006));
+          CHECK(g.get(0x1006)->isReturn());
+          CHECK(g.get(0x1004)->size() == 5);
+          CHECK(g.getIGNILBlock(0x1006));
+          CHECK(g.get(0x1006)->isBlockStart());
+          CHECK(dragon::Function{&g, 0x1000}.block(0x1006));
+        }
+        SECTION("backward target") {
+          const std::vector<std::uint8_t> bytes = {
+              0xb8, 0x90, 0x90, 0xeb, 0x02, // mov; jmp 1007 inside immediate
+              0xeb, 0xfc, 0xc3};             // jmp 1003; ret
+          dis.disassemble(bytes, 0x1000, g);
+          REQUIRE(g.get(0x1003));
+          CHECK(g.get(0x1003)->isJump());
+          CHECK(g.getIGNILBlock(0x1003));
+          const auto entry = dragon::BasicBlock{&g, 0x1000}.instructions();
+          REQUIRE(entry.size() == 2);
+          CHECK(entry[0]->address() == 0x1000);
+          CHECK(entry[1]->address() == 0x1005);
+        }
+        SECTION("callee") {
+          const std::vector<std::uint8_t> bytes = {
+              0xe8, 0x03, 0x00, 0x00, 0x00, // call 1008
+              0xb8, 0x90, 0x90, 0xc3, 0x90, // mov; embedded ret at 1008
+              0xc3};
+          dis.disassemble(bytes, 0x1000, g);
+          REQUIRE(g.get(0x1008));
+          CHECK(g.get(0x1008)->isReturn());
+          CHECK(g.get(0x1008)->isFunctionStart());
+          CHECK(g.getIGNILBlock(0x1008));
+          CHECK(dragon::Function{&g, 0x1008}.isValid());
+        }
+        SECTION("explicit entry") {
+          const std::vector<std::uint8_t> bytes = {
+              0xb8, 0x90, 0xc3, 0x34, 0x12, 0xc3};
+          dragon::Disassembler::AnalysisHints hints;
+          hints.entryPoints = {0x1000, 0x1002};
+          dis.disassemble(bytes, 0x1000, g, hints);
+          REQUIRE(g.get(0x1002));
+          CHECK(g.get(0x1002)->isReturn());
+          CHECK(g.get(0x1002)->isFunctionStart());
+          CHECK(g.getIGNILBlock(0x1002));
+          CHECK(dragon::Function{&g, 0x1002}.isValid());
+        }
+      }
+    }
+  }
+}
+
+TEST_CASE("X86Analysis - overlapping paths split their common suffix",
+          "[x86][analysis][overlap-recovery]") {
+  for (auto arch : {dragon::Architecture::X86_32, dragon::Architecture::X86_64}) {
+    for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                          dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      INFO("architecture " << static_cast<int>(arch) << " strategy "
+                           << static_cast<int>(strategy));
+      DYNAMIC_SECTION("architecture " << static_cast<int>(arch) << " strategy "
+                                     << static_cast<int>(strategy)) {
+        const std::vector<std::uint8_t> bytes = {
+            0x85, 0xff, 0x74, 0x03,       // test edi,edi; je 1007
+            0xb8, 0x90, 0x90, 0x89, 0xe8, // mov eax,e8899090 / mov eax,ebp
+            0xc1, 0xe8, 0x0d, 0xc3};     // shared shr eax,13; ret
+        dragon::Configuration cfg;
+        cfg.disassemblyStrategy = strategy;
+        dragon::Disassembler dis{arch, cfg};
+        dragon::Graph g{arch, cfg};
+        dis.disassemble(bytes, 0x1000, g);
+        REQUIRE(g.get(0x1007));
+        REQUIRE(g.isValidBlock(0x1009));
+        CHECK(g.get(0x1009)->isBlockStart());
+        for (auto start : {0x1004u, 0x1007u}) {
+          const dragon::BasicBlock block{&g, start};
+          REQUIRE(block.isValid());
+          CHECK(block.size() == 1);
+          CHECK(block.successors() == std::set<std::uint64_t>{0x1009});
+          const auto *ib = g.getIGNILBlock(start);
+          REQUIRE(ib);
+          for (const auto &op : ib->ops()) CHECK(op.address < 0x1009);
+        }
+        CHECK(dragon::BasicBlock{&g, 0x1009}.terminatorAddress() == 0x100c);
+        CHECK(g.getIGNILBlock(0x1009));
+      }
+    }
+  }
+}
+
+TEST_CASE("X86Analysis - immediates without control flow are not extra code",
+          "[x86][analysis][overlap-recovery]") {
+  const std::vector<std::uint8_t> bytes = {0xb8, 0x90, 0xc3, 0x34, 0x12, 0xc3};
+  auto dis = makeAnalyzer(dragon::Architecture::X86_64);
+  auto g = makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes, 0x1000, g);
+  CHECK_FALSE(g.get(0x1002));
+  CHECK(g.size() == 2);
+}
 
 TEST_CASE("X86Analysis x86_64 - if/else function structure",
           "[x86][analysis][x86_64]") {
