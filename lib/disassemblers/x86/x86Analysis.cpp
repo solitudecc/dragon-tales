@@ -639,7 +639,14 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
     // Keep the short slice first: expanding an index through a loop can lose
     // its correspondence with the guard. Deeper slices are for hoisted bases
     // that cannot be reached within five blocks.
-    for (int depth: {5, 16, 64}) {
+    //
+    // Last, a one-block slice: the index is then a free value at the entry of
+    // the guard block. A flattening dispatcher keeps its state in a register,
+    // and before its table is resolved only the entry path (`mov ecx, K`) is
+    // known, so every longer slice sees a constant and the guard bounds
+    // nothing. A guard proved for an arbitrary entry value holds on every
+    // incoming path, including ones the table itself reveals later.
+    for (int depth: {5, 16, 64, 1}) {
       auto targets = targetsAtDepth(block, cfg, cfgPreds, depth);
       if (!targets.empty())
         return targets;

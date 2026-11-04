@@ -995,3 +995,37 @@ TEST_CASE("SwitchDetector - a guard implied by the remainder is not a bound",
   CHECK(jumpSuccessors(dragon::Architecture::X86_64, remainderDispatch(8), kBase + 0x2a).empty());
 }
 #endif
+
+// Found by the Tigress function-level study (Flatten, clang -O2): the state
+// lives in a register and only the entry path `mov ecx, 2` is known before the
+// table is resolved, so every slice sees the constant 2 and no guard bound;
+// the other cases become reachable only through the table itself.
+//   mov ecx, 2 ; jmp L
+//   L: cmp rcx, 2 ; ja L ; jmp [8*rcx + 0x1100]
+//   case 0: mov ecx, 1 ; jmp L     case 1: ret     case 2: xor ecx, ecx ; jmp L
+TEST_CASE("SwitchDetector - a flattening dispatcher with a register state",
+          "[switch][e2e][bound-proof]") {
+  std::vector<std::uint8_t> bytes(0x1120, 0xcc);
+  auto put = [&](std::size_t at, std::vector<std::uint8_t> code) {
+    std::copy(code.begin(), code.end(), bytes.begin() + at);
+  };
+  put(0x00, {0xb9, 0x02, 0, 0, 0, 0xeb, 0x09});
+  put(0x10, {0x48, 0x83, 0xf9, 0x02, 0x77, 0xfa, 0xff, 0x24, 0xcd, 0x00, 0x11, 0, 0});
+  put(0x40, {0xb9, 0x01, 0, 0, 0, 0xeb, 0xc9});
+  put(0x50, {0xc3});
+  put(0x60, {0x31, 0xc9, 0xeb, 0xac});
+  for (unsigned i = 0; i < 3; ++i)
+    putLE(bytes, 0x100 + 8 * i, kBase + 0x40 + 0x10 * i, 8);
+  const std::set<std::uint64_t> cases{kBase + 0x40, kBase + 0x50, kBase + 0x60};
+  for (auto strategy: {dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL,
+                       dragon::DisassemblyStrategy::LINEAR_SWEEP}) {
+    INFO("strategy " << static_cast<int>(strategy));
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = strategy;
+    dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
+    dragon::Graph g{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(bytes, kBase, g);
+    REQUIRE(g.get(kBase + 0x16));
+    CHECK(g.get(kBase + 0x16)->branches() == cases);
+  }
+}
