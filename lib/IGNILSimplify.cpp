@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -96,7 +97,8 @@ bool isUnaryFoldable(Opcode op) {
 // dst - but treated defensively rather than assumed).
 std::optional<Const> foldBinary(Opcode op, const Const &l, const Const &r,
                                 Width dstWidth) {
-  if (l.width > kMaxFoldWidth || r.width > kMaxFoldWidth || dstWidth > kMaxFoldWidth)
+  if (l.width == 0 || r.width == 0 || l.width > kMaxFoldWidth ||
+      r.width > kMaxFoldWidth || dstWidth > kMaxFoldWidth)
     return std::nullopt;
   // Comparisons always produce a 1-bit result, independent of operand width.
   {
@@ -150,33 +152,29 @@ std::optional<Const> foldBinary(Opcode op, const Const &l, const Const &r,
     case Opcode::UDIV:
       return rv == 0 ? std::nullopt
                       : std::optional<Const>{Const{maskTo(lv / rv, w), w}};
-    case Opcode::SDIV:
-      return rs == 0 ? std::nullopt
-                      : std::optional<Const>{Const{
-                                maskTo(static_cast<std::uint64_t>(ls / rs), w),
-                                w}};
     case Opcode::UMOD:
       return rv == 0 ? std::nullopt
                       : std::optional<Const>{Const{maskTo(lv % rv, w), w}};
+    case Opcode::SDIV:
     case Opcode::SMOD:
-      return rs == 0 ? std::nullopt
-                      : std::optional<Const>{Const{
-                                maskTo(static_cast<std::uint64_t>(ls % rs), w),
-                                w}};
+      // Both / and % have host UB for INT64_MIN / -1. Leave the op intact
+      // instead of inventing a result or target-specific trap behavior.
+      if (rs == 0 || (ls == std::numeric_limits<std::int64_t>::min() && rs == -1))
+        return std::nullopt;
+      return Const{maskTo(static_cast<std::uint64_t>(
+                           op == Opcode::SDIV ? ls / rs : ls % rs), w), w};
     default:
       return std::nullopt;
   }
 }
 
 std::optional<Const> foldUnary(Opcode op, const Const &v, Width dstWidth) {
-  if (v.width > kMaxFoldWidth || dstWidth > kMaxFoldWidth)
+  if (v.width == 0 || v.width > kMaxFoldWidth || dstWidth > kMaxFoldWidth)
     return std::nullopt;
   std::uint64_t vv = maskTo(v.value, v.width);
   switch (op) {
     case Opcode::NEG:
-      return Const{maskTo(static_cast<std::uint64_t>(-static_cast<std::int64_t>(vv)),
-                          v.width),
-                   v.width};
+      return Const{maskTo(std::uint64_t{0} - vv, v.width), v.width};
     case Opcode::NOT:
       return Const{maskTo(~vv, v.width), v.width};
     case Opcode::ZEXT: {

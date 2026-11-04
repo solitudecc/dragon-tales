@@ -650,3 +650,54 @@ TEST_CASE("IGNILSimplify retains safe propagation around narrow writes",
     CHECK(std::get<Const>(out.ops().back().srcs[0]).value==42);
   }
 }
+
+TEST_CASE("IGNILSimplify leaves unrepresentable signed host division unfolded",
+          "[ignil][simplify][simplify-integer]") {
+  for (auto opcode : {Opcode::SDIV,Opcode::SMOD}) {
+    DYNAMIC_SECTION("opcode " << int(opcode)) {
+      Block block{kAddr};
+      block.append({opcode,x86::RAX,{Const{1ULL<<63,64},Const{~0ULL,64}},kAddr});
+      SimplifyStats stats;
+      const auto out=simplifyBlock(block,stats);
+      REQUIRE(out.size()==1);
+      CHECK(out.ops()[0].opcode==opcode);
+      CHECK(stats.constantsFolded==0);
+    }
+  }
+}
+
+TEST_CASE("IGNILSimplify negates integer boundaries with modular widths",
+          "[ignil][simplify][simplify-integer]") {
+  for (auto width : {dragon::ignil::Width{1},dragon::ignil::Width{8},
+                     dragon::ignil::Width{16},dragon::ignil::Width{32},dragon::ignil::Width{64}}) {
+    const auto mask=width==64 ? ~std::uint64_t{0} : (std::uint64_t{1}<<width)-1;
+    const auto sign=std::uint64_t{1}<<(width-1);
+    for (auto value : {std::uint64_t{0},std::uint64_t{1},mask,sign,sign-1}) {
+      INFO("width " << unsigned(width) << " value " << value);
+      Block block{kAddr};
+      block.append({Opcode::NEG,dragon::ignil::Reg{0,width,"result"},{Const{value,width}},kAddr});
+      const auto out=simplifyBlock(block);
+      REQUIRE(out.size()==1);
+      REQUIRE(out.ops()[0].opcode==Opcode::COPY);
+      const auto *result=std::get_if<Const>(&out.ops()[0].srcs[0]);
+      REQUIRE(result);
+      CHECK(result->width==width);
+      CHECK(result->value==((std::uint64_t{0}-value)&mask));
+    }
+  }
+}
+
+TEST_CASE("IGNILSimplify preserves malformed zero width constants for validation",
+          "[ignil][simplify][simplify-integer]") {
+  for (auto opcode : {Opcode::ADD,Opcode::SDIV,Opcode::SAR,Opcode::SLT,
+                       Opcode::NEG,Opcode::NOT,Opcode::SEXT}) {
+    Block block{kAddr};
+    std::vector<Value> sources{Const{0,0}};
+    if (opcode==Opcode::ADD || opcode==Opcode::SDIV || opcode==Opcode::SAR || opcode==Opcode::SLT)
+      sources.push_back(Const{1,64});
+    block.append({opcode,x86::RAX,sources,kAddr});
+    const auto out=simplifyBlock(block);
+    REQUIRE(out.size()==1);
+    CHECK(out.ops()[0].opcode==opcode);
+  }
+}

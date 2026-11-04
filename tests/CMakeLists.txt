@@ -87,6 +87,30 @@ llvm_map_components_to_libnames(TEST_LLVM_LIBS
 )
 target_link_libraries(dragon_tests PRIVATE ${TEST_LLVM_LIBS})
 
+# A normal ARM build can produce the expected bits despite signed C++ UB.
+# Instrument the actual optimizer source in a small standalone regression
+# target, so these failures stay visible without sanitizing LLVM/the library.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT WIN32)
+    include(CheckCXXSourceCompiles)
+    include(CMakePushCheckState)
+    cmake_push_check_state(RESET)
+    set(CMAKE_REQUIRED_FLAGS "-fsanitize=undefined -fno-sanitize-recover=undefined")
+    set(CMAKE_REQUIRED_LINK_OPTIONS -fsanitize=undefined -fno-sanitize-recover=undefined)
+    check_cxx_source_compiles("int main(int argc, char**) { volatile int x = argc; return 1 / x; }"
+            DRAGON_TEST_HAS_UNDEFINED_SANITIZER)
+    cmake_pop_check_state()
+    if(DRAGON_TEST_HAS_UNDEFINED_SANITIZER)
+        add_executable(dragon_optimizer_ubsan semantic/IGNILOptimizerUBSan.cpp ../lib/IGNILSimplify.cpp)
+        target_link_libraries(dragon_optimizer_ubsan PRIVATE dragon::libdragon)
+        target_compile_options(dragon_optimizer_ubsan PRIVATE -fsanitize=undefined -fno-sanitize-recover=undefined)
+        target_link_options(dragon_optimizer_ubsan PRIVATE -fsanitize=undefined -fno-sanitize-recover=undefined)
+        foreach(case IN ITEMS neg div mod zero sweep)
+            add_test(NAME "Validation - IGNIL sanitizer ${case}" COMMAND dragon_optimizer_ubsan ${case})
+            set_tests_properties("Validation - IGNIL sanitizer ${case}" PROPERTIES TIMEOUT 60)
+        endforeach()
+    endif()
+endif()
+
 if(DRAGON_USE_Z3)
     target_link_libraries(dragon_tests PRIVATE z3::libz3)
 endif()

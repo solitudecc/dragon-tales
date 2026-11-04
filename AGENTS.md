@@ -290,6 +290,22 @@ simplifyBlock; changed optimization paths and full CTest were rerun.
 Artifacts ~/vmc-runs/simplify-snapshots-20261105; original dirty VM worktree
 preserved, development/builds still use ~/dragon-tales-overlap.
 
+IGNIL integer-fold hardening (2026-11-05, baseline 454fb45): NEG uses unsigned
+modular subtraction, signed division/remainder leave INT64_MIN/-1 intact,
+and zero-width constants never enter host integer folding. Tests-only:
+11 failed assertions; fixed integer group 4 tests/4761 assertions, no Z3
+3/145. Unicorn A64 arithmetic oracle: 416 calculations, 832 original/optimized
+result matches; native A64 assembly confirms the extreme results. A permanent
+standalone target instruments the production optimizer with UBSan when the
+compiler/runtime support it: four old-source probes fail, all five new CTests
+pass, including 109568 consumed fold combinations over every width 1..64.
+This sanitizer sweep is not proof of arbitrary mixed-width IR semantics.
+Latest complete CTest 533/533, no Z3 427/427. Random equivalence/control and
+the same 450 real blocks/1235 comparisons were rerun, 0 new differences;
+existing 115 faults and memory limits stay visible, repeated inputs are not
+counted as new unique samples. No instruction/API/ABI changes. See
+docs/ignil-optimizer-hardening.md; artifacts ~/vmc-runs/simplify-integer-20261105.
+
 Real-binary external call audit (2026-11-04, `docs/external-call-audit.md`):
 69 samples x 2 strategies, all caller functions lowered. Fixed two analysis
 bugs: import provenance on fall-through edges/non-thunk blocks (wrong and

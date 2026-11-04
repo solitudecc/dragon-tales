@@ -129,3 +129,61 @@ TEST_CASE("IGNIL optimized parent snapshots agree with Unicorn",
     }
   }
 }
+
+TEST_CASE("IGNIL integer folding matches Unicorn at signed boundaries",
+          "[ignil][simplify][simplify-integer]") {
+  using namespace dragon;
+  using namespace dragon::ignil;
+  Assembler assembler{Architecture::ARM64,Configuration{}};
+  for (Width width : {Width{8},Width{16},Width{32},Width{64}}) {
+    const auto mask=width==64 ? ~std::uint64_t{0} : (std::uint64_t{1}<<width)-1;
+    const auto sign=std::uint64_t{1}<<(width-1);
+    const std::array values{std::uint64_t{0},std::uint64_t{1},mask,sign,sign-1,
+        std::uint64_t{2},mask-1,std::uint64_t{0x1122334455667788ULL}&mask};
+    const std::array divisors{std::uint64_t{1},std::uint64_t{2},mask,mask-1,sign,sign-1};
+    for (auto operation : {Opcode::NEG,Opcode::SDIV,Opcode::SMOD}) {
+      std::vector<std::uint8_t> code;
+      auto append=[&](const std::string &text) {
+        const auto bytes=assembler.assemble(text);
+        REQUIRE_FALSE(bytes.empty());code.insert(code.end(),bytes.begin(),bytes.end());
+      };
+      // Use A64's defined nontrapping arithmetic as a bit-vector result
+      // oracle, with explicit sign extension and final width truncation.
+      if (width<64) append("sbfx x1, x1, #0, #"+std::to_string(width));
+      if (operation==Opcode::NEG) append("neg x0, x1");
+      else {
+        if (width<64) append("sbfx x2, x2, #0, #"+std::to_string(width));
+        append("sdiv x0, x1, x2");
+        if (operation==Opcode::SMOD) append("msub x0, x0, x2, x1");
+      }
+      if (width<64) append("ubfx x0, x0, #0, #"+std::to_string(width));
+      for (auto left : values) {
+        for (unsigned i=0;i<(operation==Opcode::NEG ? 1u : divisors.size());++i) {
+          auto right=divisors[i];
+          INFO("width " << unsigned(width) << " op " << int(operation)
+               << " left " << left << " right " << right);
+          uc_engine *raw=nullptr;
+          REQUIRE(uc_open(UC_ARCH_ARM64,UC_MODE_ARM,&raw)==UC_ERR_OK);
+          const std::unique_ptr<uc_engine,CloseOptimizerUnicorn> uc{raw};
+          REQUIRE(uc_mem_map(raw,0x1000,4096,UC_PROT_ALL)==UC_ERR_OK);
+          REQUIRE(uc_mem_write(raw,0x1000,code.data(),code.size())==UC_ERR_OK);
+          REQUIRE(uc_reg_write(raw,UC_ARM64_REG_X1,&left)==UC_ERR_OK);
+          REQUIRE(uc_reg_write(raw,UC_ARM64_REG_X2,&right)==UC_ERR_OK);
+          REQUIRE(uc_emu_start(raw,0x1000,0x1000+code.size(),0,100)==UC_ERR_OK);
+          std::uint64_t expected=0;
+          REQUIRE(uc_reg_read(raw,UC_ARM64_REG_X0,&expected)==UC_ERR_OK);
+          Block block{0x1000};
+          std::vector<Value> operands{Const{left,width}};
+          if (operation!=Opcode::NEG) operands.push_back(Const{right,width});
+          block.append({operation,Reg{0,width,"result"},operands,0x1000});
+          auto optimized=simplifyBlock(block);
+          SymbolicExecutor before,after;
+          before.setRegister(arm::X0,0); after.setRegister(arm::X0,0);
+          REQUIRE(before.run(block).ok()); REQUIRE(after.run(optimized).ok());
+          CHECK(before.evaluate(before.readRegister(arm::X0))==expected);
+          CHECK(after.evaluate(after.readRegister(arm::X0))==expected);
+        }
+      }
+    }
+  }
+}
