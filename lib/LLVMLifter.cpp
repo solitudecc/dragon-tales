@@ -130,7 +130,8 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   // we have not extracted information about that yet...
   // The name is the address of the function.
   std::string name = mode_ != ExecutionMode::Legacy
-      ? std::format("dragon_{}_{}_{:x}", mode_ == ExecutionMode::StaticAnalysis ? "static" : "v2", ArchitectureName(arch_), fn.startAddress())
+      ? (mode_ == ExecutionMode::StaticAnalysis ? staticFunctionName(fn.startAddress())
+         : std::format("dragon_v2_{}_{:x}", ArchitectureName(arch_), fn.startAddress()))
       : std::format("sub_{:x}", fn.startAddress());
   auto *ptrTy = llvm::PointerType::getUnqual(*ctx_);
   auto *voidTy = llvm::Type::getVoidTy(*ctx_);
@@ -146,6 +147,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     // A caller may already reference a forward declaration. Preserve that
     // symbol if the body cannot be lifted, rather than leaving dangling uses.
     llfn->deleteBody();llfn->removeFnAttr("dragon.entrypoints");
+    llfn->removeFnAttr("dragon.static-entry-policy");
     llfn->removeFnAttr("dragon.signature");
     if (!hadDeclaration && llfn->use_empty()) llfn->eraseFromParent();
     return false;
@@ -224,11 +226,17 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     auto *dispatch=builder.CreateSwitch(pc,unknown,resumeEntries_.size());
     std::string entries;
     for (const auto &[address,block] : resumeEntries_) {
+      if (mode_ == ExecutionMode::StaticAnalysis &&
+          staticEntryPolicy_ == StaticEntryPolicy::FunctionStart &&
+          address != fn.startAddress()) continue;
       dispatch->addCase(builder.getInt64(address),block);
       if (!entries.empty()) entries+=',';
       entries+=std::format("{:x}",address);
     }
     llfn->addFnAttr("dragon.entrypoints",entries);
+    if (mode_ == ExecutionMode::StaticAnalysis &&
+        staticEntryPolicy_ == StaticEntryPolicy::FunctionStart)
+      llfn->addFnAttr("dragon.static-entry-policy","function-start");
     llvm::IRBuilder<> out(unknown);
     emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regFile,regsPtr,out,DRAGON_DETAIL_ENTRY,0);
   }
@@ -1211,7 +1219,21 @@ std::string dragon::llvmlifter::LLVMLifter::recoveredSignatureString(
 
 bool dragon::llvmlifter::LLVMLifter::setExecutionMode(ExecutionMode mode) {
   if (!module_->empty() || (mode != ExecutionMode::Legacy && mode != ExecutionMode::StatefulV2 && mode != ExecutionMode::StaticAnalysis)) return false;
+  if (staticEntryPolicy_ != StaticEntryPolicy::Resumable && mode != ExecutionMode::StaticAnalysis) return false;
   mode_ = mode; return true;
+}
+
+bool dragon::llvmlifter::LLVMLifter::setStaticEntryPolicy(StaticEntryPolicy policy) {
+  if (mode_ != ExecutionMode::StaticAnalysis || !module_->empty() ||
+      (policy != StaticEntryPolicy::Resumable && policy != StaticEntryPolicy::FunctionStart)) return false;
+  staticEntryPolicy_ = policy;
+  return true;
+}
+
+std::string dragon::llvmlifter::LLVMLifter::staticFunctionName(std::uint64_t address) const {
+  return std::format("dragon_static_{}{}_{:x}",
+      staticEntryPolicy_ == StaticEntryPolicy::FunctionStart ? "entry_" : "",
+      ArchitectureName(arch_), address);
 }
 
 void dragon::llvmlifter::LLVMLifter::emitExit(std::uint64_t reason, std::uint64_t kind,
@@ -1264,7 +1286,7 @@ void dragon::llvmlifter::LLVMLifter::emitStaticCall(const ignil::Op &op,
   std::string calleeName="dragon_static_external";
   if (const auto *constant=llvm::dyn_cast<llvm::ConstantInt>(target)) {
     const auto address=constant->getZExtValue();
-    const auto internal=std::format("dragon_static_{}_{:x}",ArchitectureName(arch_),address);
+    const auto internal=staticFunctionName(address);
     if (module_->getFunction(internal) || Function(graph_,address).isValid()) calleeName=internal;
   }
   auto callee=module_->getOrInsertFunction(calleeName,type);

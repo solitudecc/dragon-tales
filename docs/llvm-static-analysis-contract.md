@@ -37,6 +37,12 @@ Legacy=0、StatefulV2=1 及默认值保持现状；`liftBlock` 继续只支持�
 四个指针复用 [Execution.h](../include/dragon/lifters/llvm/Execution.h) 的布局及
 [现有状态契约](llvm-execution-contract.md) 的缓冲区有效性、所有权、寄存器别名和对齐规则。
 不新增 Exit reason，不改变 IGNIL 的 CALL/RET 抽象，不把启发式恢复的原型变成实际 LLVM 参数。
+
+2026-11-05 新增显式入口策略：默认仍允许从登记 PC 恢复。静态模式首次 lift 前可选
+`StaticEntryPolicy::FunctionStart`，生成独立的 `dragon_static_entry_*` 符号，只接受
+对应函数起点；其他输入 PC 返回现有 Unsupported/Entry，保留 Guest 寄存器和内存。
+内部跳转、循环及调用后续不受此入口检查限制。它不提供初始化或调用效果假设；
+详见[限定入口分析](llvm-static-entry.md)。
 `runtime` 在静态模式中保留作协议上下文；生成的 IR 不调用 `executeV2`，也不依靠分发预算推进分析。
 **相同的四指针布局不代表静态函数可注册到 V2 执行器**；静态产物中的外部声明尚无执行实现。
 

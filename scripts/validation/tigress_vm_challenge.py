@@ -387,6 +387,7 @@ def main():
     ap.add_argument('--seed', type=int, default=4242)
     ap.add_argument('--trials', type=int, default=24)
     ap.add_argument('--strategy', type=int, choices=[0, 1], default=0)
+    ap.add_argument('--function-entry', action='store_true', help='use explicit function-start static views')
     ap.add_argument('--c-level', action='append', choices=['O0', 'O2'])
     ap.add_argument('--plans', default=','.join(p[0] for p in PLANS))
     ap.add_argument('--control', choices=['c-result', 'llvm-register', 'llvm-memory'])
@@ -404,6 +405,7 @@ def main():
     for x in xs:
         seen_cases.update(specification(args.seed, x, guarded=any(p.startswith('f-') for p in profiles))[2])
     meta = dict(seed=args.seed, inputs=xs, strategy=args.strategy, profiles=profiles, levels=levels,
+                static_entry_policy='function-start' if args.function_entry else 'resumable',
                 plans=[p[0] for p in plans], spec_switch_case_hits=dict(sorted(seen_cases.items())),
                 library_sha256=hashlib.sha256(Path(base.dragon._LIB).read_bytes()).hexdigest(),
                 tigress_version=tf.run([args.tigress, '--version'], out, 'tigress-version').strip().splitlines()[-1][:200],
@@ -513,9 +515,10 @@ def main():
                     continue
                 args.control = saved
                 if plan == 'product-O2':
-                    analysis['kernel_ir_cfg_product_O2'] = ir_cfg(pw / 'optimized.ll', f'dragon_static_x86_64_{ka:x}')
-                    analysis['kernel_ir_product_O2'] = ir_instructions(pw / 'optimized.ll', f'dragon_static_x86_64_{ka:x}')
-                    analysis['kernel_ir_raw'] = ir_instructions(pw / 'unoptimized.ll', f'dragon_static_x86_64_{ka:x}')
+                    kernel_symbol = f'dragon_static_{"entry_" if args.function_entry else ""}x86_64_{ka:x}'
+                    analysis['kernel_ir_cfg_product_O2'] = ir_cfg(pw / 'optimized.ll', kernel_symbol)
+                    analysis['kernel_ir_product_O2'] = ir_instructions(pw / 'optimized.ll', kernel_symbol)
+                    analysis['kernel_ir_raw'] = ir_instructions(pw / 'unoptimized.ll', kernel_symbol)
                 for trial, regs, memory, want in expected:
                     actual, error = base.native(exe, regs, memory, pw, trial, extra_bytes=64)
                     row = dict(case=case, plan=plan, trial=trial)

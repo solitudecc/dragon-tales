@@ -18,13 +18,16 @@ import tempfile
 
 import function_llvm_diff as base
 
-def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64', *, static_analysis=False, product_pipeline=False):
+def compile_case(fixture, entry, level, work, args, model_factory=None, architecture='x86_64', *, static_analysis=False, product_pipeline=False, function_entry=False):
+    if function_entry and not static_analysis:raise ValueError('function entry requires static analysis')
     arch_id={'x86_64':2,'x86_32':1,'arm64':4}[architecture]
     pc_offset=264 if architecture=='arm64' else 128
     regs_size=800 if architecture=='arm64' else 512
+    entry_options={'static_entry_policy':1} if function_entry else {}
     lifter=base.dragon.LLVMLifter(arch_id,
-                                execution_mode=2 if static_analysis else base.dragon.LLVMExecutionMode.STATEFUL_V2)
-    prefix='dragon_static' if static_analysis else 'dragon_v2'
+                                execution_mode=2 if static_analysis else base.dragon.LLVMExecutionMode.STATEFUL_V2,
+                                **entry_options)
+    prefix='dragon_static_entry' if function_entry else 'dragon_static' if static_analysis else 'dragon_v2'
     call_sites=set()
     local_functions=fixture.get('local_functions',[])
     image_graph=None

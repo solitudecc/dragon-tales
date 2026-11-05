@@ -789,6 +789,22 @@ Known internal entries call `dragon_static_*` directly, with forward declaration
 that can receive definitions later in either lift order. See the
 [static contract](llvm-static-analysis-contract.md) for scope and later stages.
 
+To analyze execution beginning only at each function's start, select the
+explicit entry policy:
+
+```python
+lifter = dragon.LLVMLifter(
+    image.architecture, execution_mode=dragon.LLVMExecutionMode.STATIC_ANALYSIS,
+    static_entry_policy=dragon.LLVMStaticEntryPolicy.FUNCTION_START)
+```
+
+This emits `dragon_static_entry_<arch>_<addr>` functions. Other input PCs
+return Unsupported/Entry while preserving Guest registers and memory.
+Internal loops and call continuations still execute normally. The default
+`None`/`LLVMStaticEntryPolicy.RESUMABLE` retains resumable static functions.
+This option requires static mode; it supplies no initialization/heap facts.
+See [entry views](llvm-static-entry.md).
+
 ### Optimization passes
 
 Individual passes can be called separately or use `optimize()` for the
@@ -1135,6 +1151,7 @@ lifted x86-64.
 | `dragon.Architecture` | `UNKNOWN`, `X86_32`, `X86_64`, `ARM32`, `ARM64`, `RISCV32`, `RISCV64` |
 | `dragon.Syntax` | `INTEL`, `ATT` |
 | `dragon.LLVMExecutionMode` | `LEGACY`, `STATEFUL_V2`, `STATIC_ANALYSIS` |
+| `dragon.LLVMStaticEntryPolicy` | `RESUMABLE`, `FUNCTION_START` (static mode only) |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
 | `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI`, `OPAQUE` (43 values) |

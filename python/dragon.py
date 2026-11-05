@@ -1345,6 +1345,11 @@ class LLVMExecutionMode:
     STATIC_ANALYSIS = 2
 
 
+class LLVMStaticEntryPolicy:
+    RESUMABLE = 0
+    FUNCTION_START = 1
+
+
 class LLVMLifter:
     """Lifts Functions to LLVM IR via the IGNIL graph.
 
@@ -1357,15 +1362,23 @@ class LLVMLifter:
     execution_mode : LLVMExecutionMode
         LEGACY by default; STATEFUL_V2 uses Execution.h state/dispatch exits.
         STATIC_ANALYSIS preserves opaque external calls for static optimization.
+    static_entry_policy : LLVMStaticEntryPolicy or None
+        Static mode only. FUNCTION_START emits dragon_static_entry_* functions
+        accepting only the function start PC. None keeps resumable entry.
     """
 
-    def __init__(self, arch=Architecture.X86_64, module_name='lifted', *, execution_mode=LLVMExecutionMode.LEGACY):
+    def __init__(self, arch=Architecture.X86_64, module_name='lifted', *, execution_mode=LLVMExecutionMode.LEGACY,
+                 static_entry_policy=None):
         self._ptr = lib.dragon_llvm_lifter_create(arch, module_name.encode())
         if self._ptr == ffi.NULL:
             raise RuntimeError('failed to create LLVMLifter')
         if not lib.dragon_llvm_lifter_set_execution_mode(self._ptr, execution_mode):
             self.__del__()
             raise ValueError('invalid LLVM execution mode')
+        if static_entry_policy is not None and not lib.dragon_llvm_lifter_set_static_entry_policy(
+                self._ptr, static_entry_policy):
+            self.__del__()
+            raise ValueError('static entry policy requires static mode and a valid policy')
 
     def __del__(self):
         if self._ptr:

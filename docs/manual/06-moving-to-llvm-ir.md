@@ -267,6 +267,14 @@ proven independent simplifications remain possible. Static IR does not consume
 the V2 budget and must not be registered with its executor. See
 [the static contract](../llvm-static-analysis-contract.md) for staged coverage.
 
+For analysis starting only at each function's beginning, pass
+`static_entry_policy=dragon.LLVMStaticEntryPolicy.FUNCTION_START` to the static
+lifter constructor. This emits separate `dragon_static_entry_*` symbols;
+other input PCs return Unsupported/Entry while internal loops and call
+continuations remain valid. The default still permits registered resume PCs.
+This does not initialize Guest memory or supply callee effects; see
+[function-entry views](../llvm-static-entry.md).
+
 A complete static-output example, using case A with an unknown target at 0x2000:
 
 ```python

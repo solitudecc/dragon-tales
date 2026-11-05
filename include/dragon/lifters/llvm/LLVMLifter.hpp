@@ -19,6 +19,10 @@ namespace dragon::llvmlifter {
 
 enum class ExecutionMode { Legacy = 0, StatefulV2 = 1, StaticAnalysis = 2 };
 
+/// External entry contract for static functions. Internal branches, loops and
+/// call continuations are unaffected. Neither policy assumes input memory.
+enum class StaticEntryPolicy { Resumable = 0, FunctionStart = 1 };
+
 struct PredicateFoldOptions {
   std::uint32_t timeoutMs = 25;          ///< Per solver query; zero disables queries.
   std::uint32_t maxQueries = 64;         ///< Shared by the whole module.
@@ -68,6 +72,12 @@ class LLVMLifter {
 
   /// Select before lifting; a module cannot mix execution protocols.
   bool setExecutionMode(ExecutionMode mode);
+
+  /// Opt in before lifting in StaticAnalysis mode. FunctionStart emits separate
+  /// dragon_static_entry_* symbols accepting only fn.startAddress(); other PCs
+  /// return Unsupported/Entry with registers and memory preserved. The default
+  /// Resumable contract and StatefulV2 remain unchanged.
+  bool setStaticEntryPolicy(StaticEntryPolicy policy);
 
   /// Lift one function (all its IGNIL blocks must be in the graph). Legacy
   /// rejects transfers it cannot report; StatefulV2 emits explicit exits.
@@ -243,7 +253,9 @@ class LLVMLifter {
   llvm::Value *memoryAddress(llvm::Value *address, std::uint64_t bytes, std::uint64_t pc,
                              RegFile &regs, llvm::Value *regsPtr, llvm::Value *memPtr, llvm::IRBuilder<> &builder);
   bool stateful() const { return mode_ != ExecutionMode::Legacy && graph_; }
+  [[nodiscard]] std::string staticFunctionName(std::uint64_t address) const;
   ExecutionMode mode_ = ExecutionMode::Legacy;
+  StaticEntryPolicy staticEntryPolicy_ = StaticEntryPolicy::Resumable;
   std::set<std::uint64_t> unsupportedAddresses_;
   std::map<std::uint64_t,llvm::BasicBlock *> resumeEntries_;
   Architecture arch_;

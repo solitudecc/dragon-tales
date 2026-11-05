@@ -1190,6 +1190,8 @@ struct dragon_llvm_lifter {
   dragon::llvmlifter::LLVMLifter lifter;
 };
 static_assert(static_cast<int>(dragon::llvmlifter::ExecutionMode::StaticAnalysis)==DRAGON_LLVM_STATIC_ANALYSIS);
+static_assert(static_cast<int>(dragon::llvmlifter::StaticEntryPolicy::Resumable)==DRAGON_LLVM_ENTRY_RESUMABLE);
+static_assert(static_cast<int>(dragon::llvmlifter::StaticEntryPolicy::FunctionStart)==DRAGON_LLVM_ENTRY_FUNCTION_START);
 
 dragon_llvm_lifter_t *dragon_llvm_lifter_create(dragon_architecture_t arch,
                                                 const char *module_name) {
@@ -1202,6 +1204,9 @@ void dragon_llvm_lifter_destroy(dragon_llvm_lifter_t *l) { delete l; }
 
 int dragon_llvm_lifter_set_execution_mode(dragon_llvm_lifter_t *l, dragon_llvm_execution_mode_t mode) {
   return l && l->lifter.setExecutionMode(static_cast<dragon::llvmlifter::ExecutionMode>(mode));
+}
+int dragon_llvm_lifter_set_static_entry_policy(dragon_llvm_lifter_t *l, dragon_llvm_static_entry_policy_t policy) {
+  return l && l->lifter.setStaticEntryPolicy(static_cast<dragon::llvmlifter::StaticEntryPolicy>(policy));
 }
 void dragon_llvm_execute_v2(dragon_guest_state_v2_t *state, dragon_guest_memory_v2_t *memory,
     dragon_exec_context_v2_t *context, dragon_exec_exit_v2_t *exit, uint64_t root_exit_pc) {

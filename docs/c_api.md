@@ -912,6 +912,7 @@ normal continuation. Static functions are not V2 runtime targets. See
 | `dragon_llvm_lifter_create(arch, module_name)` | `dragon_llvm_lifter_t*` | `module_name` may be NULL (defaults to `"lifted"`) |
 | `dragon_llvm_lifter_destroy(l)` | — | |
 | `dragon_llvm_lifter_set_execution_mode(l, mode)` | `int` (0/1) | Select before lifting; 0 for invalid mode or nonempty module |
+| `dragon_llvm_lifter_set_static_entry_policy(l, policy)` | `int` (0/1) | Static mode before lifting: `DRAGON_LLVM_ENTRY_RESUMABLE` (default) or `DRAGON_LLVM_ENTRY_FUNCTION_START`; the latter emits `dragon_static_entry_*` symbols and rejects other PCs with Unsupported/Entry |
 | `dragon_llvm_execute_v2(state, memory, context, exit, root_exit_pc)` | — | Executes registered V2 implementations; status is in `exit` |
 | `dragon_llvm_lifter_lift(l, fn, graph)` | `int` (0/1) | 0 for invalid/missing blocks, duplicate symbols or unsupported Legacy transfers |
 | `dragon_llvm_lifter_ir(l)` | `char*` (heap) | Free with `dragon_cstr_free` |

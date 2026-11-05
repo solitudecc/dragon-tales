@@ -206,6 +206,43 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Static function-entry views (2026-11-05/06, baseline `23f46f2`): see
+`docs/llvm-static-entry.md`. Explicit `StaticEntryPolicy::FunctionStart` in an
+empty StaticAnalysis module emits `dragon_static_entry_*` symbols accepting
+only Function::startAddress(); invalid input PCs return Unsupported/Entry and
+preserve Guest registers/memory. Default Resumable, V2, internal CFG edges and
+call continuations are unchanged. Direct static internal calls use the same
+policy, including forward declarations in either definition order. C and Python
+expose the policy. No initialization, heap, callee-effect or API-name assumptions.
+Four C++ cases / 242 assertions; tests-only old build fails because the API is
+new. Native 42 core + 4 import-image cases: 3776 matches, comprising 1520
+valid-entry checks (1040 complete root returns / 480 declared boundaries) and
+2256 rejected-entry checks; all modelled fields and 64 KiB, no exclusions/skips/
+normalizations. Image checks verify new symbol/import metadata; their 128 valid
+entries are all boundaries, never complete-function successes.
+Old three-case subset: 288 matches / 48 expected entry-contract differences,
+six modules missing the restricted contract; all 144 valid-entry comparisons
+still match. Do not describe old resumable execution as incorrect semantics.
+Result/memory controls detect 84/84 single-field differences each; accepting
+interior entries control detects 12/12 while 36 valid-entry checks still match.
+CTest 573/573, no Z3 449/449; frozen no-Z3 interfaces/libraries also give 84
+native matches (36 complete returns / 48 rejected entries). Frozen Tigress
+2.1 seed 4242 three-profile matrix:
+288 C and 576 complete LLVM matches, wrong/unlifted/incomplete zero. A separately
+regenerated matrix also matches; keep its inputs distinct from the frozen replay.
+On the same six frozen ELFs, product kernel IR decreases in both strategies;
+f-opaque O0 9134->5395, but extra LLVM O2 grows f-mba O0 3486->4112.
+Counts include generated state/memory checks, not just original obfuscation.
+Both real corpora: 69 inputs / 138 strategies / 206649 valid-function checkpoints,
+6530 raw + 6530 optimized modules verify. Every definition's sole external entry
+and policy attribute are checked before/after optimization; zero lift failures
+or coverage gaps. Input hashes and recorded structure match baseline, including
+known anomalies. Independent workers saved disjoint checked inputs; the final
+forward audit validates all 69 records and exact library hashes.
+No whole-program semantic or general heap-predicate/deflat claims. Artifacts:
+`~/vmc-runs/llvm-static-entry-20261105/`; use only the owned VM worktree
+`~/dragon-tales-overlap`, not the dirty original checkout.
+
 LLVM MBA simplification (2026-11-05, baseline `fafea17`): see
 `docs/llvm-mba-simplification.md`. New C++/C/Python synthesis API and Python
 optimize() stage before predicate folding. Every rewrite needs an UNSAT

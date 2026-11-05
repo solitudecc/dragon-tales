@@ -188,6 +188,10 @@ if(Python3_Interpreter_FOUND)
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_static.py)
         set_tests_properties("Validation - LLVM static C and Python mirror" PROPERTIES
             ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Validation - LLVM static function entry C and Python"
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_static_entry.py)
+        set_tests_properties("Validation - LLVM static function entry C and Python" PROPERTIES
+            ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         set(_dragon_predicate_args)
         if(NOT DRAGON_USE_Z3)
             list(APPEND _dragon_predicate_args --no-z3)

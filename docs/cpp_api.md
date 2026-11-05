@@ -894,6 +894,13 @@ Calls reload state and continue only on a matching Guest Return. This mode does
 not consume a V2 budget and must not be registered as a V2 implementation.
 See [the static contract](llvm-static-analysis-contract.md) for staged coverage.
 
+Before lifting, `setStaticEntryPolicy(StaticEntryPolicy::FunctionStart)` opts a
+static module into function-start entry only. Symbols become
+`dragon_static_entry_<arch>_<addr>`; other input PCs return Unsupported/Entry
+without executing Guest code. Internal branches and call continuations remain
+valid. `StaticEntryPolicy::Resumable` is the default. Neither policy assumes
+initialized memory or callee effects. See [entry views](llvm-static-entry.md).
+
 ### Lifting a single block without a Graph
 
 `liftBlock` is the `Graph`-free counterpart to `Disassembler::liftTrace` —

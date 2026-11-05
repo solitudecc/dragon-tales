@@ -207,7 +207,9 @@ def observables(snapshot):
 def compile_image(data, symbols, work, static, product, level, args, budget=10000):
     image = base.dragon.LoadedImage.load_bytes(data)
     graph = image.disassemble(base.dragon.Configuration(strategy=args.strategy))
-    lifter = base.dragon.LLVMLifter(2, execution_mode=2 if static else 1)
+    function_entry = static and getattr(args, 'function_entry', False)
+    lifter = base.dragon.LLVMLifter(2, execution_mode=2 if static else 1,
+                                  **({'static_entry_policy': 1} if function_entry else {}))
     entries = sorted(pc for pc in graph.function_addresses() if graph.get_function(pc).is_valid)
     if ENTRY not in entries:
         raise RuntimeError('analysis missed root entry')
@@ -231,7 +233,7 @@ def compile_image(data, symbols, work, static, product, level, args, budget=1000
         run([args.opt, '-S', '-passes=default<O2>', raw, '-o', selected], work, 'optimize')
     run([args.opt, '-passes=verify', '-disable-output', selected], work, 'verify-final')
     ir = raw.read_text()
-    prefix = 'dragon_static' if static else 'dragon_v2'
+    prefix = 'dragon_static_entry' if function_entry else 'dragon_static' if static else 'dragon_v2'
     names = []
     for pc in entries:
         symbol = f'{prefix}_x86_64_{pc:x}'
@@ -281,6 +283,7 @@ def main():
     parser.add_argument('--first-seed', type=int, default=1901)
     parser.add_argument('--trials', type=int, default=16)
     parser.add_argument('--strategy', type=int, choices=[0, 1], default=0)
+    parser.add_argument('--function-entry', action='store_true', help='use explicit function-start static views')
     parser.add_argument('--control', choices=['c-result', 'llvm-register', 'llvm-memory'])
     parser.add_argument('--expect-control', action='store_true')
     for name, default in [('clang', 'clang-21'), ('ld', 'ld.lld-21'), ('opt', 'opt-21'), ('llc', 'llc-21'), ('cc', 'gcc')]:
@@ -310,6 +313,7 @@ def main():
         if len(fields) == 6 and Path(fields[5]).name == 'libdragon.so':
             mapped_backends.add(Path(fields[5]))
     metadata = dict(tigress=args.tigress, tigress_version=version, profiles=profiles,
+                    static_entry_policy='function-start' if args.function_entry else 'resumable',
                     strategy=args.strategy, unicorn_version=unicorn_version,
                     clang=run([args.clang, '--version'], out, 'compiler-version').splitlines()[0],
                     source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

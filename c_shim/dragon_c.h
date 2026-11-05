@@ -669,6 +669,14 @@
 
   // Select before lifting; returns 0 for an invalid mode or a nonempty module.
   int dragon_llvm_lifter_set_execution_mode(dragon_llvm_lifter_t* l, dragon_llvm_execution_mode_t mode);
+  typedef enum dragon_llvm_static_entry_policy {
+      DRAGON_LLVM_ENTRY_RESUMABLE = 0,
+      DRAGON_LLVM_ENTRY_FUNCTION_START = 1
+  } dragon_llvm_static_entry_policy_t;
+  // StaticAnalysis only, before lifting. Function-start symbols are named
+  // dragon_static_entry_<arch>_<address>; invalid PCs return Unsupported/Entry.
+  int dragon_llvm_lifter_set_static_entry_policy(dragon_llvm_lifter_t* l,
+      dragon_llvm_static_entry_policy_t policy);
   // Objects must be non-null and caller-owned; see Execution.h.
   void dragon_llvm_execute_v2(dragon_guest_state_v2_t* state, dragon_guest_memory_v2_t* memory,
       dragon_exec_context_v2_t* context, dragon_exec_exit_v2_t* exit, uint64_t root_exit_pc);
