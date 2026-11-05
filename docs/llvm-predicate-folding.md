@@ -40,7 +40,7 @@ lifter.runDCE();
 ```
 
 ```python
-lifter.optimize()  # mem2reg → instcombine → GVN → predicate folding → DCE
+lifter.optimize()  # mem2reg → instcombine → GVN → MBA → predicate folding → DCE
 
 # 或单独运行，查询统计、调整预算：
 stats = lifter.run_predicate_folding(
@@ -51,6 +51,8 @@ stats = lifter.run_predicate_folding(
 C 接口是 `dragon_llvm_lifter_fold_predicates(lifter, timeout_ms, max_queries,
 max_expression_nodes, resource_limit, out_stats)`。空 lifter/out 返回 0，正常调用返回 1。
 C++ `PredicateFoldOptions` 与上述四个 Python 默认值一致；C 接口逐项传入这些预算。
+后续加入的 [MBA 化简步骤](llvm-mba-simplification.md) 位于 Python 管线的 GVN 与
+谓词折叠之间；本页历史测试数字仍记录谓词折叠单独引入时的结果。
 
 查询数由整模块共享，递归展开深度限制为 64、宽度最多 128、每个条件最多 256 个节点；
 总节点工作还限制为 `max_queries * max_expression_nodes`。每个候选 solver 使用指定

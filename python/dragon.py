@@ -1428,16 +1428,49 @@ class LLVMLifter:
             raise ValueError('invalid LLVM lifter')
         return PredicateFoldStats(stats[0])
 
+    def run_mba_simplification(self, timeout_ms=100, max_queries=16,
+                               max_expression_nodes=128, max_variables=3,
+                               resource_limit=1000000):
+        """Synthesize smaller integer MBAs, proving every rewrite with Z3.
+
+        SSA inputs remain independent, including different memory reads. No
+        initialization/path assumptions are added. Without Z3 this is a no-op.
+        Node limits are clamped to 1024, variable limits to 3 by the backend.
+        """
+        limits = (timeout_ms, max_queries, max_expression_nodes, max_variables, resource_limit)
+        if any(not isinstance(n, int) or not 0 <= n <= 0xffffffff for n in limits):
+            raise ValueError('MBA simplification limits must be uint32 integers')
+        stats = ffi.new('dragon_mba_simplify_stats_t *')
+        if not lib.dragon_llvm_lifter_simplify_mba(self._ptr, *limits, stats):
+            raise ValueError('invalid LLVM lifter')
+        return MBASimplifyStats(stats[0])
+
     def optimize(self):
-        """Run mem2reg → instcombine → GVN → predicate folding → DCE."""
+        """Run mem2reg → instcombine → GVN → MBA → predicate folding → DCE."""
         self.run_mem2reg()
         self.run_inst_combine()
         self.run_gvn()
+        self.run_mba_simplification()
         self.run_predicate_folding()
         self.run_dce()
 
     def __repr__(self):
         return '<LLVMLifter>'
+
+
+class MBASimplifyStats:
+    """Bounded MBA synthesis/proof results; timeouts never authorize rewrites."""
+
+    def __init__(self, stats):
+        self.available = bool(stats.available)
+        for name in ('expressions_visited', 'candidates', 'expressions_simplified',
+                     'solver_queries', 'unknown_queries', 'rejected_candidates', 'budget_skipped'):
+            setattr(self, name, int(getattr(stats, name)))
+
+    def __repr__(self):
+        return (f'<MBASimplifyStats available={self.available} '
+                f'simplified={self.expressions_simplified} queries={self.solver_queries} '
+                f'unknown={self.unknown_queries}>')
 
 
 class PredicateFoldStats:

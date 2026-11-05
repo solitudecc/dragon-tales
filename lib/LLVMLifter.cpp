@@ -11,6 +11,7 @@
 #include "utils/FloatOps.hpp"
 #include "LLVMImportMetadata.hpp"
 #include "LLVMPredicateFolding.hpp"
+#include "LLVMMBASimplification.hpp"
 #include <llvm/IR/Intrinsics.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -1180,6 +1181,18 @@ dragon::llvmlifter::LLVMLifter::runPredicateFolding(const PredicateFoldOptions &
 }
 
 // --- Accessors ---
+
+dragon::llvmlifter::MBASimplifyStats
+dragon::llvmlifter::LLVMLifter::runMBASimplification(const MBASimplifyOptions &options) {
+  auto stats = detail::simplifyMBA(*module_, options);
+  if (stats.expressionsSimplified) {
+    llvm::FunctionPassManager fpm;
+    fpm.addPass(llvm::InstCombinePass());
+    fpm.addPass(llvm::DCEPass());
+    runFPM(*module_, std::move(fpm));
+  }
+  return stats;
+}
 
 std::string dragon::llvmlifter::LLVMLifter::ir() const {
   std::string out;

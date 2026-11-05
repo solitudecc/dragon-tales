@@ -706,6 +706,25 @@
       uint32_t resource_limit,
       dragon_predicate_fold_stats_t* out);
 
+  typedef struct dragon_mba_simplify_stats {
+      int available;
+      size_t expressions_visited;
+      size_t candidates;
+      size_t expressions_simplified;
+      size_t solver_queries;
+      size_t unknown_queries;
+      size_t rejected_candidates;
+      size_t budget_skipped;
+  } dragon_mba_simplify_stats_t;
+
+  // Truth-table candidate synthesis with an UNSAT equivalence proof per rewrite.
+  // No Z3: available=0, IR unchanged. Limits suggested: 100/16/128/3/1000000.
+  // Expression nodes are clamped to 1024 and variables to 3. Zero time/queries/
+  // nodes/variables disables rewriting. Returns 0 for a null lifter/out.
+  int dragon_llvm_lifter_simplify_mba(dragon_llvm_lifter_t* l,
+      uint32_t timeout_ms, uint32_t max_queries, uint32_t max_expression_nodes,
+      uint32_t max_variables, uint32_t resource_limit, dragon_mba_simplify_stats_t* out);
+
   // -- FLIRT signatures (dragon::sigs) --------------------------------------------
 
   typedef struct dragon_sigdb dragon_sigdb_t;

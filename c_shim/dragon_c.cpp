@@ -1265,6 +1265,24 @@ int dragon_llvm_lifter_fold_predicates(dragon_llvm_lifter_t *l,
   return 1;
 }
 
+int dragon_llvm_lifter_simplify_mba(dragon_llvm_lifter_t *l,
+    uint32_t timeout_ms, uint32_t max_queries, uint32_t max_expression_nodes,
+    uint32_t max_variables, uint32_t resource_limit, dragon_mba_simplify_stats_t *out) {
+  if (out) *out = {};
+  if (!l || !out) return 0;
+  const auto stats = l->lifter.runMBASimplification(
+      {timeout_ms, max_queries, max_expression_nodes, max_variables, resource_limit});
+  out->available = stats.available;
+  out->expressions_visited = stats.expressionsVisited;
+  out->candidates = stats.candidates;
+  out->expressions_simplified = stats.expressionsSimplified;
+  out->solver_queries = stats.solverQueries;
+  out->unknown_queries = stats.unknownQueries;
+  out->rejected_candidates = stats.rejectedCandidates;
+  out->budget_skipped = stats.budgetSkipped;
+  return 1;
+}
+
 void dragon_slicer_destroy(dragon_slicer_t *s) { delete s; }
 
 dragon_slice_expr_t *dragon_slicer_slice_reg(const dragon_slicer_t *s,

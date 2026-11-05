@@ -918,7 +918,13 @@ normal continuation. Static functions are not V2 runtime targets. See
 | `dragon_llvm_lifter_run_mem2reg(l)` | — | Promotes allocas → SSA |
 | `dragon_llvm_lifter_run_inst_combine(l)` | — | Folds sub-register patterns |
 | `dragon_llvm_lifter_run_gvn(l)` | — | Eliminates redundant loads |
+| `dragon_llvm_lifter_simplify_mba(l, timeout_ms, max_queries, max_expression_nodes, max_variables, resource_limit, out_stats)` | `int` (0/1) | Word-level equivalence proof required for each rewrite; `dragon_mba_simplify_stats_t` |
+| `dragon_llvm_lifter_fold_predicates(l, timeout_ms, max_queries, max_expression_nodes, resource_limit, out_stats)` | `int` (0/1) | Bounded branch/select proofs; `dragon_predicate_fold_stats_t` |
 | `dragon_llvm_lifter_run_dce(l)` | — | Removes dead flag computations |
+
+The proof functions return 0 for a null lifter/output pointer and 1 otherwise.
+Without Z3 they report `available=0` and leave IR unchanged. Suggested MBA limits
+are `100/16/128/3/1000000`; see [options, statistics and scope](llvm-mba-simplification.md).
 
 ---
 

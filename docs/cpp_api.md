@@ -834,7 +834,13 @@ Run them in order for best results.
 | `runMem2Reg()` | Promotes allocas to SSA values, inserts φ-nodes |
 | `runInstCombine()` | Folds sub-register mask/OR patterns |
 | `runGVN()` | Eliminates redundant loads |
+| `runMBASimplification(options={})` | Returns `MBASimplifyStats`; bounded candidate synthesis and word-level equivalence proofs |
+| `runPredicateFolding(options={})` | Returns `PredicateFoldStats`; constant branch/select proofs and CFG cleanup |
 | `runDCE()` | Removes dead flag computations |
+
+Both proof APIs remain present without Z3 and report `available=false` without
+changing IR. See [MBA options and limits](llvm-mba-simplification.md) and
+[predicate folding](llvm-predicate-folding.md).
 
 ### Lifted function signature
 

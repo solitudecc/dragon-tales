@@ -206,6 +206,39 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+LLVM MBA simplification (2026-11-05, baseline `fafea17`): see
+`docs/llvm-mba-simplification.md`. New C++/C/Python synthesis API and Python
+optimize() stage before predicate folding. Every rewrite needs an UNSAT
+full-word equivalence check; 0/1 truth signatures only propose candidates.
+Defaults 100 ms / 16 queries / 128 nodes / 3 SSA inputs / 1000000 resources;
+width <=128, depth <=64, hard node cap 1024 and total expansion cap 1048576.
+No assumptions about image contents, paths or call effects;
+PHIs/casts/memory events remain SSA boundaries.
+No Z3: unavailable no-op. No Graph/IGNIL/Guest ABI changes or nonlinear/heap
+predicate/deflat claims. Eight C++ cases / 320 assertions, 1152 full native root
+returns match (102 A64 / 76 x64 fields + 64 KiB), zero exclusions/skips/normalizations.
+Old same 1152 semantics also match but 16 static modules miss simplification;
+existing optimize() regression fails old. New API C++ tests cannot compile old
+headers; that failure is preserved. Result/memory controls each detect 32/32
+single-field differences. CTest 568/568, no Z3 444/444 (component 1 case / 5 assertions).
+Tigress selected three profiles: 288 C + 576 LLVM matches, zero incomplete,
+CFG wrong or unlifted. Default per-kernel proven rewrites f-mba O0/O2=11/1,
+f-combo=16/11, f-opaque=0/0, both strategies. f-combo's 2/1 fewer branches also
+occur with matched InstCombine/DCE only; do not call them new predicate proofs.
+Full two-corpus static checks: 69 inputs / 138 strategies / 206649 recovered
+valid function checkpoints; 6530 raw + 6530 optimized modules verify, zero lift
+failures or coverage gaps. All input hashes and reported structural fields match
+the baseline, including known anomalies. Aggregate MBA: 8 queries,
+8 proved rewrites, 0 unknown, 0 rejected; unknown never rewrites.
+Ordinary-code counters include flags/state helpers, not only obfuscation.
+Artifacts and resumable strict corpus/summary drivers are in
+`~/vmc-runs/llvm-mba-20261105/`. They wrap unchanged check_one.py to record
+proof counters and actual mapped libraries. IR validity is not whole-corpus
+semantic proof. No new single-instruction/IGNIL campaign (unchanged lifters and
+optimizers). Existing original VM checkout is dirty; only use the owned
+`~/dragon-tales-overlap` worktree. Frozen old/new dual libraries and interface
+snapshots are in baseline/ and final/.
+
 LLVM integer predicate folding (2026-11-05, `docs/llvm-predicate-folding.md`):
 `LLVMLifter::runPredicateFolding` / C `dragon_llvm_lifter_fold_predicates` /
 Python `run_predicate_folding` prove scalar integer branch/select conditions

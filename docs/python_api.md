@@ -745,7 +745,7 @@ fn = graph.get_function(0x1000)
 if lifter.lift(fn, graph):
     print(lifter.ir())    # raw IR
 
-    lifter.optimize()     # mem2reg → instcombine → GVN → DCE
+    lifter.optimize()     # mem2reg → instcombine → GVN → MBA → predicates → DCE
 
     print(lifter.ir())    # optimized IR
 ```
@@ -798,6 +798,8 @@ recommended pipeline.
 lifter.run_mem2reg()      # promotes allocas to SSA values
 lifter.run_inst_combine() # folds sub-register mask/OR patterns
 lifter.run_gvn()          # eliminates redundant loads
+lifter.run_mba_simplification() # word-level equivalence proofs before rewrites
+lifter.run_predicate_folding()  # constant branch/select proofs and CFG cleanup
 lifter.run_dce()          # removes dead flag computations
 
 # equivalent shorthand:
@@ -813,7 +815,14 @@ lifter.optimize()
 | `run_mem2reg()` | — | |
 | `run_inst_combine()` | — | |
 | `run_gvn()` | — | |
+| `run_mba_simplification(timeout_ms=100, max_queries=16, max_expression_nodes=128, max_variables=3, resource_limit=1000000)` | `MBASimplifyStats` | Every rewrite requires UNSAT; without Z3, unavailable/no-op |
+| `run_predicate_folding(timeout_ms=25, max_queries=64, max_expression_nodes=256, resource_limit=200000)` | `PredicateFoldStats` | Bounded scalar integer branch/select proofs |
 | `run_dce()` | — | |
+| `optimize()` | — | Runs the pipeline above |
+
+See [MBA scope, budgets and statistics](llvm-mba-simplification.md) and
+[predicate folding](llvm-predicate-folding.md). Neither step assumes initialized
+heap data or changes the Guest execution protocol.
 
 ---
 
@@ -856,7 +865,6 @@ for address, name, length in db.match_entries(image, image_base, [0x1000, 0x1040
 | `match_at(data, address)` | `(address, name, length)` or `None` | `data` must begin at the candidate function's address |
 | `match_entries(image, image_base, entry_points)` | `list[(address, name, length)]` | |
 | `dragon.sigs_crc16(data)` | `int` | Module-level function, not a `SignatureDB` method |
-| `optimize()` | — | Runs all four passes in the recommended order |
 
 ---
 

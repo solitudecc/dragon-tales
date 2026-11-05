@@ -1,0 +1,633 @@
+{
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "a64-add32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "add",
+      "assembly": [
+        "eor w9, w0, w1",
+        "and w10, w0, w1",
+        "lsl w10, w10, #1",
+        "add w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "0900014a0a00010a4a791f5320010a0bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-xor32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "xor",
+      "assembly": [
+        "add w9, w0, w1",
+        "and w10, w0, w1",
+        "lsl w10, w10, #1",
+        "sub w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "0900010b0a00010a4a791f5320010a4bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-or32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "or",
+      "assembly": [
+        "add w9, w0, w1",
+        "and w10, w0, w1",
+        "sub w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "0900010b0a00010a20010a4bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-and32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "and",
+      "assembly": [
+        "add w9, w0, w1",
+        "orr w10, w0, w1",
+        "sub w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "0900010b0a00012a20010a4bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-bitwise32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "bitwise",
+      "assembly": [
+        "orr w9, w0, w1",
+        "and w10, w0, w1",
+        "sub w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "0900012a0a00010a20010a4bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-sub32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "sub",
+      "assembly": [
+        "mvn w9, w1",
+        "add w9, w0, w9",
+        "add w0, w9, #1",
+        "ret"
+      ],
+      "code_hex": "e903212a0900090b20050011c0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-nonlinear32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "nonlinear",
+      "assembly": [
+        "mul w9, w0, w0",
+        "sub w0, w9, w0",
+        "ret"
+      ],
+      "code_hex": "097c001b2001004bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-mask32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "mask",
+      "assembly": [
+        "and w9, w0, #0x80",
+        "and w10, w0, w1",
+        "lsl w10, w10, #1",
+        "add w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "090019120a00010a4a791f5320010a0bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-add64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "add",
+      "assembly": [
+        "eor x9, x0, x1",
+        "and x10, x0, x1",
+        "lsl x10, x10, #1",
+        "add x0, x9, x10",
+        "ret"
+      ],
+      "code_hex": "090001ca0a00018a4af97fd320010a8bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-xor64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "xor",
+      "assembly": [
+        "add x9, x0, x1",
+        "and x10, x0, x1",
+        "lsl x10, x10, #1",
+        "sub x0, x9, x10",
+        "ret"
+      ],
+      "code_hex": "0900018b0a00018a4af97fd320010acbc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-or64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "or",
+      "assembly": [
+        "add x9, x0, x1",
+        "and x10, x0, x1",
+        "sub x0, x9, x10",
+        "ret"
+      ],
+      "code_hex": "0900018b0a00018a20010acbc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-and64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "and",
+      "assembly": [
+        "add x9, x0, x1",
+        "orr x10, x0, x1",
+        "sub x0, x9, x10",
+        "ret"
+      ],
+      "code_hex": "0900018b0a0001aa20010acbc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-bitwise64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "bitwise",
+      "assembly": [
+        "orr x9, x0, x1",
+        "and x10, x0, x1",
+        "sub x0, x9, x10",
+        "ret"
+      ],
+      "code_hex": "090001aa0a00018a20010acbc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-sub64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "sub",
+      "assembly": [
+        "mvn x9, x1",
+        "add x9, x0, x9",
+        "add x0, x9, #1",
+        "ret"
+      ],
+      "code_hex": "e90321aa0900098b20050091c0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-nonlinear64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "nonlinear",
+      "assembly": [
+        "mul x9, x0, x0",
+        "sub x0, x9, x0",
+        "ret"
+      ],
+      "code_hex": "097c009b200100cbc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-mask64",
+      "architecture": "arm64",
+      "width": 64,
+      "kind": "mask",
+      "assembly": [
+        "and x9, x0, #0x80",
+        "and x10, x0, x1",
+        "lsl x10, x10, #1",
+        "add x0, x9, x10",
+        "ret"
+      ],
+      "code_hex": "090079920a00018a4af97fd320010a8bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-alias32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "alias",
+      "assembly": [
+        "ldr w9, [x19]",
+        "mov w12, #1",
+        "str w12, [x19]",
+        "ldr w10, [x19]",
+        "eor w11, w9, w10",
+        "and w9, w9, w10",
+        "lsl w9, w9, #1",
+        "add w0, w11, w9",
+        "ret"
+      ],
+      "code_hex": "690240b92c0080526c0200b96a0240b92b010a4a29010a0a29791f536001090bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "a64-three32",
+      "architecture": "arm64",
+      "width": 32,
+      "kind": "three",
+      "assembly": [
+        "add w9, w0, w1",
+        "add w9, w9, w2",
+        "and w10, w0, w1",
+        "lsl w10, w10, #1",
+        "sub w9, w9, w10",
+        "and w10, w0, w2",
+        "lsl w10, w10, #1",
+        "sub w9, w9, w10",
+        "and w10, w1, w2",
+        "lsl w10, w10, #1",
+        "sub w9, w9, w10",
+        "and w10, w0, w1",
+        "and w10, w10, w2",
+        "lsl w10, w10, #2",
+        "add w0, w9, w10",
+        "ret"
+      ],
+      "code_hex": "0900010b2901020b0a00010a4a791f5329010a4b0a00020a4a791f5329010a4b2a00020a4a791f5329010a4b0a00010a4a01020a4a751e5320010a0bc0035fd6",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-add32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "add",
+      "assembly": [
+        "mov r8d, edi",
+        "xor r8d, esi",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "shl r9d, 1",
+        "mov eax, r8d",
+        "add eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84131f04189f94121f141d1e14489c04401c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-xor32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "xor",
+      "assembly": [
+        "mov r8d, edi",
+        "add r8d, esi",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "shl r9d, 1",
+        "mov eax, r8d",
+        "sub eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84101f04189f94121f141d1e14489c04429c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-or32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "or",
+      "assembly": [
+        "mov r8d, edi",
+        "add r8d, esi",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "mov eax, r8d",
+        "sub eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84101f04189f94121f14489c04429c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-and32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "and",
+      "assembly": [
+        "mov r8d, edi",
+        "add r8d, esi",
+        "mov r9d, edi",
+        "or r9d, esi",
+        "mov eax, r8d",
+        "sub eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84101f04189f94109f14489c04429c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-bitwise32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "bitwise",
+      "assembly": [
+        "mov r8d, edi",
+        "or r8d, esi",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "mov eax, r8d",
+        "sub eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84109f04189f94121f14489c04429c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-sub32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "sub",
+      "assembly": [
+        "mov eax, esi",
+        "not eax",
+        "add eax, edi",
+        "add eax, 1",
+        "ret"
+      ],
+      "code_hex": "89f0f7d001f883c001c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-nonlinear32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "nonlinear",
+      "assembly": [
+        "mov eax, edi",
+        "imul eax, edi",
+        "sub eax, edi",
+        "ret"
+      ],
+      "code_hex": "89f80fafc729f8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-mask32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "mask",
+      "assembly": [
+        "mov r8d, edi",
+        "and r8d, 0x80",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "shl r9d, 1",
+        "mov eax, r8d",
+        "add eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84181e0800000004189f94121f141d1e14489c04401c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-add64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "add",
+      "assembly": [
+        "mov r8, rdi",
+        "xor r8, rsi",
+        "mov r9, rdi",
+        "and r9, rsi",
+        "shl r9, 1",
+        "mov rax, r8",
+        "add rax, r9",
+        "ret"
+      ],
+      "code_hex": "4989f84931f04989f94921f149d1e14c89c04c01c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-xor64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "xor",
+      "assembly": [
+        "mov r8, rdi",
+        "add r8, rsi",
+        "mov r9, rdi",
+        "and r9, rsi",
+        "shl r9, 1",
+        "mov rax, r8",
+        "sub rax, r9",
+        "ret"
+      ],
+      "code_hex": "4989f84901f04989f94921f149d1e14c89c04c29c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-or64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "or",
+      "assembly": [
+        "mov r8, rdi",
+        "add r8, rsi",
+        "mov r9, rdi",
+        "and r9, rsi",
+        "mov rax, r8",
+        "sub rax, r9",
+        "ret"
+      ],
+      "code_hex": "4989f84901f04989f94921f14c89c04c29c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-and64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "and",
+      "assembly": [
+        "mov r8, rdi",
+        "add r8, rsi",
+        "mov r9, rdi",
+        "or r9, rsi",
+        "mov rax, r8",
+        "sub rax, r9",
+        "ret"
+      ],
+      "code_hex": "4989f84901f04989f94909f14c89c04c29c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-bitwise64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "bitwise",
+      "assembly": [
+        "mov r8, rdi",
+        "or r8, rsi",
+        "mov r9, rdi",
+        "and r9, rsi",
+        "mov rax, r8",
+        "sub rax, r9",
+        "ret"
+      ],
+      "code_hex": "4989f84909f04989f94921f14c89c04c29c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-sub64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "sub",
+      "assembly": [
+        "mov rax, rsi",
+        "not rax",
+        "add rax, rdi",
+        "add rax, 1",
+        "ret"
+      ],
+      "code_hex": "4889f048f7d04801f84883c001c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-nonlinear64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "nonlinear",
+      "assembly": [
+        "mov rax, rdi",
+        "imul rax, rdi",
+        "sub rax, rdi",
+        "ret"
+      ],
+      "code_hex": "4889f8480fafc74829f8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-mask64",
+      "architecture": "x86_64",
+      "width": 64,
+      "kind": "mask",
+      "assembly": [
+        "mov r8, rdi",
+        "and r8, 0x80",
+        "mov r9, rdi",
+        "and r9, rsi",
+        "shl r9, 1",
+        "mov rax, r8",
+        "add rax, r9",
+        "ret"
+      ],
+      "code_hex": "4989f84981e0800000004989f94921f149d1e14c89c04c01c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-alias32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "alias",
+      "assembly": [
+        "mov r8d, dword ptr [rbx]",
+        "mov dword ptr [rbx], 1",
+        "mov r9d, dword ptr [rbx]",
+        "mov eax, r8d",
+        "xor eax, r9d",
+        "and r8d, r9d",
+        "shl r8d, 1",
+        "add eax, r8d",
+        "ret"
+      ],
+      "code_hex": "448b03c70301000000448b0b4489c04431c84521c841d1e04401c0c3",
+      "stubs": [],
+      "undefined_flags": []
+    },
+    {
+      "id": "x64-three32",
+      "architecture": "x86_64",
+      "width": 32,
+      "kind": "three",
+      "assembly": [
+        "mov r8d, edi",
+        "add r8d, esi",
+        "add r8d, edx",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "shl r9d, 1",
+        "sub r8d, r9d",
+        "mov r9d, edi",
+        "and r9d, edx",
+        "shl r9d, 1",
+        "sub r8d, r9d",
+        "mov r9d, esi",
+        "and r9d, edx",
+        "shl r9d, 1",
+        "sub r8d, r9d",
+        "mov r9d, edi",
+        "and r9d, esi",
+        "and r9d, edx",
+        "shl r9d, 2",
+        "mov eax, r8d",
+        "add eax, r9d",
+        "ret"
+      ],
+      "code_hex": "4189f84101f04101d04189f94121f141d1e14529c84189f94121d141d1e14529c84189f14121d141d1e14529c84189f94121f14121d141c1e1024489c04401c8c3",
+      "stubs": [],
+      "undefined_flags": []
+    }
+  ]
+}

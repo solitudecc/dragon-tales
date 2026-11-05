@@ -18,6 +18,7 @@ add_executable(dragon_tests
         obfush/TestObfush.cpp
         lifters/TestLLVMLifter.cpp
         lifters/TestLLVMPredicateFolding.cpp
+        lifters/TestLLVMMBA.cpp
         lifters/TestLLVMFunctionFlow.cpp
         lifters/TestLLVMDispatch.cpp
         lifters/TestLLVMGuestReturns.cpp
@@ -196,6 +197,11 @@ if(Python3_Interpreter_FOUND)
                 ${_dragon_predicate_args})
         set_tests_properties("Validation - LLVM predicate folding C and Python" PROPERTIES
             ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Validation - LLVM MBA C and Python"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_mba.py
+                ${_dragon_predicate_args})
+        set_tests_properties("Validation - LLVM MBA C and Python" PROPERTIES
+            ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         # Function execution retains machine branches, loops and Guest CALL/RET.
         # A/B are ordinary V2 regressions; Legacy keeps its explicit controls.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -220,6 +226,19 @@ if(Python3_Interpreter_FOUND)
                             --out ${CMAKE_CURRENT_BINARY_DIR}/predicate-${predicate_control}
                             ${_dragon_predicate_native_args} ${_dragon_predicate_control_args})
                     set_tests_properties("Validation - LLVM predicates ${predicate_control}" PROPERTIES
+                        ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                endforeach()
+                foreach(mba_control IN ITEMS normal result memory)
+                    set(_dragon_mba_control_args)
+                    if(NOT mba_control STREQUAL "normal")
+                        list(APPEND _dragon_mba_control_args --control ${mba_control} --expect-control)
+                    endif()
+                    add_test(NAME "Validation - LLVM MBA ${mba_control}"
+                        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/mba_function_diff.py
+                            --case a64-add32 --case x64-add64 --case a64-alias32 --case x64-alias32 --trials 2
+                            --out ${CMAKE_CURRENT_BINARY_DIR}/mba-${mba_control}
+                            ${_dragon_predicate_native_args} ${_dragon_mba_control_args})
+                    set_tests_properties("Validation - LLVM MBA ${mba_control}" PROPERTIES
                         ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
                 endforeach()
                 add_test(NAME "Validation - LLVM whole-function positive controls"

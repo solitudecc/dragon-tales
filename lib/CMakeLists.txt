@@ -8,6 +8,7 @@ add_library(libdragon SHARED
         IGNILSimplify.cpp
         LLVMLifter.cpp
         LLVMPredicateFolding.cpp
+        LLVMMBASimplification.cpp
         LLVMExecution.cpp
         LLVMImportMetadata.cpp
 )

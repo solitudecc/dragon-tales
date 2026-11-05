@@ -36,6 +36,25 @@ struct PredicateFoldStats {
   std::size_t budgetSkipped = 0;
 };
 
+struct MBASimplifyOptions {
+  std::uint32_t timeoutMs = 100;
+  std::uint32_t maxQueries = 16; ///< Shared by the module; zero disables rewriting.
+  std::uint32_t maxExpressionNodes = 128; ///< Clamped to 1024; depth is at most 64.
+  std::uint32_t maxVariables = 3; ///< Clamped to 3 independent SSA inputs.
+  std::uint32_t resourceLimit = 1000000;
+};
+
+struct MBASimplifyStats {
+  bool available = false;
+  std::size_t expressionsVisited = 0;
+  std::size_t candidates = 0;
+  std::size_t expressionsSimplified = 0;
+  std::size_t solverQueries = 0;
+  std::size_t unknownQueries = 0;
+  std::size_t rejectedCandidates = 0;
+  std::size_t budgetSkipped = 0;
+};
+
 class LLVMLifter {
   public:
   explicit LLVMLifter(Architecture arch,
@@ -91,6 +110,13 @@ class LLVMLifter {
   /// Scalar widths up to 128 bits and DAG depth up to 64 are supported.
   [[nodiscard]] PredicateFoldStats runPredicateFolding(
       const PredicateFoldOptions &options = {});
+
+  /// Synthesize smaller linear MBA expressions over integer SSA values.
+  /// Every rewrite requires an UNSAT word-level equivalence query. No path,
+  /// memory-initialization or call-effect assumptions are made. Without Z3
+  /// this is an unavailable no-op. Run after mem2reg/InstCombine/GVN.
+  [[nodiscard]] MBASimplifyStats runMBASimplification(
+      const MBASimplifyOptions &options = {});
 
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();

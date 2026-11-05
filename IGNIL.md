@@ -1418,6 +1418,9 @@ public:
     void runMem2Reg();        // promotes allocas → SSA, inserts PHIs
     void runInstCombine();    // folds sub-register mask/OR patterns
     void runGVN();            // eliminates redundant loads
+    // Bounded candidate synthesis + word-level Z3 equivalence proofs; see
+    // docs/llvm-mba-simplification.md for MBASimplifyOptions/Stats.
+    MBASimplifyStats runMBASimplification(const MBASimplifyOptions &options = {});
     // Optional bounded Z3 branch/select proofs + CFG cleanup; see
     // docs/llvm-predicate-folding.md for PredicateFoldOptions/Stats.
     PredicateFoldStats runPredicateFolding(const PredicateFoldOptions &options = {});
