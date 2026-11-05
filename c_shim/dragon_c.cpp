@@ -1247,6 +1247,24 @@ void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t *l) {
     l->lifter.runDCE();
 }
 
+int dragon_llvm_lifter_fold_predicates(dragon_llvm_lifter_t *l,
+    uint32_t timeout_ms, uint32_t max_queries, uint32_t max_expression_nodes,
+    uint32_t resource_limit,
+    dragon_predicate_fold_stats_t *out) {
+  if (out) *out = {};
+  if (!l || !out) return 0;
+  const auto stats = l->lifter.runPredicateFolding(
+      {timeout_ms, max_queries, max_expression_nodes, resource_limit});
+  out->available = stats.available;
+  out->conditions_visited = stats.conditionsVisited;
+  out->conditions_folded = stats.conditionsFolded;
+  out->solver_queries = stats.solverQueries;
+  out->unknown_queries = stats.unknownQueries;
+  out->unsupported_conditions = stats.unsupportedConditions;
+  out->budget_skipped = stats.budgetSkipped;
+  return 1;
+}
+
 void dragon_slicer_destroy(dragon_slicer_t *s) { delete s; }
 
 dragon_slice_expr_t *dragon_slicer_slice_reg(const dragon_slicer_t *s,

@@ -10,6 +10,7 @@
 #include <utility>
 #include "utils/FloatOps.hpp"
 #include "LLVMImportMetadata.hpp"
+#include "LLVMPredicateFolding.hpp"
 #include <llvm/IR/Intrinsics.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -19,6 +20,7 @@
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar/DCE.h>
 #include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
 namespace {
@@ -229,7 +231,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     llvm::IRBuilder<> out(unknown);
     emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regFile,regsPtr,out,DRAGON_DETAIL_ENTRY,0);
   }
-  if (stateful()) detail::recordLLVMImports(*module_,*llfn,fn,graph);
+  if (stateful()) ::dragon::detail::recordLLVMImports(*module_,*llfn,fn,graph);
   return true;
 }
 void dragon::llvmlifter::LLVMLifter::collectRegsFromOps(
@@ -1162,6 +1164,19 @@ void dragon::llvmlifter::LLVMLifter::runDCE() {
   llvm::FunctionPassManager fpm;
   fpm.addPass(llvm::DCEPass());
   runFPM(*module_, std::move(fpm));
+}
+
+dragon::llvmlifter::PredicateFoldStats
+dragon::llvmlifter::LLVMLifter::runPredicateFolding(const PredicateFoldOptions &options) {
+  auto stats = detail::foldPredicates(*module_, options);
+  if (stats.conditionsFolded) {
+    llvm::FunctionPassManager fpm;
+    fpm.addPass(llvm::SimplifyCFGPass());
+    fpm.addPass(llvm::InstCombinePass());
+    fpm.addPass(llvm::DCEPass());
+    runFPM(*module_, std::move(fpm));
+  }
+  return stats;
 }
 
 // --- Accessors ---

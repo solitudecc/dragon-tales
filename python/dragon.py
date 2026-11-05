@@ -1411,15 +1411,51 @@ class LLVMLifter:
         """Remove dead flag computations."""
         lib.dragon_llvm_lifter_run_dce(self._ptr)
 
+    def run_predicate_folding(self, timeout_ms=25, max_queries=64,
+                              max_expression_nodes=256, resource_limit=200000):
+        """Prove integer branch/select conditions constant, then clean the CFG.
+
+        Unknown inputs are not initialized from the image. Unsupported cases
+        and failed/budget-limited proofs remain intact. Without Z3, available
+        is False and this step leaves IR unchanged. Zero timeout or query
+        budget disables SMT queries; literal constant conditions may still fold.
+        """
+        limits = (timeout_ms, max_queries, max_expression_nodes, resource_limit)
+        if any(not isinstance(n, int) or not 0 <= n <= 0xffffffff for n in limits):
+            raise ValueError('predicate folding limits must be uint32 integers')
+        stats = ffi.new('dragon_predicate_fold_stats_t *')
+        if not lib.dragon_llvm_lifter_fold_predicates(self._ptr, *limits, stats):
+            raise ValueError('invalid LLVM lifter')
+        return PredicateFoldStats(stats[0])
+
     def optimize(self):
-        """Run the standard pipeline: mem2reg → instcombine → GVN → DCE."""
+        """Run mem2reg → instcombine → GVN → predicate folding → DCE."""
         self.run_mem2reg()
         self.run_inst_combine()
         self.run_gvn()
+        self.run_predicate_folding()
         self.run_dce()
 
     def __repr__(self):
         return '<LLVMLifter>'
+
+
+class PredicateFoldStats:
+    """Results of LLVM integer predicate proofs; unknowns are not successes."""
+
+    def __init__(self, stats):
+        self.available = bool(stats.available)
+        self.conditions_visited = int(stats.conditions_visited)
+        self.conditions_folded = int(stats.conditions_folded)
+        self.solver_queries = int(stats.solver_queries)
+        self.unknown_queries = int(stats.unknown_queries)
+        self.unsupported_conditions = int(stats.unsupported_conditions)
+        self.budget_skipped = int(stats.budget_skipped)
+
+    def __repr__(self):
+        return (f'<PredicateFoldStats available={self.available} '
+                f'folded={self.conditions_folded} queries={self.solver_queries} '
+                f'unknown={self.unknown_queries}>')
 
 
 # -- FLIRT signatures (dragon::sigs) --------------------------------------------

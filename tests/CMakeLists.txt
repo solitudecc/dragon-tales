@@ -17,6 +17,7 @@ add_executable(dragon_tests
         sigs/TestSignatureMatcher.cpp
         obfush/TestObfush.cpp
         lifters/TestLLVMLifter.cpp
+        lifters/TestLLVMPredicateFolding.cpp
         lifters/TestLLVMFunctionFlow.cpp
         lifters/TestLLVMDispatch.cpp
         lifters/TestLLVMGuestReturns.cpp
@@ -186,6 +187,15 @@ if(Python3_Interpreter_FOUND)
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_static.py)
         set_tests_properties("Validation - LLVM static C and Python mirror" PROPERTIES
             ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        set(_dragon_predicate_args)
+        if(NOT DRAGON_USE_Z3)
+            list(APPEND _dragon_predicate_args --no-z3)
+        endif()
+        add_test(NAME "Validation - LLVM predicate folding C and Python"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_predicates.py
+                ${_dragon_predicate_args})
+        set_tests_properties("Validation - LLVM predicate folding C and Python" PROPERTIES
+            ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         # Function execution retains machine branches, loops and Guest CALL/RET.
         # A/B are ordinary V2 regressions; Legacy keeps its explicit controls.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -195,6 +205,23 @@ if(Python3_Interpreter_FOUND)
             execute_process(COMMAND ${Python3_EXECUTABLE} -c "import unicorn"
                             RESULT_VARIABLE _dragon_flow_unicorn_missing OUTPUT_QUIET ERROR_QUIET)
             if(DRAGON_FLOW_LLC AND DRAGON_FLOW_OPT AND DRAGON_FLOW_CC AND _dragon_flow_unicorn_missing EQUAL 0)
+                set(_dragon_predicate_native_args)
+                if(NOT DRAGON_USE_Z3)
+                    list(APPEND _dragon_predicate_native_args --expect-no-z3)
+                endif()
+                foreach(predicate_control IN ITEMS normal result memory)
+                    set(_dragon_predicate_control_args)
+                    if(NOT predicate_control STREQUAL "normal")
+                        list(APPEND _dragon_predicate_control_args --control ${predicate_control} --expect-control)
+                    endif()
+                    add_test(NAME "Validation - LLVM predicates ${predicate_control}"
+                        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/predicate_fold_diff.py
+                            --case even64 --case square64 --trials 2
+                            --out ${CMAKE_CURRENT_BINARY_DIR}/predicate-${predicate_control}
+                            ${_dragon_predicate_native_args} ${_dragon_predicate_control_args})
+                    set_tests_properties("Validation - LLVM predicates ${predicate_control}" PROPERTIES
+                        ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>" TIMEOUT 180)
+                endforeach()
                 add_test(NAME "Validation - LLVM whole-function positive controls"
                     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/validation/function_llvm_diff.py
                         --case control_store --case control_branch --case control_loop

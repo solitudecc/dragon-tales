@@ -687,6 +687,25 @@
   void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t* l);
 
+  typedef struct dragon_predicate_fold_stats {
+      int available;
+      size_t conditions_visited;
+      size_t conditions_folded;
+      size_t solver_queries;
+      size_t unknown_queries;
+      size_t unsupported_conditions;
+      size_t budget_skipped;
+  } dragon_predicate_fold_stats_t;
+
+  // Bounded integer branch/select proofs, followed by CFG cleanup. Run after
+  // mem2reg/instcombine/GVN. No Z3: available=0 and IR unchanged. Zero timeout
+  // or query budget disables SMT queries; literal conditions may still fold.
+  // Returns 0 for a null lifter/out, 1 otherwise. Suggested limits: 25/64/256/200000.
+  int dragon_llvm_lifter_fold_predicates(dragon_llvm_lifter_t* l,
+      uint32_t timeout_ms, uint32_t max_queries, uint32_t max_expression_nodes,
+      uint32_t resource_limit,
+      dragon_predicate_fold_stats_t* out);
+
   // -- FLIRT signatures (dragon::sigs) --------------------------------------------
 
   typedef struct dragon_sigdb dragon_sigdb_t;

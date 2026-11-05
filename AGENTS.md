@@ -206,6 +206,42 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+LLVM integer predicate folding (2026-11-05, `docs/llvm-predicate-folding.md`):
+`LLVMLifter::runPredicateFolding` / C `dragon_llvm_lifter_fold_predicates` /
+Python `run_predicate_folding` prove scalar integer branch/select conditions
+without path or image-memory assumptions. Python `optimize()` now runs this
+after mem2reg/InstCombine/GVN and before DCE. Defaults: 25 ms/query, 64 queries
+per module, 256 expression nodes, 200000 Z3 resource units. Only UNSAT/exact
+constants rewrite conditions; unknown/unsupported/budget exits retain them.
+Distinct SSA loads remain independent; PHIs/freeze are opaque inputs. Reject
+explicit undef/poison, overflow flags, variable/invalid/exact shifts, FP,
+division, call results and atomic/volatile reads. No Z3: API reports unavailable
+and leaves IR unchanged. Graph/IGNIL/dispatch targets and Guest ABI are unchanged.
+Ten C++ regressions / 395 assertions, 250 independent A64 condition computations,
+192 full-state native root returns (102 fields + 64 KiB), and 16 result + 16
+memory negative controls. Old existing `optimize()` regression fails; old 192
+semantic comparisons match but eight static modules retain constant branches.
+New C++ API tests cannot compile against old headers; that failure is saved.
+CTest 556/556; no Z3 439/439. Tigress 2.1 seed 4242 f-mba/f-opaque/f-combo,
+O0/O2, both strategies: 288 C and 576 full LLVM matches, no incomplete or
+unlifted. Important attribution: all measured Tigress kernel reductions also
+occur with zero queries; newly proved SMT conditions are zero, including a
+larger-budget followup. Do not call literal CFG cleanup opaque-predicate proof
+or claim heap-dependent predicates/deflat/MBA rewriting are implemented.
+Full static corpora: 69 inputs / 138 strategies / 206649 function checkpoints,
+6530 raw + 6530 optimized modules verify, zero lift failures and complete
+coverage of recovered valid functions. All 69 input hashes match the baseline;
+reported structural fields in all 138 strategy records remain unchanged,
+including known anomalies. This is IR
+validity, not whole-corpus semantic proof. VM reboot recovery reused 25 audited
+records and checked the remaining 44; the damaged no-Z3 log was retained and
+all 439 tests rerun successfully. New and old tested dual libraries and C/Python
+interface snapshots are frozen under final/ and baseline/ respectively.
+Artifacts and frozen dual libraries are in
+`~/vmc-runs/llvm-predicates-20261105/`. The initial V2
+optimized corpus attempt is partial and preserved separately after high RAM/
+swap use; it must not be reported as full V2 corpus success.
+
 Tigress VM and function-level study (2026-11-04, `docs/tigress-vm-challenge.md`,
 `tigress_vm_challenge.py [--function-level]`): Virtualize switch and MBA +
 switch-Flatten + true/false opaque predicates execute fully (all 6 plans);

@@ -8,6 +8,8 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <cstddef>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -16,6 +18,23 @@
 namespace dragon::llvmlifter {
 
 enum class ExecutionMode { Legacy = 0, StatefulV2 = 1, StaticAnalysis = 2 };
+
+struct PredicateFoldOptions {
+  std::uint32_t timeoutMs = 25;          ///< Per solver query; zero disables queries.
+  std::uint32_t maxQueries = 64;         ///< Shared by the whole module.
+  std::uint32_t maxExpressionNodes = 256; ///< Per condition, also bounds total work.
+  std::uint32_t resourceLimit = 200000; ///< Z3 resource units per candidate solver.
+};
+
+struct PredicateFoldStats {
+  bool available = false; ///< False in a build without Z3; IR is then unchanged.
+  std::size_t conditionsVisited = 0;
+  std::size_t conditionsFolded = 0;
+  std::size_t solverQueries = 0;
+  std::size_t unknownQueries = 0;
+  std::size_t unsupportedConditions = 0;
+  std::size_t budgetSkipped = 0;
+};
 
 class LLVMLifter {
   public:
@@ -63,6 +82,15 @@ class LLVMLifter {
   void runInstCombine(); // folds sub-register mask/OR patterns
   void runGVN(); // eliminates redundant loads
   void runDCE(); // removes dead flag computations
+
+  /// Prove integer branch/select conditions constant for all input values,
+  /// then simplify the CFG and dead computations. Run after mem2reg and the
+  /// ordinary integer passes. Loads/PHIs are independent unknown SSA inputs;
+  /// no memory contents, callee effects or predecessor guards are assumed.
+  /// Unsupported expressions, solver unknowns and exhausted budgets stay intact.
+  /// Scalar widths up to 128 bits and DAG depth up to 64 are supported.
+  [[nodiscard]] PredicateFoldStats runPredicateFolding(
+      const PredicateFoldOptions &options = {});
 
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();
