@@ -39,6 +39,10 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
   // Build LLVM register integer -> ignil::Reg mapping
   for (unsigned i = 0; i < regInfo.getNumRegs(); ++i) {
     std::string_view name = regInfo.getName(i);
+    if (name == "FS" || name == "GS" ||
+        (architecture_ == Architecture::X86_32 &&
+         (name == "CS" || name == "DS" || name == "ES" || name == "SS")))
+      unmodelledSegmentRegs_.insert(i);
     if (name.size()==3 && name.starts_with("ST") && name[2]>='0' && name[2]<='7')
       x87StackIndex_.emplace(i,name[2]-'0');
     if (name.size()==3 && name.starts_with("MM") && name[2]>='0' && name[2]<='7')
@@ -1234,6 +1238,21 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
 
   if (liftX87(insn,out,tempId)) return;
 
+  if (hasUnmodelledMemorySegment(*mc)) {
+    // A flat address would read/write a different location. Keep definitions
+    // unknown and expose the unsupported boundary to every analysis consumer.
+    liftUnsupported(*mc,addr,out,tempId);
+    const auto &desc=instrInfo_->get(mc->getOpcode());
+    if (desc.isBranch() || desc.isCall()) {
+      auto target=newTemp(tempId,architecture_ == Architecture::X86_64 ? 64 : 32);
+      out.append({ignil::Opcode::UNDEF,target,{},addr});
+      out.append({desc.isCall() ? ignil::Opcode::CALL : ignil::Opcode::JMP,
+                  std::nullopt,{target},addr});
+    }
+    out.noteUnlifted(addr);
+    return;
+  }
+
   // Memory-operand forms lifted through their register form: from here on
   // `mc` is that register form over a scratch register; the epilogue at the
   // end of this function stores the result back and restores the scratch.
@@ -1542,56 +1561,7 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
         out.noteUnlifted(addr);
       } else liftJmp(*mc, addr, insn.size(), out, tempId);
     } else {
-      // Unknown instruction. Side-effect-free ones (prefetch, fence, nop,
-      // ...) have no explicit register-def operands, so nothing is emitted
-      // for them - preserves the existing "no UNDEF for no-op instructions"
-      // behavior. Anything that *does* define a register but has no lifter
-      // yet must still mark that register UNDEF, so downstream flag/value
-      // reads see an honest "unknown" instead of a silently stale value
-      // (this is what let a dropped mem-destination MOV/ADD/SUB/CMP corrupt
-      // later flag reads before the dedicated lifters above existed).
-      // An XMM/YMM/ZMM destination clobbers both modelled halves (a YMM
-      // has no IGNIL register of its own, so toReg alone would clobber
-      // nothing and leave its low 128 bits stale).
-      auto clobber = [&](unsigned llvmReg) {
-        if (auto v = vecRegIndex_.find(llvmReg); v != vecRegIndex_.end()) {
-          emitUndef(regXmmLo_[v->second], addr, out);
-          emitUndef(regXmmHi_[v->second], addr, out);
-        } else if (auto dst = toReg(llvmReg)) {
-          emitUndef(*dst, addr, out);
-        }
-      };
-      for (unsigned i = 0; i < desc.getNumDefs(); ++i) {
-        const auto &defOp = mc->getOperand(i);
-        if (!defOp.isReg())
-          continue;
-        clobber(defOp.getReg());
-      }
-      // The same goes for registers the instruction defines implicitly - the
-      // accumulator of `mul`, RCX/RSI/RDI of a string op. They are not MCInst
-      // operands, so the loop above never sees them; without this an
-      // unlifted `mul rbx` leaves RAX and RDX holding their old values and
-      // every consumer downstream is confidently wrong (LifterGaps.md #5).
-      bool definesFlags = false;
-      for (const llvm::MCPhysReg implicitDef: desc.implicit_defs()) {
-        if (implicitDef == llvmEflags_)
-          definesFlags = true;
-        else
-          clobber(implicitDef);
-      }
-      // EFLAGS is not an IGNIL register (the flags are separate ones), so it
-      // needs spelling out: an unlifted flag-writing instruction ahead of a
-      // `pushfq` or a `jcc` must not leave the previous instruction's flags
-      // in place.
-      if (definesFlags && llvmEflags_ != 0)
-        emitArithFlags(addr, out, tempId);
-
-      // Anything that defines something, or has a memory operand it may write
-      // through, was really not lifted - as opposed to a nop or a prefetch.
-      constexpr unsigned kMemoryOperandCount = 5;
-      if (desc.getNumDefs() != 0 || !desc.implicit_defs().empty() ||
-          mc->getNumOperands() >= kMemoryOperandCount || desc.isCall() || desc.isReturn())
-        out.noteUnlifted(addr);
+      liftUnsupported(*mc,addr,out,tempId);
     }
   }
 
@@ -1605,6 +1575,83 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
     out.append({ignil::Opcode::COPY, scratch->full,
                 {ignil::Value{scratch->saved}}, addr});
   }
+}
+
+bool dragon::x86::X86IGNILLifter::hasUnmodelledMemorySegment(const llvm::MCInst &mc) const {
+  const auto opc=mc.getOpcode();
+  // LEA only computes the effective offset; hints and memory NOPs never
+  // access memory. A segment prefix has no effect on any of these.
+  if (opc == opLea64r_ || opc == opLea32r_ || opc == opLea64_32r_ ||
+      nopOpcodes_.contains(opc)) return false;
+  if (auto it=memOperandOps_.find(opc); it != memOperandOps_.end() &&
+      it->second.form == MemOperandForm::Offset) {
+    return mc.getNumOperands() >= 2 && mc.getOperand(1).isReg() &&
+           unmodelledSegmentRegs_.contains(mc.getOperand(1).getReg());
+  }
+  const auto &desc=instrInfo_->get(opc);
+  for (unsigned i=0;i<desc.getNumOperands();++i) {
+    if (desc.operands()[i].OperandType != llvm::MCOI::OPERAND_MEMORY) continue;
+    if (i+5 > mc.getNumOperands()) return false;
+    const auto &segment=mc.getOperand(i+4);
+    return segment.isReg() && unmodelledSegmentRegs_.contains(segment.getReg());
+  }
+  return false;
+}
+
+void dragon::x86::X86IGNILLifter::liftUnsupported(const llvm::MCInst &mc,
+    std::uint64_t addr, ignil::Block &out, std::uint32_t &tmp) const {
+  const auto &desc=instrInfo_->get(mc.getOpcode());
+  // Unknown instruction. Side-effect-free ones (prefetch, fence, nop,
+  // ...) have no explicit register-def operands, so nothing is emitted
+  // for them - preserves the existing "no UNDEF for no-op instructions"
+  // behavior. Anything that *does* define a register but has no lifter
+  // yet must still mark that register UNDEF, so downstream flag/value
+  // reads see an honest "unknown" instead of a silently stale value
+  // (this is what let a dropped mem-destination MOV/ADD/SUB/CMP corrupt
+  // later flag reads before the dedicated lifters above existed).
+  // An XMM/YMM/ZMM destination clobbers both modelled halves (a YMM
+  // has no IGNIL register of its own, so toReg alone would clobber
+  // nothing and leave its low 128 bits stale).
+  auto clobber = [&](unsigned llvmReg) {
+    if (auto v = vecRegIndex_.find(llvmReg); v != vecRegIndex_.end()) {
+      emitUndef(regXmmLo_[v->second], addr, out);
+      emitUndef(regXmmHi_[v->second], addr, out);
+    } else if (auto dst = toReg(llvmReg)) {
+      emitUndef(*dst, addr, out);
+    }
+  };
+  for (unsigned i = 0; i < desc.getNumDefs(); ++i) {
+    const auto &defOp = mc.getOperand(i);
+    if (!defOp.isReg())
+      continue;
+    clobber(defOp.getReg());
+  }
+  // The same goes for registers the instruction defines implicitly - the
+  // accumulator of `mul`, RCX/RSI/RDI of a string op. They are not MCInst
+  // operands, so the loop above never sees them; without this an
+  // unlifted `mul rbx` leaves RAX and RDX holding their old values and
+  // every consumer downstream is confidently wrong (LifterGaps.md #5).
+  bool definesFlags = false;
+  for (const llvm::MCPhysReg implicitDef: desc.implicit_defs()) {
+    if (implicitDef == llvmEflags_)
+      definesFlags = true;
+    else
+      clobber(implicitDef);
+  }
+  // EFLAGS is not an IGNIL register (the flags are separate ones), so it
+  // needs spelling out: an unlifted flag-writing instruction ahead of a
+  // `pushfq` or a `jcc` must not leave the previous instruction's flags
+  // in place.
+  if (definesFlags && llvmEflags_ != 0)
+    emitArithFlags(addr, out, tmp);
+
+  // Anything that defines something, or has a memory operand it may write
+  // through, was really not lifted - as opposed to a nop or a prefetch.
+  constexpr unsigned kMemoryOperandCount = 5;
+  if (desc.getNumDefs() != 0 || !desc.implicit_defs().empty() ||
+      mc.getNumOperands() >= kMemoryOperandCount || desc.mayLoad() || desc.mayStore() ||
+      desc.isCall() || desc.isReturn())
+    out.noteUnlifted(addr);
 }
 
 void dragon::x86::X86IGNILLifter::liftBmi(const llvm::MCInst &mc, BmiKind kind,
@@ -3898,8 +3945,14 @@ void dragon::x86::X86IGNILLifter::liftLea(const llvm::MCInst &mc,
     return;
   }
 
-  const ignil::Width ptrWidth =
+  ignil::Width ptrWidth =
           (architecture_ == Architecture::X86_64) ? 64 : 32;
+  // Address-size overrides select narrower base/index registers in MCInst.
+  // LEA wraps the effective offset at that width before writing its result,
+  // including a 64-bit destination. Do not add at destination width first.
+  for (unsigned operand : {1u,3u})
+    if (auto reg=toReg(mc.getOperand(operand).getReg()))
+      ptrWidth=std::min(ptrWidth,reg->width);
   auto addrTemp = emitAddress(mc, 1, ptrWidth, addr, out, tmp);
   out.append({ignil::Opcode::COPY, *dst, {addrTemp}, addr});
 }
@@ -4111,14 +4164,14 @@ bool dragon::x86::X86IGNILLifter::liftString(const Instruction &insn,
   for (auto byte : insn.bytes()) {
     if (byte == 0xf2 || byte == 0xf3) repetition=byte;
     else if (byte == 0x64 || byte == 0x65) unknownSegment=true;
-    else if (byte == 0x26 || byte == 0x2e || byte == 0x36 || byte == 0x3e) unknownSegment=false;
+    else if (byte == 0x26 || byte == 0x2e || byte == 0x36 || byte == 0x3e) unknownSegment=!is64;
     else if (byte == 0x66 || byte == 0x67 || byte == 0xf0 || (is64 && byte >= 0x40 && byte <= 0x4f)) {}
     else break;
   }
   const bool readSource=*kind == Kind::Move || *kind == Kind::Load || *kind == Kind::Compare;
   const bool useDestination=*kind != Kind::Load;
   const bool compare=*kind == Kind::Compare || *kind == Kind::Scan;
-  if (unknownSegment && readSource) out.noteUnlifted(address); // FS/GS base is outside this register model.
+  if (unknownSegment && readSource) out.noteUnlifted(address); // Explicit non-flat segment bases are outside this register model.
   auto emit=[&](O code,std::vector<Value> values,ignil::Width bits) {
     auto result=newTemp(tmp,bits); out.append({code,result,std::move(values),address}); return result;
   };

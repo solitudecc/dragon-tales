@@ -1,0 +1,250 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_32_fs_gpr_load",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c705648b430883c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "648b4308",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_gs_gpr_store",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c7056589430883c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "65894308",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_gs_sse_load",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c705650f10431083c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "650f104310",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_fs_sse_store",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c705640f11431083c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "640f114310",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_fs_rmw",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c7056401430883c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "64014308",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_gs_memory_call",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c70565ff530883c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "65ff5308",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_fs_memory_jump",
+      "architecture": "x86_32",
+      "expectation": "unsupported",
+      "code_hex": "83ec10b84433221189432083c70564ff630883c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "64ff6308",
+      "unsupported_before": [
+        4110
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_segment_lea",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "83ec10b84433221189432083c705648d4308658d530983c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "648d4308658d5309",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_32_segment_bytes_in_data",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "83ec10b84433221189432083c705b8646500008943648b5365b96564000083c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "b8646500008943648b5365b965640000",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_fs_gpr_load",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c705648b43084883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "648b4308",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_gs_gpr_store",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c70565488943084883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "6548894308",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_gs_sse_load",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c705650f1043104883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "650f104310",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_fs_sse_store",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c705640f1143104883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "640f114310",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_fs_rmw",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c70564480143084883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "6448014308",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_gs_memory_call",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c70565ff53084883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "65ff5308",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_fs_memory_jump",
+      "architecture": "x86_64",
+      "expectation": "unsupported",
+      "code_hex": "4883ec10b84433221189432083c70564ff63084883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "64ff6308",
+      "unsupported_before": [
+        4111
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_segment_lea",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "4883ec10b84433221189432083c70564488d430865488d53094883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "64488d430865488d5309",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_segment_bytes_in_data",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "4883ec10b84433221189432083c705b8646500008943648b5365b9656400004883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "b8646500008943648b5365b965640000",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_ignored_long_mode_segments",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "4883ec10b84433221189432083c7053e488b43082648894310360f1043102e0f1143304883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "3e488b43082648894310360f1043102e0f114330",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_addr32_lea_wrap",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "baseline_different": true,
+      "expected_rax": 85,
+      "code_hex": "4883ec10b84433221189432083c70548bbf0ffffff785634126467488d43654883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "48bbf0ffffff785634126467488d4365",
+      "undefined_flags": [],
+      "stubs": []
+    }
+  ]
+}

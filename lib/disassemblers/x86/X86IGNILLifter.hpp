@@ -139,6 +139,13 @@ class X86IGNILLifter {
   void liftInstruction(const Instruction &insn, ignil::Block &out,
                        std::uint32_t &tempId) const;
 
+  // Explicit segment bases are not part of the register/Guest model. Inspect
+  // the original memory operand before scratch-register rewriting loses it.
+  [[nodiscard]] bool hasUnmodelledMemorySegment(const llvm::MCInst &mc) const;
+  std::unordered_set<unsigned> unmodelledSegmentRegs_;
+  void liftUnsupported(const llvm::MCInst &mc, std::uint64_t addr,
+                       ignil::Block &out, std::uint32_t &tmp) const;
+
   /// Dispatch for the rotate / bit-operation family added for VMProtect
   /// mutation handlers (ROL/ROR/RCL/RCR, BTS/BTR/BTC, BSF/BSR, CMOVcc, XADD,
   /// memory INC/DEC, accumulator XCHG, MOV8ri_alt, LAHF/SAHF). Returns true if
