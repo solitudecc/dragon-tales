@@ -173,7 +173,8 @@ Gotchas:
   memory access or architectural write; REPE/REPNE comparisons check ZF
   after each subtraction. Each iteration reads memory before writes, so
   overlapping copies retain sequential hardware behavior. FS/GS source bases
-  remain unmodelled and are explicitly recorded as unlifted.
+  and explicit x86-32 source segments remain unmodelled and are explicitly
+  recorded as unlifted.
 - `Disassembler::AnalysisHints{entryPoints, readMemory}`: entry points are
   function + block starts and recursive-traversal roots; `readMemory` lets
   jump-table resolution read tables outside the analysed bytes.
@@ -206,6 +207,98 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+x86 segmented-memory hardening (2026-11-06/07, baseline `b95c84b`): see
+`docs/x86-segmented-memory.md`. Production/tests/fixture `359df9a` are validated;
+final Git state is recorded in the external receipt. Hardened DSOs are
+7223b80f... (Z3) / aa127d9f... (no Z3); `fdf138c` is pre-hardening history.
+Ordinary x64 FS/GS and x86-32 explicit segments use honest UNDEF + unlifted,
+never an invented flat memory address. Inspect original MC before scratch
+rewriting; moffs has its own layout. Clobber real defs/flags and both XMM halves;
+keep unknown-target CALL/JMP skeletons. Unsupported mayLoad/mayStore covers
+implicit MASKMOVDQU. PAUSE/MFENCE/LFENCE/SFENCE are no-ops in the fixed
+single-thread Guest model. LEA, hints, implicit SS stack accesses, fixed-ES
+STOS/SCAS and long-mode ignored CS/DS/ES/SS bases stay supported. String/x87
+specialists remain; explicit x86-32 source-string segments are unknown too.
+A narrow register-based addr32 LEA wrap is fixed; no general EA-width repair.
+No segment bases/descriptors, IGNIL opcodes, public ABI or Guest fields added.
+Pure unsupported STORE may have zero IR ops: consumers must check unlifted.
+V2/Static stop before it; Legacy whole-function IR still does not uniformly
+reject it (single-block trace does), so clients must reject incomplete IR.
+
+Final CTest 632/632, no Z3 507/507; component 13 cases/1142 assertions,
+no-Z3 13/1114. Same test source on b95 fails 348/1338 assertions in9/13 cases;
+fdf fails8/1142 in the fence case. Independent segment oracle:390 unique
+checks+PC plan,0 failures/skips/exclusions/normalizations;64/64 dropped-LOAD
+controls and96/100 flattened controls detected, four ADD-zero controls agree
+and are explicit. Forty-two/39 production objects verify; only X86.cpp.o
+changes from fdf. All other lowering/production objects are identical.
+Hardened native:17 fresh groups/2632 comparisons,896 complete roots+1568
+explicit Unsupported boundaries; result/memory controls each80 exact field/byte
+differences. Eight fdf hint rejections are separate old-version failure controls.
+392 exe/module reports and78 snapshot files hash-verify;0 errors/exclusions/
+skips/normalizations, all modelled fields+64KiB compared. Only b95 six groups
+1920 are reused after memberSHA+240ldd checks:480 ordinary matches/96 LEA RAX
+CPU differences/1344 boundary-contract differences. No fdf success reuse.
+
+Final corpus:69 inputs/138 fresh Graph inventories. Fresh raw3 inputs/6
+strategies/10467 valid-function checkpoints/86 modules; verified reuse66/132/
+194939/1589, total205406/1675;0 lift/verify/coverage errors. LLVM_MODE=v2;
+optimized_corpus_rerun=false. Provenance includes116 actual Git sources,
+42/39 complete object sets and138 full delta compositions. Markers233134
+(vsfdf233150:16 removed hints); canonical/hardware changes5/0 vsfdf,64/8 vsb95.
+Warnings6 missingIGNIL/26 undecoded/3 invalid/0 emptySymbol/146 objdumpMissing
+remain. This is IR validity/provenance, NOT semantic compatibility:14
+(input,PC,strategy) target-withdrawal observations persist across4 Lua ELFs/
+8 graphs,7(input,PC) sites, not14 independent programs/functions. Member-set
+changes are also14 strategy records,7 input-local entries; compiled/stripped
+variants are not independent source functions. Thirty CPU guard probes support
+the old bounds. Do not hide the retained unresolved precision cost.
+Final standard Tigress six fresh groups: C288/LLVM1728 complete matches,
+0wrong/unlifted/executed-undecoded; twoELF×sixplans×24 per group,72 ldd records.
+Ordinary four fresh groups: C256/LLVM576 complete+960 incomplete; GCC each
+192/192, Clang each96/288. Retain rc1/semantic_complete=false and all partial
+status2 reports;0wrong/unlifted/known-target omission. Retain492 unresolved
+transfer and2538 undecoded-reference-hook-PC observations, deduped by group/case
+to82 transfers/423 PCs; sixplans repeat them. Pass reports36SUCCESS/60INCOMPLETE.
+Official Tigress audit SHAa251c81a...2fd74 verifies all10 fresh groups,168ldd,
+9578 archived regular members (4,324,853,358 raw/3,782,666,624 compressed bytes).
+validation_complete=true, semantic_complete=false. The six-plan1728 must not
+be called recovery gain over historical two-product-plan576.
+
+Known production gaps remain: ordinary addr32 memory can infer target1040
+where CPU1060 (explicit guest stores, no CALL/image initial facts); Legacy
+whole-function marker refusal; absolute/relative image tables can be modified
+by ordinary STORE while old/new analyses still publish original1040/1050.
+Fixed code or const readMemory buffers do not certify data immutability.
+Final7223 tiny probes directly retain both table-write errors and the ordinary
+addr32 wrong complete target1040 vsCPU1060; same-source LEA control is fixed4.
+known-defects/known-gap-final has22 dual-end-hash-verified payloads and manifestSHAa4ec751f...
+640aff, including observer-free equal-output controls and original failed/empty
+measurement drafts; confirmed open gaps are not production-pass evidence.
+Generic opaque post-event correlations are withdrawn, never built/merged:
+independent table-content provenance/alias/immutability certificates must come
+first. TestOpaqueMemoryVersions.cpp and its CMake line are absent from active
+production; exact planned source SHA2ebe9652...946465c and patch4292cc3f...
+366025 are archived with old combined-tag31/40 failed-assertion evidence.
+These prototype numbers include fence/UD2 controls and are not current passes.
+The old Lua i3860x43319d x87 sampling1 DIFFERENT is a verified Unicorn2.1.4
+FXAM unnormal-reference defect: Intel SDM+standalone Rosetta support Dragon,
+raw/Jflip/normal/zero controls and exact-seed replay are frozen. Keep the1 raw
+difference, no new exclusion/normalization; not a pending Dragon x87 bug.
+
+Artifacts: VM `~/vmc-runs/x86-segments-20261106/`, Mac
+`/Users/c/Desktop/deob/validation-artifacts/x86-segments-20261106/`.
+Keep original final/final-noz3 and raw-final as immutable fdf pre-hardening;
+use hardened-final/hardened-final-noz3 and raw-hardened for final validation.
+The final corpus metadata tar has599 payloads+one exact self descriptor and
+219 directory inventory entries, all SHA-verified. Old static15-input raw/opt
+supplement and SIGTERM partial16 are not whole-corpus optimized coverage.
+Known defects/reference resolution and planned designs are separate artifacts,
+not successes. Official stage-root entries: final-artifact-index.json,
+final-validation-summary.json, freeze-final-validation.json; validation_complete
+is true, semantic_complete/compatibility_complete are false. Git finalization is
+tracked externally. Use only owned `~/dragon-tales-overlap`; one heavy VM worker.
+
 Bounded call-tree and stack effects (2026-11-06, baseline `230de43`): see
 `docs/stack-call-effects.md`. The opt-in legacy name `prove_leaf_calls` /
 `FiniteValueLimits::proveLeafCalls` now proves restored frames, original register
@@ -226,15 +319,16 @@ code, concurrent writes or asynchronous re-entry; IR verify does not cover those
 Public C/C++ structures, signatures and Guest ABI are unchanged from `230de43`;
 default CALL barriers, old slicer, lifters and LLVM optimization order stay intact.
 Independent review found two unsound cases in the pre-hardening prototype.
-The general x86 emitAddress path currently ignores FS/GS segment bases without
+At that stage the general x86 emitAddress path ignored FS/GS segment bases without
 an unlifted marker: helper `55 64 48 8b 2c 24 48 83 c4 08 c3`, FS_BASE=0x1000,
 saved RBP=0x1040, FS slot=0x1060 actually returns RBP=0x1060, not the saved value.
 The proof must reject explicit segment overrides in the real prefix region;
 do not mistake immediate/displacement/opcode bytes for prefixes. The underlying
-general-lifter segment-base semantics remain an unresolved gap outside this
-patch. Empty unlifted lists are not sufficient evidence for those instructions.
-This callee-proof guard is not a fix for segmented accesses in ordinary root
-finite analysis, legacy slicing or direct LLVM lifting; check those separately.
+general-lifter segment-base semantics were an unresolved gap outside that
+patch. The following x86 segmented-memory stage addresses ordinary root finite
+analysis, legacy slicing and V2/Static LLVM entry boundaries by conservative unsupported
+lifting; see its separate validation status above. It does not model segment
+bases. The original callee-proof guard alone did not repair those other paths.
 Also, RIP-relative helper `48 8b 05 00 00 00 00 c3` caused registerConstants to
 resurrect callee PC=0x1087 after the RIP clobber. Never export RIP/EIP register constants
 as call results. Three new safety cases/102 assertions fail 2 cases/40 assertions
