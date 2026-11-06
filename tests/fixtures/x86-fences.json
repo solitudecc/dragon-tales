@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_32_pause_and_fences",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "83ec10b84433221189432083c705f390834320070faef08b532081f25aa55aa50faee88953240faef803432439f883c410c3",
+      "prefix_hex": "83ec10b84433221189432083c705",
+      "instruction_hex": "f390834320070faef08b532081f25aa55aa50faee88953240faef803432439f8",
+      "control_unsupported_pcs": [
+        4110,
+        4116,
+        4128,
+        4134
+      ],
+      "hints": [
+        {
+          "name": "PAUSE",
+          "address": 4110,
+          "code_hex": "f390"
+        },
+        {
+          "name": "MFENCE",
+          "address": 4116,
+          "code_hex": "0faef0"
+        },
+        {
+          "name": "LFENCE",
+          "address": 4128,
+          "code_hex": "0faee8"
+        },
+        {
+          "name": "SFENCE",
+          "address": 4134,
+          "code_hex": "0faef8"
+        }
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x86_64_pause_and_fences",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "4883ec10b84433221189432083c705f390834320070faef08b532081f25aa55aa50faee88953240faef803432439f84883c410c3",
+      "prefix_hex": "4883ec10b84433221189432083c705",
+      "instruction_hex": "f390834320070faef08b532081f25aa55aa50faee88953240faef803432439f8",
+      "control_unsupported_pcs": [
+        4111,
+        4117,
+        4129,
+        4135
+      ],
+      "hints": [
+        {
+          "name": "PAUSE",
+          "address": 4111,
+          "code_hex": "f390"
+        },
+        {
+          "name": "MFENCE",
+          "address": 4117,
+          "code_hex": "0faef0"
+        },
+        {
+          "name": "LFENCE",
+          "address": 4129,
+          "code_hex": "0faee8"
+        },
+        {
+          "name": "SFENCE",
+          "address": 4135,
+          "code_hex": "0faef8"
+        }
+      ],
+      "undefined_flags": [],
+      "stubs": []
+    }
+  ]
+}

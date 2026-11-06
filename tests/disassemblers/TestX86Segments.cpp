@@ -122,6 +122,24 @@ TEST_CASE("MASKMOVDQU implicit memory fallback is always recorded as unlifted","
   }
 }
 
+TEST_CASE("Pause and fences remain no ops in the single thread Guest model","[x86-segments][opaque-memory][ignil]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})
+    for(const auto &code:std::vector<std::vector<std::uint8_t>>{
+        {0xf3,0x90},{0x0f,0xae,0xf0},{0x0f,0xae,0xe8},{0x0f,0xae,0xf8}}) {
+      CAPTURE(arch,code);auto block=segmentLift(arch,code);
+      CHECK(block.unlifted().empty());CHECK(block.ops().empty());
+    }
+}
+
+TEST_CASE("UD2 keeps its trap boundary and unlifted marker","[x86-segments][opaque-memory][ignil]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64}) {
+    Disassembler dis{arch,{}};const auto listing=dis.disassemble(std::vector<std::uint8_t>{0x0f,0x0b},base);
+    REQUIRE(listing.size()==1);CHECK(listing[0].isTrap());
+    const auto block=dis.liftTrace(listing);
+    CHECK(std::find(block.unlifted().begin(),block.unlifted().end(),base)!=block.unlifted().end());
+  }
+}
+
 TEST_CASE("32-bit explicit segment memory operations are not silently flattened","[x86-segments][ignil]") {
   for(auto segment:{0x26,0x2e,0x36,0x3e,0x64,0x65}) {
     CAPTURE(segment);

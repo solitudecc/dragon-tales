@@ -615,7 +615,11 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     // nop in all its encodings: NOOP (90), NOOPW/NOOPL/NOOPQ - the multi-byte
     // `nop word ptr cs:[rax + rax]` alignment padding - and their register
     // forms. FNOP is the x87 one.
-    if (name.starts_with("NOOP") || name == "FNOP" || name.starts_with("PREFETCH"))
+    // Ordering/power hints have no data effect in the fixed, single-thread
+    // Guest model. LLVM's conservative mayLoad/mayStore flags describe their
+    // compiler ordering role, not an unknown write to Guest memory.
+    if (name.starts_with("NOOP") || name == "FNOP" || name.starts_with("PREFETCH") ||
+        name == "PAUSE" || name == "MFENCE" || name == "LFENCE" || name == "SFENCE")
       nopOpcodes_.insert(i);
     if (auto op = classifyMemOperandOp(name))
       memOperandOps_.emplace(i, *op);
