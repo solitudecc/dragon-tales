@@ -1,0 +1,114 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_32_stack_table",
+      "architecture": "x86_32",
+      "code_hex": "c74424f040100000c74424f45010000089f983e101e866000000ff648cf0ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc89f831f083c007c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4122,
+      "expected_targets": [
+        4160,
+        4176
+      ],
+      "local_functions": [
+        {
+          "address": 4224,
+          "code_hex": "89f831f083c007c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_register_state",
+      "architecture": "x86_32",
+      "code_hex": "bd40100000ba5010000083ff000f45eae86b000000ffe5ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc89f831f083c007c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4117,
+      "expected_targets": [
+        4160,
+        4176
+      ],
+      "local_functions": [
+        {
+          "address": 4224,
+          "code_hex": "89f831f083c007c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_32_branch_leaf",
+      "architecture": "x86_32",
+      "code_hex": "c74424f040100000c74424f45010000089f983e101e866000000ff648cf0ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc89f883fe00740483c007c383c009c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4122,
+      "expected_targets": [
+        4160,
+        4176
+      ],
+      "local_functions": [
+        {
+          "address": 4224,
+          "code_hex": "89f883fe00740483c007c383c009c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_stack_table",
+      "architecture": "x86_64",
+      "code_hex": "48c74424e04010000048c74424e85010000089f983e101e864000000ff64cce0ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc89f831f083c007c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4124,
+      "expected_targets": [
+        4160,
+        4176
+      ],
+      "local_functions": [
+        {
+          "address": 4224,
+          "code_hex": "89f831f083c007c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_register_state",
+      "architecture": "x86_64",
+      "code_hex": "bd40100000ba5010000083ff000f45eae86b000000ffe5ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc89f831f083c007c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4117,
+      "expected_targets": [
+        4160,
+        4176
+      ],
+      "local_functions": [
+        {
+          "address": 4224,
+          "code_hex": "89f831f083c007c3"
+        }
+      ]
+    },
+    {
+      "id": "x86_64_branch_leaf",
+      "architecture": "x86_64",
+      "code_hex": "48c74424e04010000048c74424e85010000089f983e101e864000000ff64cce0ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc89f883fe00740483c007c383c009c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4124,
+      "expected_targets": [
+        4160,
+        4176
+      ],
+      "local_functions": [
+        {
+          "address": 4224,
+          "code_hex": "89f883fe00740483c007c383c009c3"
+        }
+      ]
+    }
+  ]
+}

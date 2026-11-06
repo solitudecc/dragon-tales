@@ -130,6 +130,13 @@
       const uint64_t* entries, size_t count, uint64_t query_block,
       uint32_t query_offset, uint8_t query_width, uint32_t max_values,
       uint32_t max_blocks, uint32_t max_operations, uint32_t max_facts);
+  // Same owned JSON contract; prove_leaf_calls must be 0 or 1. The original
+  // entry point retains its full CALL barrier and its existing ABI.
+  char* dragon_graph_finite_values_with_calls(const dragon_graph_t* g,
+      const uint64_t* entries, size_t count, uint64_t query_block,
+      uint32_t query_offset, uint8_t query_width, uint32_t max_values,
+      uint32_t max_blocks, uint32_t max_operations, uint32_t max_facts,
+      uint8_t prove_leaf_calls);
 
   // -- Disassembler --------------------------------------------------------------
 

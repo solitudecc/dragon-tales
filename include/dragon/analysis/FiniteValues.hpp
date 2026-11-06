@@ -26,6 +26,7 @@ struct FiniteValueLimits {
   std::uint32_t maxBlocks = 4096;
   std::uint32_t maxOperations = 1000000;
   std::uint32_t maxFacts = 262144;
+  bool proveLeafCalls = false; ///< Opt-in, bounded no-store/no-SP-write x86 leaf proofs.
 };
 struct FiniteValueQuery {
   std::uint64_t block;
@@ -38,6 +39,8 @@ struct FiniteValueResult {
   std::uint64_t operations = 0;
   std::map<std::uint64_t, FiniteValues> jumpTargets; ///< Key: IGNIL block start.
   std::vector<FiniteValues> values; ///< Same order as the requested queries.
+  std::uint64_t provenCalls = 0; ///< Unique reachable direct call sites proved this run.
+  std::uint64_t rejectedCalls = 0; ///< Attempted sites retaining the full barrier.
   std::string toJSON() const; ///< Unsigned addresses/values are hexadecimal strings.
 };
 
@@ -45,7 +48,10 @@ struct FiniteValueResult {
 /// Every supplied entry admits arbitrary registers/memory. Empty entries use
 /// valid function starts, then predecessor-free blocks, or all blocks in a
 /// rootless cyclic IGNIL graph (never infer that the entire graph is dead).
-/// CALL clobbers registers and memory without ABI guesses. Only preceding guest
+/// CALL clobbers registers and memory by default. proveLeafCalls can retain
+/// untouched bytes across proved no-store/no-SP-write near-call/C3 leaf bodies;
+/// the machine CALL return slot is still invalidated. No ABI guesses.
+/// Only preceding guest
 /// STOREs supply memory values; image bytes are not initial-state facts.
 /// Stack addresses retain a symbolic entry-SP base. Distinct symbolic bases and
 /// concrete vs symbolic addresses may alias; unknown stores invalidate memory.

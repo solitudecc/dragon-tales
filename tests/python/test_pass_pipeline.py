@@ -17,6 +17,21 @@ def lift(g):
 
 assert d.lib.DRAGON_PASS_GRAPH==d.PassStage.GRAPH==0
 assert d.lib.DRAGON_PASS_ERROR==d.PassStatus.ERROR==3
+leaf_fixtures=json.loads((Path(__file__).resolve().parents[1]/'fixtures/leaf-calls.json').read_text())
+for fixture in leaf_fixtures['cases']:
+    arch=d.Architecture.X86_64 if fixture['architecture']=='x86_64' else d.Architecture.X86_32
+    with d.Disassembler(arch).analyze(bytes.fromhex(fixture['code_hex']),0x1000) as leaf_graph:
+        old=leaf_graph.finite_values(entry_points=[0x1000])
+        new=leaf_graph.finite_values(entry_points=[0x1000],prove_leaf_calls=True)
+        assert old['proven_calls']==0 and new['proven_calls']==1 and new['rejected_calls']==0
+        assert any(t['kind']==d.lib.DRAGON_VALUE_FINITE and
+                   set(t['values'])==set(fixture['expected_targets']) for t in new['jump_targets'].values())
+        expect(ValueError,lambda:leaf_graph.finite_values(prove_leaf_calls=1))
+        assert d.lib.dragon_graph_finite_values_with_calls(leaf_graph._ptr,d.ffi.NULL,0,0,0,0,64,4096,1000000,262144,2)==d.ffi.NULL
+        with d.PassPipeline() as leaf_pipeline:
+            leaf_pipeline.add('finite-values',prove_leaf_calls=1)
+            report=leaf_pipeline.run(leaf_graph)
+            assert report['ok'] and not report['changed'] and report['runs'][0]['counters']['proven_calls']==1
 assert d.lib.dragon_pass_pipeline_run_llvm(d.ffi.NULL,d.ffi.NULL,1,64,1)==d.ffi.NULL
 assert not d.lib.dragon_pass_pipeline_add(d.ffi.NULL,d.ffi.NULL,d.ffi.NULL)
 g=graph()

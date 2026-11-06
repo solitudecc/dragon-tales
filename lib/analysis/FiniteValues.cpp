@@ -1,4 +1,5 @@
 #include <dragon/analysis/FiniteValues.hpp>
+#include "LeafCallEffects.hpp"
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Graph.hpp>
@@ -393,6 +394,40 @@ class Engine {
     }
     return {};
   }
+  bool call(Transfer &t,const ignil::Op &op) {
+    if(!limits.proveLeafCalls)return false;
+    auto reject=[&] {rejectedSites.insert(op.address);result.rejectedCalls=rejectedSites.size();return false;};
+    const auto arch=graph.architecture();
+    if(arch!=Architecture::X86_32 && arch!=Architecture::X86_64)return reject();
+    const auto *instruction=graph.get(op.address);
+    const auto *target=op.srcs.size()==1?std::get_if<ignil::Const>(&op.srcs[0]):nullptr;
+    if(!instruction || !instruction->isCall() || instruction->hasIndirectTarget() ||
+       instruction->bytes().size()!=5 || instruction->bytes()[0]!=0xe8 || !target ||
+       instruction->callees()!=std::set<std::uint64_t>{target->value})return reject();
+    const auto width=W(arch==Architecture::X86_64?64:32);
+    // The x86 lifter represents direct code addresses as 64-bit constants in
+    // both modes; the near CALL's stack/address width still follows the mode.
+    if(target->width!=64)return reject();
+    auto it=callProofs.find(target->value);
+    if(it==callProofs.end()) {
+      auto proof=detail::proveLeafCallee(graph,target->value,std::min(limits.maxBlocks,32u),
+          std::min<std::uint64_t>(4096,limits.maxOperations-result.operations));
+      result.operations+=proof.operations;
+      proofFacts+=1+proof.clobberedBytes.size();
+      it=callProofs.emplace(target->value,std::move(proof)).first;
+      if(proofFacts>limits.maxFacts) {failed=true;return reject();}
+    }
+    if(!it->second.proven)return reject();
+    const auto sp=arch==Architecture::X86_64?x86::RSP:x86::ESP;
+    // IGNIL abstracts away this write, but a proof used for machine control-flow
+    // recovery must not preserve stale data in the near CALL's return slot.
+    auto stack=readRegister(t.state,sp.offset,sp.width);
+    auto slot=operation(O::SUB,stack,constant(width/8,width),width,false);
+    store(t.state,slot,Value{width});
+    for(auto byte:it->second.clobberedBytes)writeRegister(t.state,ignil::Reg{byte,8,{}},Value{8});
+    provenSites.insert(op.address);result.provenCalls=provenSites.size();
+    return true;
+  }
   Transfer transfer(std::uint64_t block,const State &in) {
     Transfer t{in,{}};
     const auto *ib=graph.getIGNILBlock(block);
@@ -403,7 +438,10 @@ class Engine {
     std::map<std::uint32_t,const ignil::Op *> definitions;
     for(const auto &op:ib->ops()) {
       if(!spend())return t;
-      if(op.opcode==O::CALL) {t.state.regs.clear();t.state.memory.clear();continue;}
+      if(op.opcode==O::CALL) {
+        if(!call(t,op)) {t.state.regs.clear();t.state.memory.clear();}
+        continue;
+      }
       if(op.opcode==O::STORE) {
         if(op.srcs.size()==2)store(t.state,operand(t,op.srcs[0]),operand(t,op.srcs[1]));
         else t.state.memory.clear();
@@ -423,7 +461,7 @@ class Engine {
       else if(const auto *tmp=std::get_if<ignil::Temp>(&*op.dst)) {
         t.temps.insert_or_assign(tmp->id,std::move(v));definitions.insert_or_assign(tmp->id,&op);
       }
-      if(t.temps.size()+t.state.regs.size()+t.state.memory.size()>limits.maxFacts) {
+      if(t.temps.size()+t.state.regs.size()+t.state.memory.size()+proofFacts>limits.maxFacts) {
         failed=true;return t;
       }
     }
@@ -476,6 +514,9 @@ class Engine {
   const FiniteValueLimits &limits;
   std::vector<ignil::RegExtent> parents;
   FiniteValueResult result;
+  std::map<std::uint64_t,detail::LeafCallProof> callProofs;
+  std::set<std::uint64_t> provenSites,rejectedSites;
+  std::uint64_t proofFacts=0;
   bool failed=false;
 };
 } // namespace
@@ -512,7 +553,7 @@ FiniteValueResult finiteValues(const Graph &graph,const std::set<std::uint64_t> 
       const auto before=destination.regs.size()+destination.memory.size();
       if(e.merge(destination,out.state) && queued.insert(next).second)queue.push_back(next);
       facts=facts-before+destination.regs.size()+destination.memory.size();
-      if(facts>limits.maxFacts) {e.failed=true;break;}
+      if(facts+e.proofFacts>limits.maxFacts) {e.failed=true;break;}
     }
   }
   std::map<std::uint64_t,std::vector<std::size_t>> requested;
@@ -557,6 +598,7 @@ std::string FiniteValueResult::toJSON() const {
   std::string text;llvm::raw_string_ostream out(text);
   out<<llvm::json::Value(llvm::json::Object{{"complete",complete},{"message",message},
     {"block_visits",blockVisits},{"operations",operations},
+    {"proven_calls",provenCalls},{"rejected_calls",rejectedCalls},
     {"jump_targets",std::move(targets)},{"values",std::move(queried)}});
   return text;
 }

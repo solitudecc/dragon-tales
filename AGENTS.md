@@ -206,6 +206,46 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Proved leaf-call effects (2026-11-06, baseline `5c68ce7`): see
+`docs/leaf-call-effects.md`. Opt-in `FiniteValueLimits::proveLeafCalls`, C
+`dragon_graph_finite_values_with_calls`, Python `prove_leaf_calls=True`, and
+finite-values/finite-dispatch integer option `prove_leaf_calls=1` derive effects
+from actual current x86 code. No ABI/API-name/argument/return-value assumptions.
+Only unprefixed E8 near calls to completely lifted no-STORE/no-SP-write leaf CFGs
+with direct flow and ordinary C3 returns qualify. Check all paths, at most 32
+blocks/4096 checks per callee within global budgets; reject unknown/nested/local/
+unlifted/system effects. Retain untouched register bytes, account for 32-bit
+parent clearing, and invalidate the machine CALL return slot. Unknown SP/alias
+still invalidates memory; saved/restored stack frames do not qualify. Proof
+caches are per immutable analysis and rebuilt on expansion. Default full CALL
+barriers, original slicer, lifters, LLVM sweep and Guest ABI are unchanged.
+C++ limits/result structs append fields: C++ clients must rebuild; old C ABI
+stays available. Final per-analysis unique-site counters are diagnostic, not
+deobfuscation completeness or evidence that a rolled-back graph was published.
+Five C++ cases/242 assertions; first four tests-only on old source fail, final
+five on frozen old implementation fail 5/20 assertions at the feature entry.
+Each deliberately omitted return-slot/register-clobber control fails four
+assertions, so unsupported-option failures are not the sole validation.
+Native six permanent i386/x64 fixtures: 576 complete full-state root matches vs
+old finite Pass 576 incomplete, plus no-Z3 48 matches. Static/product cases use
+FunctionStart; all modelled fields/64 KiB, zero exclusions/skips/normalizations.
+Result/memory controls each detect 24 single-field differences; edge omission
+detects 12 missing transfers while 24 semantic runs still match. CTest 607/607,
+no Z3 482/482; Python and guard/register/memory/loop slice checks pass.
+Frozen Tigress original-helper GCC/Clang/two-strategy matrix: 256 C matches,
+576 complete LLVM matches/960 incomplete, zero complete differences/unlifted;
+no additional complete-return gain. O2 goto helper effects can be proved;
+indirect stack frames, unknown-pointer stores and unproved image table loads
+remain explicit obstacles. Both corpora: 69 inputs/138 strategies/205409
+inventoried function entries (including 3 existing invalid candidates; the CET
+valid-function count stays 205406); exact default Graph/IGNIL/function/unlifted
+fingerprints against frozen CET libraries. This is compatibility, not a new
+whole-corpus semantic or raw/optimized IR campaign. No new single-instruction,
+IGNIL optimizer, heap-predicate, de-flattening or binary-rewrite claims.
+Artifacts/frozen dual libraries/interfaces: `~/vmc-runs/leaf-calls-20261106/`;
+8436 raw files preserved in a per-file verified archive. Only use the owned
+`~/dragon-tales-overlap` worktree; the original dirty checkout stays untouched.
+
 CET function boundaries (2026-11-06, baseline `70a1fab`): see
 `docs/cet-function-boundaries.md`. A bare x64 ENDBR is not independent function
 evidence; keep explicit roots/callees, full frame prologues and existing post-RET

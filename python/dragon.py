@@ -419,14 +419,17 @@ class Graph:
 
     def finite_values(self, *, entry_points=(), query_register=None,
                       max_values=64, max_blocks=4096,
-                      max_operations=1000000, max_facts=262144):
+                      max_operations=1000000, max_facts=262144, prove_leaf_calls=False):
         """Bounded forward finite sets. query_register is (block, offset, width).
 
         Kind 0 is unreachable, 1 finite, 2 unknown. No image-memory assumptions
-        or call-effect models are added. All queried values are unknown if the
+        are added. Optional prove_leaf_calls derives bounded effects from actual
+        x86 leaf bodies; rejected calls keep the full barrier. All values are unknown if the
         global analysis budget is exhausted. Does not change this Graph.
         """
         import json
+        if type(prove_leaf_calls) is not bool:
+            raise ValueError('prove_leaf_calls must be bool')
         if not self._ptr:
             raise ReferenceError('Graph has been closed')
         limits=(max_values,max_blocks,max_operations,max_facts)
@@ -440,9 +443,10 @@ class Graph:
                 0<=query[0]<=0xffffffffffffffff and 0<=query[1]<=0xffffffff and
                 0<=query[2]<=64):
             raise ValueError('query_register must be (block uint64, offset uint32, width 0..64)')
-        raw=lib.dragon_graph_finite_values(self._ptr,
+        fn=lib.dragon_graph_finite_values_with_calls if prove_leaf_calls else lib.dragon_graph_finite_values
+        raw=fn(self._ptr,
             ffi.new('uint64_t[]',entries) if entries else ffi.NULL,len(entries),
-            *query,*limits)
+            *query,*limits,*((1,) if prove_leaf_calls else ()))
         if raw==ffi.NULL:
             raise RuntimeError('finite-value analysis failed')
         try:
@@ -2969,7 +2973,8 @@ class PassPipeline:
                                  entry_points=(), name='finite-dispatch'):
         """Register native x86 recovery with owned code/entries; then add(name).
 
-        Options: max_values, max_blocks, max_operations, max_facts, max_rounds.
+        Options: max_values, max_blocks, max_operations, max_facts, max_rounds,
+        prove_leaf_calls (0 or 1; default 0).
         Default discovery remains unchanged until this Graph pass is run.
         """
         self._check()

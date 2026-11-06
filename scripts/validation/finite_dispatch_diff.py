@@ -17,12 +17,17 @@ d=guest.base.dragon
 def main():
     p=argparse.ArgumentParser(add_help=False)
     p.add_argument('--mode',choices=('v2','static','product'),default='product')
+    p.add_argument('--function-entry',action='store_true')
     p.add_argument('--strategy',type=int,choices=(0,1),default=0)
     p.add_argument('--baseline',action='store_true')
+    p.add_argument('--prove-leaf-calls',action='store_true')
+    p.add_argument('--expect-incomplete',action='store_true',help='require every root attempt to stop incomplete')
+    p.add_argument('--fixtures',type=Path,default=guest.base.ROOT/'tests/fixtures/finite-dispatch.json')
     p.add_argument('--control',choices=('result','memory','edge'))
     p.add_argument('--expect-control',action='store_true')
     args,remaining=p.parse_known_args()
-    if bool(args.control)!=args.expect_control or args.baseline and args.control:
+    if args.function_entry and args.mode=='v2':p.error('function entry requires static/product mode')
+    if bool(args.control)!=args.expect_control or (args.baseline or args.expect_incomplete) and args.control:
         p.error('use matching control/expect-control and no baseline controls')
     out=Path(remaining[remaining.index('--out')+1]).resolve();out.mkdir(parents=True,exist_ok=True)
     sys.argv=[sys.argv[0],*remaining]
@@ -38,19 +43,21 @@ def main():
         before={i.address:tuple(i.branches) for i in graph.instructions() if i.is_jump and i.has_indirect_target}
         if not args.baseline:
             with d.PassPipeline() as pipeline:
-                pipeline.register_finite_dispatch(code,address,entry_points=[address]).add('finite-dispatch')
+                options={'prove_leaf_calls':1} if args.prove_leaf_calls else {}
+                pipeline.register_finite_dispatch(code,address,entry_points=[address]).add('finite-dispatch',**options)
                 report=pipeline.run(graph)
                 assert report['ok'] and not report['budget_exhausted']
                 reports.append(dict(case=active['case'],opt=active['opt'],report=report))
         after={i.address:tuple(i.branches) for i in graph.instructions() if i.is_jump and i.has_indirect_target}
-        graphs[active['case']]=after
+        graphs.setdefault(active['case'],{}).update(after)
         reports.append(dict(case=active['case'],opt=active['opt'],before=before,after=after))
         return graph
     d.Disassembler.analyze=analyze;d.Configuration.__init__=configuration
     def compile_case(f,*a,**kw):
         active.update(case=f['id'],opt=a[1])
         return guest.compile.compile_case(f,*a,**kw,
-            static_analysis=args.mode!='v2',product_pipeline=args.mode=='product')
+            static_analysis=args.mode!='v2',product_pipeline=args.mode=='product',
+            function_entry=args.function_entry)
     parent=guest.Adapter if args.mode=='v2' else StaticAdapter
     class Adapter(parent):
         def reference(self,f,regs,memory,entry):
@@ -83,7 +90,7 @@ def main():
                 actual=(bytes(damaged),)+actual[1:]
             return super().compare(f,expected,actual,corrupt)
     try:
-        code=guest.main(fixtures_path=guest.base.ROOT/'tests/fixtures/finite-dispatch.json',
+        code=guest.main(fixtures_path=args.fixtures,
                         compile_factory=compile_case,adapter_factory=Adapter)
     finally:
         d.Disassembler.analyze=original_analyze;d.Configuration.__init__=original_config
@@ -94,7 +101,7 @@ def main():
     incomplete=sum('exit' in r and not root(r) for r in rows)
     errors=[r for r in rows if r['status'] not in ('match','different')]
     wrong=sum(o['missing'] for o in observations)
-    fixture_map={f['id']:f for f in json.loads((guest.base.ROOT/'tests/fixtures/finite-dispatch.json').read_text())['cases']}
+    fixture_map={f['id']:f for f in json.loads(args.fixtures.read_text())['cases']}
     selected={r['case'] for r in rows}
     coverage={case:sorted({o['target'] for o in observations if o['case']==case})==
                    sorted(fixture_map[case]['expected_targets']) for case in selected}
@@ -105,7 +112,7 @@ def main():
     elif args.control:
         ok=not errors and all(r['status']=='different' and root(r) and len(r['differences'])==1 and
             r['differences'][0]['field']==('memory' if args.control=='memory' else ('EAX' if r['architecture']=='x86_32' else 'RAX')) for r in rows) and wrong==0
-    elif args.baseline:
+    elif args.baseline or args.expect_incomplete:
         ok=not errors and incomplete==len(rows) and complete==0 and wrong==0
     else:
         ok=code==0 and not errors and complete==len(rows) and wrong==0 and precise
@@ -114,7 +121,10 @@ def main():
     mapped.update(line.split()[-1] for line in Path('/proc/self/maps').read_text().splitlines()
         if '/libdragon' in line and line.split()[-1].startswith('/'))
     result=dict(mode=args.mode,strategy=args.strategy,baseline=args.baseline,control=args.control,
-        fixture_sha256=hashlib.sha256((guest.base.ROOT/'tests/fixtures/finite-dispatch.json').read_bytes()).hexdigest(),
+        prove_leaf_calls=args.prove_leaf_calls,
+        function_entry=args.function_entry,
+        expect_incomplete=args.expect_incomplete,
+        fixture_sha256=hashlib.sha256(args.fixtures.read_bytes()).hexdigest(),
         harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         complete_root_returns=complete,incomplete_exits=incomplete,
         complete_semantic_differences=sum(root(r) and r['status']=='different' for r in rows),

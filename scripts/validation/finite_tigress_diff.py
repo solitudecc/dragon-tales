@@ -18,6 +18,7 @@ d=study.base.dragon
 def main():
     p=argparse.ArgumentParser(add_help=False)
     p.add_argument('--baseline',action='store_true')
+    p.add_argument('--prove-leaf-calls',action='store_true')
     p.add_argument('--inline-helper',action='store_true')
     p.add_argument('--gcc-compile',action='store_true',
                    help='compile Guest C with x86_64-linux-gnu-gcc instead of Clang')
@@ -83,7 +84,8 @@ def main():
                 if not section.executable or not section.data:continue
                 with d.PassPipeline() as pipeline:
                     pipeline.register_finite_dispatch(section.data,section.address,entry_points=entries).add(
-                        'finite-dispatch',max_values=args.max_values,max_operations=args.max_operations)
+                        'finite-dispatch',max_values=args.max_values,max_operations=args.max_operations,
+                        **({'prove_leaf_calls':1} if args.prove_leaf_calls else {}))
                     report=pipeline.run(graph)
                     reports.append(dict(case=active.get('case'),input_sha256=active.get('sha256'),
                                         code_base=section.address,report=report))
@@ -98,7 +100,8 @@ def main():
         study.source=source;study.build_image=build;study.run=run
         study.compile_image=compile_image;d.LoadedImage.disassemble=original_disassemble
         campaign=dict(baseline=args.baseline,source_variant=variant,compiler_family=compiler_family,
-            pass_limits=dict(max_values=args.max_values,max_operations=args.max_operations),
+            pass_limits=dict(max_values=args.max_values,max_operations=args.max_operations,
+                             prove_leaf_calls=args.prove_leaf_calls),
             inputs=inputs,reports=reports,
             reuse_inputs=str(args.reuse_inputs) if args.reuse_inputs else None)
         (out/'finite-campaign.json').write_text(json.dumps(campaign,indent=2))

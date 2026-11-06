@@ -765,14 +765,21 @@ char *dragon_graph_finite_values(const dragon_graph_t *g,
     const uint64_t *entries,size_t count,uint64_t query_block,
     uint32_t query_offset,uint8_t query_width,uint32_t max_values,
     uint32_t max_blocks,uint32_t max_operations,uint32_t max_facts) {
-  if(!g || (count && !entries) || query_width>64)return nullptr;
+  return dragon_graph_finite_values_with_calls(g,entries,count,query_block,
+      query_offset,query_width,max_values,max_blocks,max_operations,max_facts,0);
+}
+char *dragon_graph_finite_values_with_calls(const dragon_graph_t *g,
+    const uint64_t *entries,size_t count,uint64_t query_block,
+    uint32_t query_offset,uint8_t query_width,uint32_t max_values,
+    uint32_t max_blocks,uint32_t max_operations,uint32_t max_facts,uint8_t prove_leaf_calls) {
+  if(!g || (count && !entries) || query_width>64 || prove_leaf_calls>1)return nullptr;
   try {
     std::set<std::uint64_t> roots;
     if(count)roots.insert(entries,entries+count);
     std::vector<dragon::analysis::FiniteValueQuery> queries;
     if(query_width)queries.push_back({query_block,dragon::ignil::Reg{query_offset,query_width,{}}});
     return dup_string(dragon::analysis::finiteValues(*as_graph(g),roots,queries,
-      {max_values,max_blocks,max_operations,max_facts}).toJSON());
+      {max_values,max_blocks,max_operations,max_facts,prove_leaf_calls!=0}).toJSON());
   } catch(...) {return nullptr;}
 }
 static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Unreachable)==DRAGON_VALUE_UNREACHABLE);

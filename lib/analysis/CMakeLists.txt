@@ -3,6 +3,7 @@ target_sources(libdragon
         SliceExpr.cpp
         BackwardSlicer.cpp
         FiniteValues.cpp
+        LeafCallEffects.cpp
         SwitchDetector.cpp
         GuardProof.cpp
         ArgumentRecovery.cpp

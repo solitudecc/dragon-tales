@@ -117,9 +117,10 @@ PassPipeline::PassPipeline(bool builtins) {
   registerGraph("finite-values",[](GraphContext &c,const Options &o) {
     auto facts=analysis::finiteValues(c.graph,{}, {},
       {number(o,"max_values",64),number(o,"max_blocks",4096),
-       number(o,"max_operations",1000000),number(o,"max_facts",262144)});
+       number(o,"max_operations",1000000),number(o,"max_facts",262144),number(o,"prove_leaf_calls",0)!=0});
     Result r{facts.complete?Status::Success:Status::Incomplete,false,facts.message,
       {{"block_visits",facts.blockVisits},{"operations",facts.operations},
+       {"proven_calls",facts.provenCalls},{"rejected_calls",facts.rejectedCalls},
        {"finite_jumps",0},{"unknown_jumps",0},{"unreachable_jumps",0}}};
     for(const auto &[at,values]:facts.jumpTargets) {
       if(values.kind==analysis::ValueSetKind::Finite)++r.counters["finite_jumps"];
@@ -128,7 +129,11 @@ PassPipeline::PassPipeline(bool builtins) {
     }
     c.analyses.put("finite-values",std::move(facts));
     return r;
-  },true,{},numeric({"max_values","max_blocks","max_operations","max_facts"}));
+  },true,{},[](const Options &o) {
+    auto error=numeric({"max_values","max_blocks","max_operations","max_facts","prove_leaf_calls"})(o);
+    if(!error.empty())return error;
+    return number(o,"prove_leaf_calls",0)>1?std::string{"prove_leaf_calls must be 0 or 1"}:std::string{};
+  });
 }
 bool PassPipeline::fail(std::string message) {error_=std::move(message);return false;}
 bool PassPipeline::registerGraph(std::string name,GraphPass pass,bool readOnly,std::vector<std::string> dependencies,Validator validate) {

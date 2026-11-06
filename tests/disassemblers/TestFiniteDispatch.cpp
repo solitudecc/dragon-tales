@@ -18,6 +18,117 @@ std::vector<std::uint8_t> fixture(bool unknown=false) {
   code[0x30]=0xc3;
   return code;
 }
+
+namespace {
+// Near CALL writes [SP-pointerSize, SP); the table deliberately sits below it.
+std::vector<std::uint8_t> leafFixture(Architecture arch,
+    std::initializer_list<std::uint8_t> helper, bool returnSlot=false) {
+  std::vector<std::uint8_t> code(0xb0,0xcc);
+  auto put=[&](unsigned at,std::initializer_list<std::uint8_t> data) {
+    std::copy(data.begin(),data.end(),code.begin()+at);
+  };
+  if(arch==Architecture::X86_64) {
+    put(0,{0x48,0xc7,0x44,0x24,0xe0,0x40,0x10,0,0,
+           0x48,0xc7,0x44,0x24,0xe8,0x50,0x10,0,0,
+           0x89,0xf9,0x83,0xe1,1,0xe8,0x64,0,0,0,0xff,0x64,0xcc,0xe0});
+    if(returnSlot) {code[4]=0xf8;code[13]=0xf0;code[31]=0xf8;put(18,{0xb9,0,0,0,0});}
+  } else {
+    put(0,{0xc7,0x44,0x24,0xf0,0x40,0x10,0,0,
+           0xc7,0x44,0x24,0xf4,0x50,0x10,0,0,
+           0x89,0xf9,0x83,0xe1,1,0xe8,0x66,0,0,0,0xff,0x64,0x8c,0xf0});
+    if(returnSlot) {code[3]=0xfc;code[11]=0xf8;code[29]=0xfc;put(16,{0xb9,0,0,0,0});}
+  }
+  put(0x40,{0xb8,7,0,0,0,0x89,3,0xc3});
+  put(0x50,{0xb8,9,0,0,0,0x89,3,0xc3});
+  put(0x80,helper);
+  return code;
+}
+}
+TEST_CASE("Proven leaf calls retain disjoint stack tables without ABI assumptions","[leaf-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})
+    for(auto strategy:{DisassemblyStrategy::LINEAR_SWEEP,DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+      auto code=leafFixture(arch,{0x89,0xf8,0x31,0xf0,0x83,0xc0,7,0xc3});
+      Configuration config;config.disassemblyStrategy=strategy;
+      Disassembler dis{arch,config};Graph g{arch,config};dis.disassemble(code,0x1000,g);
+      const auto site=arch==Architecture::X86_64?0x101c:0x101a;
+      REQUIRE(g.get(site));REQUIRE(g.get(site)->branches().empty());
+      PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+      REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));
+      auto report=p.run(g);REQUIRE(report.ok);REQUIRE(report.changed);
+      CHECK(g.get(site)->branches()==std::set<std::uint64_t>{0x1040,0x1050});
+      CHECK(report.runs[0].result.status==Status::Success);
+      CHECK(report.runs[0].result.counters.at("proven_calls")>=1);
+      auto again=p.run(g);REQUIRE(again.ok);CHECK_FALSE(again.changed);
+    }
+}
+TEST_CASE("Leaf call proofs reject writes frames unknown flow and unsupported returns","[leaf-calls][finite-dispatch]") {
+  const std::vector<std::vector<std::uint8_t>> helpers{
+    {0x89,3,0xc3}, // arbitrary memory write
+    {0x50,0x58,0xc3}, // stack write, even though SP is restored
+    {0x83,0xc4,8,0xc3}, // changed SP
+    {0xc2,8,0}, // callee stack cleanup
+    {0xff,0xe0}, // unresolved tail jump
+    {0xe8,0x1b,0,0,0,0xc3}, // nested call
+    {0x0f,0x0b}, // trap
+    {0xc5,0xf8,0x77,0xc3} // unlifted vzeroupper
+  };
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(const auto &helper:helpers) {
+    auto code=leafFixture(arch,{});std::copy(helper.begin(),helper.end(),code.begin()+0x80);code[0xa0]=0xc3;
+    Disassembler dis{arch,{}};Graph g{arch,{}};dis.disassemble(code,0x1000,g);
+    const auto site=arch==Architecture::X86_64?0x101c:0x101a;
+    const auto count=g.size();
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));
+    auto report=p.run(g);REQUIRE(report.ok);CHECK_FALSE(report.changed);
+    CHECK(report.runs[0].result.status==Status::Incomplete);
+    CHECK(g.get(site)->branches().empty());CHECK(g.size()==count);
+    CHECK(report.runs[0].result.counters.at("rejected_calls")>=1);
+  }
+}
+TEST_CASE("Leaf calls invalidate their machine return slot and every written register byte","[leaf-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(bool returnSlot:{false,true}) {
+    auto code=leafFixture(arch,returnSlot?std::initializer_list<std::uint8_t>{0xc3}:
+        std::initializer_list<std::uint8_t>{0xb1,0xff,0xc3},returnSlot);
+    Disassembler dis{arch,{}};Graph g{arch,{}};dis.disassemble(code,0x1000,g);
+    const auto site=arch==Architecture::X86_64?0x101c:0x101a;
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));
+    auto report=p.run(g);REQUIRE(report.ok);CHECK_FALSE(report.changed);
+    CHECK(g.get(site)->branches().empty());
+    CHECK(report.runs[0].result.counters.at("proven_calls")>=1);
+  }
+}
+TEST_CASE("Finite leaf-call option is explicit and validates before mutation","[leaf-calls][finite-dispatch]") {
+  auto code=leafFixture(Architecture::X86_64,{0xc3});
+  Disassembler dis{Architecture::X86_64,{}};Graph g{Architecture::X86_64,{}};dis.disassemble(code,0x1000,g);
+  PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+  REQUIRE(p.add("recover"));auto old=p.run(g);REQUIRE(old.ok);CHECK_FALSE(old.changed);
+  CHECK(g.get(0x101c)->branches().empty());
+  PassPipeline invalid;REQUIRE(invalid.registerGraph("recover",FiniteDispatchPass{code,0x1000},false,{},FiniteDispatchPass::validator()));
+  CHECK_FALSE(invalid.add("recover",{{"prove_leaf_calls",std::int64_t{2}}}));
+  REQUIRE(invalid.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));
+  auto good=invalid.run(g);REQUIRE(good.ok);CHECK(good.changed);
+}
+TEST_CASE("Leaf-call analysis obeys global budgets and keeps every branch effect","[leaf-calls][finite-values]") {
+  for(bool writes:{false,true}) {
+    auto code=leafFixture(Architecture::X86_64,{0x83,0xff,0,0x74,1,0xc3,0x89,3,0xc3});
+    if(!writes) {code[0x86]=0xb0;code[0x87]=7;} // AL write, no memory effect
+    Disassembler dis{Architecture::X86_64,{}};Graph g{Architecture::X86_64,{}};dis.disassemble(code,0x1000,g);
+    for(auto budget:{1,1000000}) {
+      PassPipeline p;REQUIRE(p.add("finite-values",{{"prove_leaf_calls",std::int64_t{1}},
+          {"max_operations",std::int64_t{budget}}}));
+      REQUIRE(p.registerGraph("inspect",[&](auto &context,const Options &) {
+        auto *facts=context.analyses.template get<analysis::FiniteValueResult>("finite-values");
+        REQUIRE(facts);CHECK(facts->complete==(budget>1));
+        REQUIRE(facts->jumpTargets.contains(0x1000));
+        if(budget==1 || writes)CHECK(facts->jumpTargets.at(0x1000).kind==analysis::ValueSetKind::Unknown);
+        else CHECK(facts->jumpTargets.at(0x1000).values==std::vector<std::uint64_t>{0x1040,0x1050});
+        return Result{};
+      },true,{"finite-values"}));
+      REQUIRE(p.add("inspect"));auto r=p.run(g);REQUIRE(r.ok);CHECK_FALSE(r.changed);
+    }
+  }
+}
 }
 TEST_CASE("Finite dispatch grows candidates and decodes every reachable target","[finite-dispatch]") {
   for(auto arch:{Architecture::X86_32,Architecture::X86_64})

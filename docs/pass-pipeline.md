@@ -158,4 +158,5 @@ C 接口提供 opaque `dragon_pass_pipeline_t`，create/register/add/run/describ
 VM 产物：`~/vmc-runs/pass-pipeline-20261106/`。本轮没有修改指令提升器、IGNIL 优化算法
 或间接跳转解析策略，未另跑单指令/IGNIL 全量差分。原生函数验证覆盖调度后的执行结果；
 真实语料的 verify 只能证明 IR 合法性。上述为架构首版验证；后续有限值集恢复的独立验证见
-[组件记录](finite-dispatch.md)。跨调用、堆建模和去平坦化仍是后续 Pass 的工作。
+[组件记录](finite-dispatch.md)。后续有限值集支持可选的[叶函数效果证明](leaf-call-effects.md)；
+一般跨调用分析、堆建模和去平坦化仍需后续组件。

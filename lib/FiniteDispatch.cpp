@@ -64,13 +64,14 @@ FiniteDispatchPass::FiniteDispatchPass(std::span<const std::uint8_t> code,std::u
 PassPipeline::Validator FiniteDispatchPass::validator() {
   return [](const Options &options) {
     try {
-      const std::set<std::string> allowed{"max_values","max_blocks","max_operations","max_facts","max_rounds"};
+      const std::set<std::string> allowed{"max_values","max_blocks","max_operations","max_facts","max_rounds","prove_leaf_calls"};
       for(const auto &[name,v]:options) {
         if(!allowed.contains(name))return "unknown option: "+name;
         (void)number(options,name.c_str(),0);
       }
       if(number(options,"max_values",64)>256 || number(options,"max_rounds",256)>4096)
         return std::string{"max_values must be <=256 and max_rounds <=4096"};
+      if(number(options,"prove_leaf_calls",0)>1)return std::string{"prove_leaf_calls must be 0 or 1"};
     } catch(const std::exception &e) {return std::string{e.what()};}
     return std::string{};
   };
@@ -82,9 +83,11 @@ Result FiniteDispatchPass::operator()(GraphContext &context,const Options &optio
     return {Status::Unavailable,false,"finite dispatch currently supports x86 CFG recovery",{}};
   auto resolver=std::make_shared<Resolver>();
   resolver->limits={number(options,"max_values",64),number(options,"max_blocks",4096),
-    number(options,"max_operations",1000000),number(options,"max_facts",262144)};
+    number(options,"max_operations",1000000),number(options,"max_facts",262144),
+    number(options,"prove_leaf_calls",0)!=0};
   resolver->roundsLimit=number(options,"max_rounds",256);
-  Result report;report.counters={{"rounds",0},{"analysis_operations",0},{"new_instructions",0},{"new_edges",0},{"unresolved_jumps",0}};
+  Result report;report.counters={{"rounds",0},{"analysis_operations",0},{"new_instructions",0},{"new_edges",0},
+    {"unresolved_jumps",0},{"proven_calls",0},{"rejected_calls",0}};
   for(const auto &[at,i]:source.listing())
     if(i.isJump() && i.hasIndirectTarget() && i.branches().empty())++report.counters["unresolved_jumps"];
   if(!resolver->limits.maxValues || !resolver->limits.maxBlocks || !resolver->limits.maxOperations ||
@@ -101,6 +104,9 @@ Result FiniteDispatchPass::operator()(GraphContext &context,const Options &optio
   dis.disassemble(code_,base_,work,hints);
   report.counters["rounds"]=resolver->rounds;
   report.counters["analysis_operations"]=resolver->operations;
+  // Unique sites in the final analysis, rather than repeated visits/sweeps.
+  report.counters["proven_calls"]=resolver->current.provenCalls;
+  report.counters["rejected_calls"]=resolver->current.rejectedCalls;
   if(resolver->aborted)
     return {Status::Incomplete,false,resolver->message,report.counters};
   report.counters["unresolved_jumps"]=0;
