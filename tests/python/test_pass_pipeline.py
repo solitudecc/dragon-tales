@@ -32,6 +32,14 @@ for fixture in leaf_fixtures['cases']:
             leaf_pipeline.add('finite-values',prove_leaf_calls=1)
             report=leaf_pipeline.run(leaf_graph)
             assert report['ok'] and not report['changed'] and report['runs'][0]['counters']['proven_calls']==1
+stack_fixtures=json.loads((Path(__file__).resolve().parents[1]/'fixtures/stack-calls.json').read_text())
+for fixture in stack_fixtures['cases']:
+    arch=d.Architecture.X86_64 if fixture['architecture']=='x86_64' else d.Architecture.X86_32
+    with d.Disassembler(arch).analyze(bytes.fromhex(fixture['code_hex']),0x1000) as stack_graph:
+        facts=stack_graph.finite_values(entry_points=[0x1000],prove_leaf_calls=True)
+        assert facts['complete'] and facts['proven_calls']==fixture['expected_proven_calls'] and facts['rejected_calls']==0
+        assert any(t['kind']==d.lib.DRAGON_VALUE_FINITE and
+                   set(t['values'])==set(fixture['expected_targets']) for t in facts['jump_targets'].values())
 assert d.lib.dragon_pass_pipeline_run_llvm(d.ffi.NULL,d.ffi.NULL,1,64,1)==d.ffi.NULL
 assert not d.lib.dragon_pass_pipeline_add(d.ffi.NULL,d.ffi.NULL,d.ffi.NULL)
 g=graph()

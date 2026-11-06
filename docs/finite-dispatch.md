@@ -9,6 +9,7 @@
 
 后续新增可选的[叶函数效果证明](leaf-call-effects.md)，可跨过已证明无 STORE/无 SP 写的
 直接调用；本文的全 CALL 屏障及数字描述原始阶段和当前默认配置。
+该选项现已扩展为[栈帧与有界内部调用效果](stack-call-effects.md)，支持恢复状态和传播一致常量。
 
 后续 [CET 函数边界修正](cet-function-boundaries.md) 处理了本报告中 GCC 的额外入口。
 它改善 goto 的静态执行，同时保留 indirect 的覆盖下降；下文数字是本阶段冻结记录。

@@ -411,9 +411,10 @@ class Engine {
     auto it=callProofs.find(target->value);
     if(it==callProofs.end()) {
       auto proof=detail::proveLeafCallee(graph,target->value,std::min(limits.maxBlocks,32u),
-          std::min<std::uint64_t>(4096,limits.maxOperations-result.operations));
+          std::min<std::uint64_t>(4096,limits.maxOperations-result.operations),limits.maxFacts);
       result.operations+=proof.operations;
-      proofFacts+=1+proof.clobberedBytes.size();
+      proofFacts+=1+proof.clobberedBytes.size()+proof.stackWriteBytes.size()+
+          proof.registerConstants.size()+proof.memoryConstants.size();
       it=callProofs.emplace(target->value,std::move(proof)).first;
       if(proofFacts>limits.maxFacts) {failed=true;return reject();}
     }
@@ -424,7 +425,17 @@ class Engine {
     auto stack=readRegister(t.state,sp.offset,sp.width);
     auto slot=operation(O::SUB,stack,constant(width/8,width),width,false);
     store(t.state,slot,Value{width});
+    for(auto offset:it->second.stackWriteBytes) {
+      auto address=operation(O::ADD,slot,constant(offset,width),width,false);
+      store(t.state,address,Value{8});
+    }
     for(auto byte:it->second.clobberedBytes)writeRegister(t.state,ignil::Reg{byte,8,{}},Value{8});
+    for(auto [byte,value]:it->second.registerConstants)
+      writeRegister(t.state,ignil::Reg{byte,8,{}},constant(value,8));
+    for(auto [offset,value]:it->second.memoryConstants) {
+      auto address=operation(O::ADD,slot,constant(offset,width),width,false);
+      store(t.state,address,constant(value,8));
+    }
     provenSites.insert(op.address);result.provenCalls=provenSites.size();
     return true;
   }

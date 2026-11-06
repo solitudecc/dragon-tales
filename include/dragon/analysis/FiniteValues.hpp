@@ -26,7 +26,7 @@ struct FiniteValueLimits {
   std::uint32_t maxBlocks = 4096;
   std::uint32_t maxOperations = 1000000;
   std::uint32_t maxFacts = 262144;
-  bool proveLeafCalls = false; ///< Opt-in, bounded no-store/no-SP-write x86 leaf proofs.
+  bool proveLeafCalls = false; ///< Legacy name: opt-in bounded x86 call-tree effects.
 };
 struct FiniteValueQuery {
   std::uint64_t block;
@@ -49,8 +49,10 @@ struct FiniteValueResult {
 /// valid function starts, then predecessor-free blocks, or all blocks in a
 /// rootless cyclic IGNIL graph (never infer that the entire graph is dead).
 /// CALL clobbers registers and memory by default. proveLeafCalls can retain
-/// untouched bytes across proved no-store/no-SP-write near-call/C3 leaf bodies;
-/// the machine CALL return slot is still invalidated. No ABI guesses.
+/// untouched bytes across proved near-call/C3 bodies, including stack frames and
+/// bounded internal call trees, and propagate constants agreed by every return.
+/// Every return restores SP and protects its return slot; all proved stack writes
+/// and the machine CALL return slot invalidate caller memory facts. No ABI guesses.
 /// Only preceding guest
 /// STOREs supply memory values; image bytes are not initial-state facts.
 /// Stack addresses retain a symbolic entry-SP base. Distinct symbolic bases and

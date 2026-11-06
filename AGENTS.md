@@ -206,6 +206,86 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Bounded call-tree and stack effects (2026-11-06, baseline `230de43`): see
+`docs/stack-call-effects.md`. The opt-in legacy name `prove_leaf_calls` /
+`FiniteValueLimits::proveLeafCalls` now proves restored frames, original register
+byte identities, stack write footprints, bounded internal E8 calls, and constant
+register/stack results agreed by every normal return. Each C3 must restore entry
+SP; every store and translated child write must protect all enclosing return
+slots. Include saved-register stores and nested CALL pushes in the footprint;
+invalidate caller facts before installing proved final constants. No ABI saved
+register lists, API names, image/heap snapshots or first-return assumptions.
+At most four callee levels, 32 blocks per level, a shared 4096-check root budget,
+per-level min(max_facts,8192), and stack writes within +/-1 MiB. Recursive cycles,
+unknown calls/writes, indirect calls, unsupported/unlifted/local flow and exhausted
+proof budgets retain the full barrier. Different return constants do not yet
+form an interprocedural value set. Unknown parameter pointers/global/heap writes,
+initialized memory, general alias proofs and de-flattening remain incomplete.
+Proofs assume fixed code and a single-thread Guest model, not self-modifying/JIT
+code, concurrent writes or asynchronous re-entry; IR verify does not cover those.
+Public C/C++ structures, signatures and Guest ABI are unchanged from `230de43`;
+default CALL barriers, old slicer, lifters and LLVM optimization order stay intact.
+Independent review found two unsound cases in the pre-hardening prototype.
+The general x86 emitAddress path currently ignores FS/GS segment bases without
+an unlifted marker: helper `55 64 48 8b 2c 24 48 83 c4 08 c3`, FS_BASE=0x1000,
+saved RBP=0x1040, FS slot=0x1060 actually returns RBP=0x1060, not the saved value.
+The proof must reject explicit segment overrides in the real prefix region;
+do not mistake immediate/displacement/opcode bytes for prefixes. The underlying
+general-lifter segment-base semantics remain an unresolved gap outside this
+patch. Empty unlifted lists are not sufficient evidence for those instructions.
+This callee-proof guard is not a fix for segmented accesses in ordinary root
+finite analysis, legacy slicing or direct LLVM lifting; check those separately.
+Also, RIP-relative helper `48 8b 05 00 00 00 00 c3` caused registerConstants to
+resurrect callee PC=0x1087 after the RIP clobber. Never export RIP/EIP register constants
+as call results. Three new safety cases/102 assertions fail 2 cases/40 assertions
+before hardening (the prefix-payload control passes), then pass 3/3 and 102/102.
+Three additional LEA-result/stack/nested observations keep RIP Unknown while
+RAX=0x1040 matches Unicorn and dispatch targets remain recoverable; see
+review-final-guard.py/json. These are targeted observations, not full-state runs.
+Final hardened checks: 17 related C++ cases/594 assertions, including 12 new
+stack/safety cases/368 assertions. Frozen old `230de43` rerun on those 12:
+9 fail/3 controls pass, 47/316 failed assertions. CTest 619/619, no Z3 494/494;
+Python and guard/register/memory/loop slice checks rerun successfully. New native
+18-fixture matrix rerun: 1728 complete all-state/64 KiB root matches, zero
+incomplete/full semantic differences/wrong targets; no-Z3 144 and legacy leaf
+product 96 more matches. Result/memory controls each detect 72 single-field
+differences; CFG control detects 44 omitted transfers including 16 empty target
+sets while 72 semantic runs still match. Zero exclusions/skips/normalizations.
+Old native 1728 incomplete records are reused after checking exact fixture and
+frozen dual-library hashes, not rerun; distinguish this from the fresh old C++
+run. Final real Tigress four groups rerun: 256 C matches, 576 complete LLVM
+matches/960 incomplete, zero complete differences/unlifted/new pseudo-functions,
+no complete-return gain. Final records are under final-validation/ with stage
+validate-final.log; 15 final raw archives are separate from pre-hardening data.
+Do not count the following pre-hardening mutations/pilots as final-library runs.
+PRE-HARDENING ONLY: new nine C++ cases/266 assertions; 14 related cases/492 pass.
+First three tests-only on old source: two fail/one control passes, 5/68 failed
+assertions. Nine on frozen old implementation: seven fail/two controls
+pass, 33/214 failed assertions. Staged nested-call/constant-output regressions
+fail 4/8 assertions before those effects exist. Four omitted-check controls
+(footprint, SP restoration, return-slot protection, first-return-only summary)
+fail 4/2/14/8 assertions. Previously rejected valid saves/nested calls become
+positive cases; unknown effects and damaged returns remain negative cases.
+Native 18 permanent i386/x64 fixtures: new 1728 complete full-state root matches
+vs old 1728 incomplete with the same opt-in flag; no-Z3 adds 144, existing leaf
+product fixtures add 96. Static/product use FunctionStart; all modelled fields
+and 64 KiB, zero exclusions/skips/normalizations. Result/memory controls each
+detect 72 single-field differences; the strengthened CFG control detects 44
+omitted transfers, including 16 empty target sets, while 72 semantic runs still
+match. Pre-hardening CTest 616/616, no Z3 491/491; Python and guard/
+register/memory/loop slice checks pass. Frozen original-helper Tigress matrix:
+256 C matches, 576 complete LLVM matches/960 incomplete, zero complete
+differences/unlifted/new pseudo-functions, no added complete-return gain.
+No fresh 69-input default/raw/optimized IR corpus, single-instruction or IGNIL
+optimizer campaign: those production paths are unchanged. Prior `230de43`
+corpus records are existing coverage, not new optional-mode semantics. General
+call/alias/heap behavior and whole-corpus optional-mode semantics remain unproved.
+Small records: `~/vmc-runs/stack-calls-20261106/`; large frozen dual libraries,
+interfaces and per-file checked raw archives: development Mac
+`/Users/c/Desktop/deob/validation-artifacts/stack-calls-20261106/`. Copy those
+Linux libraries back to the VM to replay. Use only `~/dragon-tales-overlap`;
+do not touch the original dirty checkout or run concurrent heavy VM workers.
+
 Proved leaf-call effects (2026-11-06, baseline `5c68ce7`): see
 `docs/leaf-call-effects.md`. Opt-in `FiniteValueLimits::proveLeafCalls`, C
 `dragon_graph_finite_values_with_calls`, Python `prove_leaf_calls=True`, and

@@ -61,14 +61,13 @@ TEST_CASE("Proven leaf calls retain disjoint stack tables without ABI assumption
       auto again=p.run(g);REQUIRE(again.ok);CHECK_FALSE(again.changed);
     }
 }
-TEST_CASE("Leaf call proofs reject writes frames unknown flow and unsupported returns","[leaf-calls][finite-dispatch]") {
+TEST_CASE("Leaf call proofs reject unknown writes unknown flow and unsupported returns","[leaf-calls][finite-dispatch]") {
   const std::vector<std::vector<std::uint8_t>> helpers{
     {0x89,3,0xc3}, // arbitrary memory write
-    {0x50,0x58,0xc3}, // stack write, even though SP is restored
     {0x83,0xc4,8,0xc3}, // changed SP
     {0xc2,8,0}, // callee stack cleanup
     {0xff,0xe0}, // unresolved tail jump
-    {0xe8,0x1b,0,0,0,0xc3}, // nested call
+    {0xe8,0x7b,0,0,0,0xc3}, // call outside the decoded graph
     {0x0f,0x0b}, // trap
     {0xc5,0xf8,0x77,0xc3} // unlifted vzeroupper
   };
@@ -127,6 +126,187 @@ TEST_CASE("Leaf-call analysis obeys global budgets and keeps every branch effect
       },true,{"finite-values"}));
       REQUIRE(p.add("inspect"));auto r=p.run(g);REQUIRE(r.ok);CHECK_FALSE(r.changed);
     }
+  }
+}
+TEST_CASE("Stack-call proofs preserve saved registers and disjoint caller tables","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})
+    for(auto strategy:{DisassemblyStrategy::LINEAR_SWEEP,DisassemblyStrategy::RECURSIVE_TRAVERSAL})
+      for(bool registers:{false,true}) {
+        auto code=leafFixture(arch,{});const bool wide=arch==Architecture::X86_64;
+        const std::vector<std::uint8_t> helper=wide?
+          std::vector<std::uint8_t>{0x55,0x48,0x89,0xe5,0x53,0x48,0x83,0xec,0x20,
+            0x89,0xf8,0x83,0xc0,7,0x89,0x45,0xe8,0x48,0x83,0xc4,0x20,0x5b,0xc9,0xc3}:
+          std::vector<std::uint8_t>{0x55,0x89,0xe5,0x53,0x83,0xec,0x20,
+            0x89,0xf8,0x83,0xc0,7,0x89,0x45,0xe8,0x83,0xc4,0x20,0x5b,0xc9,0xc3};
+        std::copy(helper.begin(),helper.end(),code.begin()+0x80);
+        std::uint64_t site=wide?0x101c:0x101a;
+        if(registers) {
+          const std::vector<std::uint8_t> root{0xbd,0x40,0x10,0,0,0xba,0x50,0x10,0,0,
+            0x83,0xff,0,0x0f,0x45,0xea,0xe8,0x6b,0,0,0,0xff,0xe5};
+          std::fill(code.begin(),code.begin()+0x40,0xcc);
+          std::copy(root.begin(),root.end(),code.begin());site=0x1015;
+        } else if(wide) {code[4]=0x10;code[13]=0x18;code[31]=0x10;}
+        else {code[3]=8;code[11]=12;code[29]=8;}
+        Configuration config;config.disassemblyStrategy=strategy;
+        Disassembler dis{arch,config};Graph graph{arch,config};dis.disassemble(code,0x1000,graph);
+        PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+        REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));
+        auto result=p.run(graph);REQUIRE(result.ok);REQUIRE(result.changed);
+        CHECK(graph.get(site)->branches()==std::set<std::uint64_t>{0x1040,0x1050});
+        CHECK(result.runs[0].result.counters.at("proven_calls")>=1);
+        CHECK(result.runs[0].result.status==Status::Success);
+      }
+}
+TEST_CASE("Stack-call writes invalidate overlapping tables and corrupted saved registers","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(bool saved:{false,true}) {
+    const bool wide=arch==Architecture::X86_64;
+    auto code=leafFixture(arch,{});
+    std::vector<std::uint8_t> helper=wide?std::vector<std::uint8_t>{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x20}:
+        std::vector<std::uint8_t>{0x55,0x89,0xe5,0x83,0xec,0x20};
+    helper.reserve(32);
+    if(saved)helper.insert(helper.end(),{0x89,0x45,0}); // corrupt saved BP, keep return slot intact
+    else helper.insert(helper.end(),{0x89,0x45,std::uint8_t(wide?0xf0:0xf8)}); // caller table
+    helper.insert(helper.end(),{0xc9,0xc3});std::copy(helper.begin(),helper.end(),code.begin()+0x80);
+    std::uint64_t site=wide?0x101c:0x101a;
+    if(saved) {
+      const std::vector<std::uint8_t> root{0xbd,0x40,0x10,0,0,0xba,0x50,0x10,0,0,
+        0x83,0xff,0,0x0f,0x45,0xea,0xe8,0x6b,0,0,0,0xff,0xe5};
+      std::fill(code.begin(),code.begin()+0x40,0xcc);std::copy(root.begin(),root.end(),code.begin());site=0x1015;
+    }
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK_FALSE(result.changed);CHECK(graph.get(site)->branches().empty());
+    CHECK(result.runs[0].result.counters.at("proven_calls")>=1);
+  }
+}
+TEST_CASE("Stack-call proofs reject altered return bytes and disagreeing return stacks","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(unsigned kind=0;kind<4;++kind) {
+    auto code=leafFixture(arch,{});std::vector<std::uint8_t> helper;
+    if(kind==0)helper={0xc6,0x44,0x24,std::uint8_t(arch==Architecture::X86_64?7:3),0,0xc3};
+    if(kind==1)helper={0x55,0x83,0xff,0,0x74,1,0x5d,0xc3}; // one exit leaks a push
+    if(kind==2)helper={0xc7,0x44,0x24,0xff,0,0,0,0,0xc3}; // partial overlap across offset zero
+    if(kind==3)helper={0x55,0x89,3,0x5d,0xc3}; // arbitrary write may corrupt the return
+    std::copy(helper.begin(),helper.end(),code.begin()+0x80);
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK_FALSE(result.changed);CHECK(result.runs[0].result.counters.at("rejected_calls")>=1);
+  }
+}
+TEST_CASE("Stack-call proofs never assume an ABI preserves unsaved registers","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(bool save:{false,true}) {
+    auto code=leafFixture(arch,{});
+    const std::vector<std::uint8_t> root{0xbb,0x40,0x10,0,0,0xba,0x50,0x10,0,0,
+      0x83,0xff,0,0x0f,0x45,0xda,0xe8,0x6b,0,0,0,0xff,0xe3};
+    std::fill(code.begin(),code.begin()+0x40,0xcc);std::copy(root.begin(),root.end(),code.begin());
+    std::vector<std::uint8_t> helper;helper.reserve(16);
+    if(save)helper.push_back(0x53);
+    helper.insert(helper.end(),{0x89,0xfb}); // EBX is callee-saved in common ABIs; no guesses.
+    if(save)helper.push_back(0x5b);
+    helper.push_back(0xc3);std::copy(helper.begin(),helper.end(),code.begin()+0x80);
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK(result.changed==save);CHECK(result.runs[0].result.counters.at("proven_calls")>=1);
+    if(save)CHECK(graph.get(0x1015)->branches()==std::set<std::uint64_t>{0x1040,0x1050});
+    else CHECK(graph.get(0x1015)->branches().empty());
+  }
+}
+TEST_CASE("Stack-call effects compose through internal calls without losing saved state","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(bool framed:{false,true}) {
+    const bool wide=arch==Architecture::X86_64;auto code=leafFixture(arch,{});code.resize(0xe0,0xcc);
+    const std::vector<std::uint8_t> root{0xbd,0x40,0x10,0,0,0xba,0x50,0x10,0,0,
+      0x83,0xff,0,0x0f,0x45,0xea,0xe8,0x6b,0,0,0,0xff,0xe5};
+    std::fill(code.begin(),code.begin()+0x40,0xcc);std::copy(root.begin(),root.end(),code.begin());
+    std::vector<std::uint8_t> parent=wide?
+      std::vector<std::uint8_t>{0x55,0x48,0x89,0xe5,0x48,0x83,0xec,0x10,0xe8,0x33,0,0,0,0xc9,0xc3}:
+      std::vector<std::uint8_t>{0x55,0x89,0xe5,0x83,0xec,0x10,0xe8,0x35,0,0,0,0xc9,0xc3};
+    if(!framed)parent={0xe8,0x3b,0,0,0,0xc3};
+    const std::vector<std::uint8_t> child{0x89,0xf8,0x83,0xc0,7,0xc3};
+    std::copy(parent.begin(),parent.end(),code.begin()+0x80);std::copy(child.begin(),child.end(),code.begin()+0xc0);
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK(result.changed);CHECK(graph.get(0x1015)->branches()==std::set<std::uint64_t>{0x1040,0x1050});
+  }
+}
+TEST_CASE("Nested effects protect the outer return and bound recursive call trees","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(unsigned kind=0;kind<3;++kind) {
+    const bool wide=arch==Architecture::X86_64;auto code=leafFixture(arch,{});code.resize(0xe0,0xcc);
+    std::vector<std::uint8_t> parent{0xe8,0x3b,0,0,0,0xc3};
+    if(kind==1)parent={0xe8,0xfb,0xff,0xff,0xff,0xc3}; // recursion, no finite summary
+    std::copy(parent.begin(),parent.end(),code.begin()+0x80);
+    const std::vector<std::uint8_t> child=kind==2?std::vector<std::uint8_t>{0x89,3,0xc3}:
+      std::vector<std::uint8_t>{0xc7,0x44,0x24,std::uint8_t(wide?8:4),0,0,0,0,0xc3};
+    std::copy(child.begin(),child.end(),code.begin()+0xc0);
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK_FALSE(result.changed);CHECK(graph.get(wide?0x101c:0x101a)->branches().empty());
+    CHECK(result.runs[0].result.counters.at("rejected_calls")>=1);
+  }
+}
+TEST_CASE("Call effects propagate proved constant results and caller stack writes","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(bool memory:{false,true}) {
+    const bool wide=arch==Architecture::X86_64;auto code=leafFixture(arch,{});
+    std::fill(code.begin(),code.begin()+0x40,0xcc);
+    std::vector<std::uint8_t> root,helper;
+    if(memory) {
+      root=wide?std::vector<std::uint8_t>{0x48,0x83,0xec,0x10,0xe8,0x77,0,0,0,0xff,0x24,0x24}:
+        std::vector<std::uint8_t>{0x83,0xec,0x10,0xe8,0x78,0,0,0,0xff,0x24,0x24};
+      helper=wide?std::vector<std::uint8_t>{0xb8,0x40,0x10,0,0,0x48,0x89,0x44,0x24,8,0xc3}:
+        std::vector<std::uint8_t>{0xc7,0x44,0x24,4,0x40,0x10,0,0,0xc3};
+    } else {
+      root={0xe8,0x7b,0,0,0,0xff,0xe0};helper={0xb8,0x40,0x10,0,0,0xc3};
+    }
+    std::copy(root.begin(),root.end(),code.begin());std::copy(helper.begin(),helper.end(),code.begin()+0x80);
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK(result.changed);CHECK(graph.get(memory?(wide?0x1009:0x1008):0x1005)->branches()==std::set<std::uint64_t>{0x1040});
+  }
+}
+TEST_CASE("Call result proofs check every return and do not invent initial memory","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(bool memory:{false,true}) {
+    const bool wide=arch==Architecture::X86_64;auto code=leafFixture(arch,{});
+    std::fill(code.begin(),code.begin()+0x40,0xcc);
+    std::vector<std::uint8_t> root,helper;
+    if(memory) {
+      root=wide?std::vector<std::uint8_t>{0x48,0x83,0xec,0x10,0xe8,0x77,0,0,0,0xff,0x24,0x24}:
+        std::vector<std::uint8_t>{0x83,0xec,0x10,0xe8,0x78,0,0,0,0xff,0x24,0x24};
+      helper=wide?
+        std::vector<std::uint8_t>{0x83,0xff,0,0x74,11,0xb8,0x40,0x10,0,0,0x48,0x89,0x44,0x24,8,0xc3,0xc3}:
+        std::vector<std::uint8_t>{0x83,0xff,0,0x74,9,0xc7,0x44,0x24,4,0x40,0x10,0,0,0xc3,0xc3};
+    } else {
+      root={0xe8,0x7b,0,0,0,0xff,0xe0};
+      helper={0x83,0xff,0,0x74,6,0xb8,0x40,0x10,0,0,0xc3,0xb8,0x50,0x10,0,0,0xc3};
+    }
+    std::copy(root.begin(),root.end(),code.begin());std::copy(helper.begin(),helper.end(),code.begin()+0x80);
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK_FALSE(result.changed);CHECK(graph.get(memory?(wide?0x1009:0x1008):0x1005)->branches().empty());
+    CHECK(result.runs[0].result.counters.at("proven_calls")>=1);
+  }
+}
+TEST_CASE("Call-tree depth is bounded without accepting a partial summary","[stack-calls][finite-dispatch]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64})for(unsigned depth:{4,5}) {
+    auto code=leafFixture(arch,{});code.resize(0x201,0xcc);
+    const std::vector<std::uint8_t> root{0xbd,0x40,0x10,0,0,0xba,0x50,0x10,0,0,
+      0x83,0xff,0,0x0f,0x45,0xea,0xe8,0x6b,0,0,0,0xff,0xe5};
+    std::fill(code.begin(),code.begin()+0x40,0xcc);std::copy(root.begin(),root.end(),code.begin());
+    for(unsigned n=0;n<depth;++n) {
+      const auto at=0x80+n*0x20;
+      if(n+1==depth)code[at]=0xc3;
+      else {const std::vector<std::uint8_t> call{0xe8,0x1b,0,0,0,0xc3};std::copy(call.begin(),call.end(),code.begin()+at);}
+    }
+    Disassembler dis{arch,{}};Graph graph{arch,{}};dis.disassemble(code,0x1000,graph);
+    PassPipeline p;REQUIRE(p.registerGraph("recover",FiniteDispatchPass{code,0x1000}));
+    REQUIRE(p.add("recover",{{"prove_leaf_calls",std::int64_t{1}}}));auto result=p.run(graph);REQUIRE(result.ok);
+    CHECK(result.changed==(depth==4));
+    if(depth==4)CHECK(graph.get(0x1015)->branches()==std::set<std::uint64_t>{0x1040,0x1050});
+    else {CHECK(graph.get(0x1015)->branches().empty());CHECK(result.runs[0].result.counters.at("rejected_calls")>=1);}
   }
 }
 }

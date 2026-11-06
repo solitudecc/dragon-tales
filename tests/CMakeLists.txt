@@ -3,6 +3,7 @@ add_executable(dragon_tests
         disassemblers/TestDisassembler.cpp
         disassemblers/TestX86Analysis.cpp
         disassemblers/TestFiniteDispatch.cpp
+        disassemblers/TestCallEffectSafety.cpp
         disassemblers/TestX86IGNILLifter.cpp
         disassemblers/TestARMAnalysis.cpp
         disassemblers/TestARMIGNILLifter.cpp

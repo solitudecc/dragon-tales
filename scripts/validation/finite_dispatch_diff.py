@@ -79,7 +79,7 @@ def main():
                 published=edges.get(source,())
                 observed.append(target)
                 observations.append(dict(case=f['id'],source=source,target=target,
-                    resolved=bool(published),missing=bool(published) and target not in published,
+                    resolved=bool(published),missing=target not in published and (bool(published) or args.control=='edge'),
                     omitted_control=args.control=='edge' and target==min(f['expected_targets']) and target not in published))
             assert observed, 'reference did not execute the dispatcher'
             assert set(observed).issubset(f['expected_targets']), 'fixture target specification disagrees with Unicorn'
@@ -108,7 +108,9 @@ def main():
     precise=all(set(graphs[case].get(fixture_map[case]['indirect_site'],()))==
                 set(fixture_map[case]['expected_targets']) for case in selected)
     if args.control=='edge':
-        ok=not errors and all(r['status']=='match' and root(r) for r in rows) and wrong>0 and any(o['omitted_control'] for o in observations)
+        omitted=[o for o in observations if o['omitted_control']]
+        ok=not errors and all(r['status']=='match' and root(r) for r in rows) and bool(omitted) and \
+            wrong==len(omitted) and all(o['missing'] for o in omitted)
     elif args.control:
         ok=not errors and all(r['status']=='different' and root(r) and len(r['differences'])==1 and
             r['differences'][0]['field']==('memory' if args.control=='memory' else ('EAX' if r['architecture']=='x86_32' else 'RAX')) for r in rows) and wrong==0

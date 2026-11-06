@@ -424,7 +424,8 @@ class Graph:
 
         Kind 0 is unreachable, 1 finite, 2 unknown. No image-memory assumptions
         are added. Optional prove_leaf_calls derives bounded effects from actual
-        x86 leaf bodies; rejected calls keep the full barrier. All values are unknown if the
+        x86 code, including stack frames, bounded internal calls and agreed constants.
+        Rejected calls keep the full barrier. All values are unknown if the
         global analysis budget is exhausted. Does not change this Graph.
         """
         import json
