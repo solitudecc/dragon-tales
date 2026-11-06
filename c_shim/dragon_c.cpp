@@ -8,6 +8,7 @@
 #endif
 #include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
+#include <dragon/passes/PassPipeline.hpp>
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
@@ -1286,6 +1287,68 @@ int dragon_llvm_lifter_simplify_mba(dragon_llvm_lifter_t *l,
   out->rejected_candidates = stats.rejectedCandidates;
   out->budget_skipped = stats.budgetSkipped;
   return 1;
+}
+
+struct dragon_pass_pipeline {
+  dragon::passes::PassPipeline pipeline;
+  std::string error;
+};
+static_assert(static_cast<int>(dragon::passes::Stage::Graph)==DRAGON_PASS_GRAPH);
+static_assert(static_cast<int>(dragon::passes::Stage::LLVM)==DRAGON_PASS_LLVM);
+static_assert(static_cast<int>(dragon::passes::Status::Error)==DRAGON_PASS_ERROR);
+namespace {
+dragon::passes::Result invokePass(dragon_pass_callback_t fn,void *userdata,
+    void *target,dragon::passes::AnalysisCache &cache,const dragon::passes::Options &options) {
+  const auto json=dragon::passes::optionsJSON(options);
+  dragon_pass_result_t result{DRAGON_PASS_ERROR,0,"callback did not produce a result","{}"};
+  fn(target,cache.revision(),json.c_str(),userdata,&result);
+  return {static_cast<dragon::passes::Status>(result.status),result.changed!=0,
+      result.message?result.message:"",dragon::passes::parseCountersJSON(result.counters_json?result.counters_json:"{}")};
+}
+}
+dragon_pass_pipeline_t *dragon_pass_pipeline_create(int builtins) {
+  try {return new dragon_pass_pipeline{dragon::passes::PassPipeline{builtins!=0},{}};} catch(...) {return nullptr;}
+}
+void dragon_pass_pipeline_destroy(dragon_pass_pipeline_t *p) {
+  if(p && p->pipeline.isRunning()) {p->error="cannot destroy a running pipeline";return;}
+  delete p;
+}
+int dragon_pass_pipeline_add(dragon_pass_pipeline_t *p,const char *name,const char *options) {
+  if(!p || !name) return 0;
+  try {p->error.clear();return p->pipeline.add(name,dragon::passes::parseOptionsJSON(options?options:"{}"));}
+  catch(const std::exception &e) {p->error=e.what();return 0;}
+}
+int dragon_pass_pipeline_clear(dragon_pass_pipeline_t *p) {return p && p->pipeline.clear();}
+int dragon_pass_pipeline_register(dragon_pass_pipeline_t *p,const char *name,
+    dragon_pass_stage_t stage,dragon_pass_callback_t callback,void *userdata,int readOnly,const char *dependencies) {
+  if(!p || !name || !callback || (stage!=DRAGON_PASS_GRAPH && stage!=DRAGON_PASS_LLVM)) return 0;
+  try {
+    p->error.clear();auto prior=dragon::passes::parseNamesJSON(dependencies?dependencies:"[]");
+    if(stage==DRAGON_PASS_GRAPH) return p->pipeline.registerGraph(name,[=](dragon::passes::GraphContext &c,const auto &o){return invokePass(callback,userdata,c.bindingTarget,c.analyses,o);},readOnly!=0,std::move(prior));
+    return p->pipeline.registerLLVM(name,[=](dragon::passes::LLVMContext &c,const auto &o){return invokePass(callback,userdata,c.bindingTarget,c.analyses,o);},readOnly!=0,std::move(prior));
+  } catch(const std::exception &e) {p->error=e.what();return 0;}
+}
+int dragon_pass_pipeline_override(dragon_pass_pipeline_t *p,const char *name,
+    dragon_pass_stage_t stage,dragon_pass_callback_t callback,void *userdata) {
+  if(!p || !name || !callback) return 0;
+  p->error.clear();
+  if(stage==DRAGON_PASS_GRAPH) return p->pipeline.overrideGraph(name,[=](dragon::passes::GraphContext &c,const auto &o){return invokePass(callback,userdata,c.bindingTarget,c.analyses,o);});
+  if(stage==DRAGON_PASS_LLVM) return p->pipeline.overrideLLVM(name,[=](dragon::passes::LLVMContext &c,const auto &o){return invokePass(callback,userdata,c.bindingTarget,c.analyses,o);});
+  return 0;
+}
+char *dragon_pass_pipeline_describe(const dragon_pass_pipeline_t *p) {return dup_string(p?p->pipeline.describeJSON():"[]");}
+char *dragon_pass_pipeline_error(const dragon_pass_pipeline_t *p) {return dup_string(!p?"null pipeline":!p->error.empty()?p->error:p->pipeline.lastError());}
+char *dragon_pass_pipeline_run_llvm(dragon_pass_pipeline_t *p,dragon_llvm_lifter_t *l,
+    uint32_t iterations,uint32_t runs,int verify) {
+  if(!p || !l) return nullptr;
+  try {return dup_string(p->pipeline.run(l->lifter,{iterations,runs,verify!=0},l).toJSON());}
+  catch(const std::exception &e) {p->error=e.what();return nullptr;}
+}
+char *dragon_pass_pipeline_run_graph(dragon_pass_pipeline_t *p,dragon_graph_t *g,
+    uint32_t iterations,uint32_t runs) {
+  if(!p || !g) return nullptr;
+  try {return dup_string(p->pipeline.run(*as_graph(g),{iterations,runs,true},g).toJSON());}
+  catch(const std::exception &e) {p->error=e.what();return nullptr;}
 }
 
 void dragon_slicer_destroy(dragon_slicer_t *s) { delete s; }

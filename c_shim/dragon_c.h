@@ -733,6 +733,44 @@
       uint32_t timeout_ms, uint32_t max_queries, uint32_t max_expression_nodes,
       uint32_t max_variables, uint32_t resource_limit, dragon_mba_simplify_stats_t* out);
 
+  // -- In-process Graph/LLVM pass pipelines -------------------------------------
+  typedef struct dragon_pass_pipeline dragon_pass_pipeline_t;
+  typedef enum dragon_pass_stage { DRAGON_PASS_GRAPH=0, DRAGON_PASS_LLVM=1 } dragon_pass_stage_t;
+  typedef enum dragon_pass_status {
+      DRAGON_PASS_SUCCESS=0, DRAGON_PASS_UNAVAILABLE=1,
+      DRAGON_PASS_INCOMPLETE=2, DRAGON_PASS_ERROR=3
+  } dragon_pass_status_t;
+  typedef struct dragon_pass_result {
+      dragon_pass_status_t status;
+      int changed;
+      const char* message;
+      const char* counters_json;
+  } dragon_pass_result_t;
+  // target is the borrowed Graph/lifter handle for this synchronous run.
+  // Result defaults to ERROR; set status explicitly after writing its fields.
+  // Output strings must remain valid until the callback's caller copies them.
+  typedef void (*dragon_pass_callback_t)(void* target, uint64_t revision,
+      const char* options_json, void* userdata, dragon_pass_result_t* out);
+  dragon_pass_pipeline_t* dragon_pass_pipeline_create(int builtins);
+  void dragon_pass_pipeline_destroy(dragon_pass_pipeline_t* p);
+  int dragon_pass_pipeline_add(dragon_pass_pipeline_t* p, const char* name, const char* options_json);
+  int dragon_pass_pipeline_clear(dragon_pass_pipeline_t* p);
+  int dragon_pass_pipeline_register(dragon_pass_pipeline_t* p, const char* name,
+      dragon_pass_stage_t stage, dragon_pass_callback_t callback, void* userdata,
+      int read_only, const char* requires_json);
+  // Keeps existing dependency/option validation when replacing a built-in executor.
+  int dragon_pass_pipeline_override(dragon_pass_pipeline_t* p, const char* name,
+      dragon_pass_stage_t stage, dragon_pass_callback_t callback, void* userdata);
+  // Returned strings are OWNED; free with dragon_cstr_free. Reports include ok,
+  // changed/converged/budget_exhausted and individual statuses/counters. Error
+  // stops execution; mutations made before an error are not rolled back.
+  char* dragon_pass_pipeline_describe(const dragon_pass_pipeline_t* p);
+  char* dragon_pass_pipeline_error(const dragon_pass_pipeline_t* p);
+  char* dragon_pass_pipeline_run_llvm(dragon_pass_pipeline_t* p, dragon_llvm_lifter_t* l,
+      uint32_t max_iterations, uint32_t max_pass_runs, int verify);
+  char* dragon_pass_pipeline_run_graph(dragon_pass_pipeline_t* p, dragon_graph_t* g,
+      uint32_t max_iterations, uint32_t max_pass_runs);
+
   // -- FLIRT signatures (dragon::sigs) --------------------------------------------
 
   typedef struct dragon_sigdb dragon_sigdb_t;

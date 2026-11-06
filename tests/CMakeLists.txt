@@ -24,6 +24,7 @@ add_executable(dragon_tests
         lifters/TestLLVMGuestReturns.cpp
         lifters/TestLLVMImports.cpp
         lifters/TestLLVMStatic.cpp
+        lifters/TestPassPipeline.cpp
         loader/TestLoader.cpp
 )
 
@@ -191,6 +192,10 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - LLVM static function entry C and Python"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_static_entry.py)
         set_tests_properties("Validation - LLVM static function entry C and Python" PROPERTIES
+            ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Validation - pass pipeline C and Python"
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_pass_pipeline.py)
+        set_tests_properties("Validation - pass pipeline C and Python" PROPERTIES
             ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         set(_dragon_predicate_args)
         if(NOT DRAGON_USE_Z3)

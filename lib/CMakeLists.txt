@@ -6,6 +6,7 @@ add_library(libdragon SHARED
         Graph.cpp
         IGNIL.cpp
         IGNILSimplify.cpp
+        PassPipeline.cpp
         LLVMLifter.cpp
         LLVMPredicateFolding.cpp
         LLVMMBASimplification.cpp

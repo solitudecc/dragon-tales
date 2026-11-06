@@ -923,6 +923,15 @@ normal continuation. Static functions are not V2 runtime targets. See
 | `dragon_llvm_lifter_fold_predicates(l, timeout_ms, max_queries, max_expression_nodes, resource_limit, out_stats)` | `int` (0/1) | Bounded branch/select proofs; `dragon_predicate_fold_stats_t` |
 | `dragon_llvm_lifter_run_dce(l)` | — | Removes dead flag computations |
 
+Pass orchestration uses opaque `dragon_pass_pipeline_t` handles:
+`dragon_pass_pipeline_create`, `register`, `add`, `clear`, `describe`,
+`run_graph` / `run_llvm`, and `destroy`. Step options, descriptions and reports
+are JSON; returned strings are owned and freed with `dragon_cstr_free`.
+The synchronous callback gets a borrowed target and cache revision. Its output
+defaults to ERROR and must be filled explicitly. The report distinguishes
+unavailable/incomplete analysis, budget stops and execution errors.
+See [the pass architecture](pass-pipeline.md) for limits and plugin correctness/lifetime rules.
+
 The proof functions return 0 for a null lifter/output pointer and 1 otherwise.
 Without Z3 they report `available=0` and leave IR unchanged. Suggested MBA limits
 are `100/16/128/3/1000000`; see [options, statistics and scope](llvm-mba-simplification.md).

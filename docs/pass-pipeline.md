@@ -1,0 +1,157 @@
+# 可组合的 Graph / LLVM Pass 流水线
+
+基线 `04c6d91`，2026-11-06。第一版提供进程内注册、参数配置、阶段检查、
+有预算的重复执行、分析缓存和结构化报告。新算法可以用 C++ 可调用类、C 回调或
+Python 可调用对象接入；本版不加载共享库插件，也不宣称新增了跨调用、值集或去平坦化算法。
+C/Python 插件可编排现有变换及分析；直接访问并改写 Graph/LLVM 数据结构使用 C++ 上下文接口。
+
+## 两个运行位置
+
+```mermaid
+flowchart LR
+    A[反汇编与架构分析] --> B[Graph / IGNIL 流水线]
+    B --> C[LLVM 提升]
+    C --> D[LLVM 流水线]
+    R[注册接口与运行报告] -.-> B
+    R -.-> D
+```
+
+同一 `PassPipeline` 类型提供 Graph 和 LLVM 两种运行接口。一次运行只接受同一阶段的
+步骤；混合阶段在执行任何步骤前拒绝。Graph 阶段处于初始反汇编分析之后、LLVM 提升之前，
+初始反汇编器内部的目标解析策略没有迁移或改变。后续恢复目标、补充解码等算法可以
+注册为 Graph Pass。LLVM 阶段复用现有优化实现。
+
+内置步骤：
+
+| 名称 | 阶段 | 参数 |
+|---|---|---|
+| `graph-audit` | Graph，读取统计 | 无；报告指令、有效块/函数、缺失 IGNIL 和按块累加的 unlifted 记录数 |
+| `mem2reg` / `instcombine` / `gvn` / `dce` | LLVM | 无 |
+| `mba` | LLVM | `timeout_ms=100, max_queries=16, max_expression_nodes=128, max_variables=3, resource_limit=1000000` |
+| `predicates` | LLVM | `timeout_ms=25, max_queries=64, max_expression_nodes=256, resource_limit=200000` |
+
+`graph-audit` 是统计步骤，不能把其成功状态当作 CFG 完整性或执行正确性的证明。
+配置是扁平的整数、布尔值、字符串对象；内置数值参数仅接受 uint32 整数，拒绝未知参数。
+
+## Python 使用
+
+```python
+with dragon.PassPipeline(['graph-audit']) as graph_passes:
+    graph = image.disassemble(graph_pipeline=graph_passes)
+    # 裸字节也可用 dis.analyze(code, base, graph_pipeline=graph_passes)。
+
+with dragon.LLVMLifter(image.architecture,
+        execution_mode=dragon.LLVMExecutionMode.STATIC_ANALYSIS) as lifter:
+    assert lifter.lift(graph.get_function(entry), graph)
+    with dragon.PassPipeline([
+        'mem2reg', 'instcombine', 'gvn',
+        ('mba', {'max_queries': 16}), 'predicates', 'dce'
+    ]) as pipeline:
+        report = pipeline.run(lifter, max_iterations=4, max_pass_runs=32)
+```
+
+`lifter.optimize()` 现在经过默认流水线，仍按
+mem2reg → instcombine → GVN → MBA → predicates → DCE 执行一轮，参数和 None 返回值保持兼容。
+它仍调用公开的 `run_*` Python 方法，既有监测钩子继续生效。
+`lifter.optimize(pipeline)` 执行指定流水线并返回报告。
+
+可调用类就是一个插件；例如一个只读统计步骤：
+
+```python
+class FunctionCount:
+    def __call__(self, context, options):
+        addresses = tuple(context.target.function_addresses())
+        context.analyses['function-addresses'] = addresses
+        return dragon.PassResult(counters={'functions': len(addresses)})
+
+with dragon.PassPipeline(['graph-audit']) as pipeline:
+    pipeline.register('count-functions', FunctionCount(),
+                      stage=dragon.PassStage.GRAPH, read_only=True)
+    pipeline.add('count-functions')
+    report = pipeline.run(graph)
+```
+
+`register(..., requires=('other-pass',))` 要求依赖步骤在同一流水线中先出现；不会自动插入或执行依赖。
+依赖步骤执行过，并不表示它的旧分析结果仍然有效。插件须按当前 revision 查询缓存，
+缓存缺失时重新计算。C++ 和 Python 各自保存其语言中的分析对象，不自动互换 `std::any` 与 Python 对象。
+
+## C++ 和 C
+
+公共头：`dragon/passes/PassPipeline.hpp`。
+
+```cpp
+using namespace dragon::passes;
+PassPipeline pipeline;
+for (const auto &name : PassPipeline::defaultLLVM())
+    if (!pipeline.add(name)) throw std::runtime_error(pipeline.lastError());
+Report report = pipeline.run(lifter);
+if (!report.ok) throw std::runtime_error(report.error);
+```
+
+通过 `registerGraph(name, callable, readOnly, requiresPasses, validator)` 或
+`registerLLVM(...)` 注册原生可调用类。上下文分别包含 `Graph&` / `LLVMLifter&`、
+本次运行的 `AnalysisCache&`。缓存提供 `put<T>`、`get<T>` 和 `invalidate()`。
+C++ validator 可返回错误说明，拒绝该步骤的配置。
+
+C 接口提供 opaque `dragon_pass_pipeline_t`，create/register/add/run/describe/destroy，
+阶段、状态和回调类型在 `dragon_c.h` 中。run 返回自有 JSON 字符串，须用
+`dragon_cstr_free` 释放。回调目标是本次运行借用的 Graph/lifter；不得关闭或销毁它。
+回调输出默认 ERROR，完成填写其他字段后必须显式设置状态。输出字符串须保持有效，
+直到本次回调返回给框架并完成复制。Python 桥接负责这些缓冲区的生命周期。
+
+## 调度、缓存和失败规则
+
+- `max_iterations` 默认 1，允许 1–64；设大于 1 时最多执行指定轮数，完整一轮无变化即停止。
+  `max_pass_runs` 默认 64，允许 0–4096；0 表示不执行步骤。
+  预算限制调度次数，不会强制中断任意插件代码；算法仍须有自己的求解和展开预算。
+- 每次 Pass 调用重新取得它自己的选项预算，多轮运行会重复取得这些预算。
+  默认一轮保留原先的每模块预算；没有把多次调用伪装成一次求解。
+- 修改型 Pass 执行后保守清空全部缓存，即使这次没有实际改变 IR。只读步骤可共享缓存。
+  插件在步骤内部修改目标后若还要查询分析，也须自行失效相应缓存。
+  每次 run 都创建全新缓存，不跨目标或跨运行复用旧事实。
+- LLVM 步骤用调用前后的完整 IR 文本检测变化，涵盖常量、全局、属性和元数据。
+  Graph 插件负责如实报告 `changed`；不能将其声明为只读后修改 Graph。
+- 默认在 LLVM 运行前和每一步后 verify。只读 LLVM Pass 修改 IR、Unavailable Pass 修改 IR、
+  无效状态或无效 LLVM 输出都会停止流水线。verify 是结构检查，不能证明程序语义等价。
+- 报告包含 `ok / changed / converged / budget_exhausted / iterations / error / runs`，每次调用记录
+  名称、轮次、revision、状态和计数器。SUCCESS 只表示调用正常；UNAVAILABLE 表示缺少能力，
+  INCOMPLETE 表示该步骤未完成全部证明；ERROR 停止执行。`ok` 或 `converged` 都不表示混淆已全部消除。
+- Pass 是可信进程内代码，需自行满足变换前提、证明义务和回归对拍要求。框架没有为任意
+  插件建立通用语义证明器或隔离边界。错误不自动回滚；应丢弃发生错误的处理产物。
+- 禁止同一流水线递归执行和运行中修改注册/步骤。Python 也禁止对同一目标嵌套运行，
+  以及关闭运行中的流水线或目标。对象不提供并发运行保证。
+- Python Graph 流水线调用会使先前借用的 Instruction/BasicBlock/Function/IGNILBlock 视图过期，
+  后续访问抛 ReferenceError；应在运行后重新获取。自动 `graph_pipeline=` 路径在失败时关闭
+  新建 Graph。所有语言的插件都不得在修改后复用此前获取的视图或 IR 指针；需要时重新获取。
+
+## 验证
+
+- 八项新的 C++ 回归 / 158 条断言；配置、阶段、前置步骤、循环预算、缓存失效、错误停止、
+  Graph 扩展和 LLVM 非法输出均有覆盖。默认 sweep 与原始手动调用在三架构上逐字节一致。
+- 原基线不能编译新增 API 测试，错误是缺少 `PassPipeline.hpp`；原始输出保留。
+- 开发中的异常回归另外抓到错误文本格式化失败被 CFFI 忽略、未填写的 C 回调结果被当作成功，
+  以及关闭活动目标造成的崩溃。最终实现默认失败、最后提交成功状态，并阻止 Python 目标关闭；
+  对应旧日志和修复后回归都保留。初轮验证产物归档，未计入最终覆盖。
+- CTest 582/582；无 Z3 458/458。
+- 自定义类 Pass 与 Graph 缓存步骤：3776 次状态比较匹配，包含 1040 次完整根返回、
+  480 次既定边界和 2256 次错误入口拒绝。另一个有预算的重复流水线：976 次匹配，
+  包含 400 次完整根返回、576 次拒绝入口。边界和拒绝入口不算完整函数成功。
+- 返回寄存器、内存负对照各检测 84/84 个单字段差异。无 Z3 的自定义流水线另外有
+  84 次匹配（36 次完整根返回、48 次拒绝入口）。没有新增排除、跳过或归一化。
+- 同一批冻结的 Tigress 二进制，三档 × C O0/O2 × 两种策略 × 两种入口策略 × MBA 开/关：
+  48 份 kernel IR 与原先的手动管线逐字节一致。新架构不把这些相同行为称作新增去混淆收益。
+- 冻结 Tigress 样本的完整执行复验：288 次 C 参考比较、576 次 LLVM 完整根返回匹配；
+  错误、未完成退出、unlifted 和执行到未解码指令均为 0。仍执行真实 Guest megaInit，
+  没有注入初始化后的堆数据来帮助分析。
+- 两个真实语料库全部重跑：69 个输入、138 种策略组合、206649 个有效函数检查点；
+  6530 份原始模块和 6530 份优化模块全部 verify，提升失败和函数覆盖缺口均为 0。
+  输入哈希、反汇编/CFG/函数覆盖等记录字段与基线一致，保留已有异常。
+  138 次 Graph 和 6530 次 LLVM 流水线报告均检查了步骤、状态和预算；
+  MBA 合计 8 次查询、8 次已证明改写、0 unknown、0 拒绝。普通代码计数也包含状态/标志辅助表达式。
+- 资源中断单独保留：两个大输入并行时 VM 交换空间耗尽，主动终止了尚未完成的 Python 输入。
+  该次不计最终覆盖；改为大输入串行后单独完整重跑通过。记录在 `memory-retry/`，
+  最终汇总要求该输入存在完整结果，没有跳过它。
+
+VM 产物：`~/vmc-runs/pass-pipeline-20261106/`。本轮没有修改指令提升器、IGNIL 优化算法
+或间接跳转解析策略，未另跑单指令/IGNIL 全量差分。原生函数验证覆盖调度后的执行结果；
+真实语料的 verify 只能证明 IR 合法性。跨调用、值集、堆建模和去平坦化仍是后续 Pass 的工作。

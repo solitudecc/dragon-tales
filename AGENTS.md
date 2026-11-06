@@ -206,6 +206,48 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Composable pass pipelines (2026-11-06, baseline `04c6d91`):
+`dragon/passes/PassPipeline.hpp` supplies typed Graph/LLVM registries, ordered
+steps, option/dependency preflight, bounded sweeps, per-run analysis caches and
+per-invocation reports. C opaque handles/callbacks and Python callable classes
+use the same native scheduler. Python default optimize() keeps its six-step
+order/options, public run_* hooks and None return value. Optional graph_pipeline
+hooks run after initial analysis; initial disassembler algorithms are unchanged.
+Only graph-audit is built in at Graph level; no new cross-call/value-set/deflat
+algorithms or shared-library loading. See docs/pass-pipeline.md for contracts.
+Mutating steps invalidate all caches conservatively; errors stop without
+rollback, so discard failed targets. Report ok/converged never means complete
+deobfuscation. Plugins are trusted code and must prove/validate transformations.
+Callbacks default to ERROR and commit status last; bad exception formatting and
+unwritten C results are regression-tested. Python forbids closing active targets
+or nesting pipelines on the same target. Pre-existing Graph views expire on a
+Graph run; automatic Graph hooks close failed results. Pre-hardened output is
+archived separately and is not final validation coverage.
+Eight new C++ cases / 158 assertions; original API tests cannot compile because
+the header is new. CTest 582/582, no Z3 458/458. Custom class pipeline: 3776 state
+matches (1040 root / 480 declared boundaries / 2256 rejected entries); repeated
+pipeline: 976 (400 root / 576 rejected). No-Z3 custom pipeline: 84 (36 root /
+48 rejected). Result and memory controls each detect 84 single-field differences;
+zero new exclusions/skips/normalizations. Native pass reports also check Graph
+cache reuse and post-mutation invalidation. On frozen real Tigress ELFs, 48
+kernel modules (two strategies/entry policies/MBA enabled or disabled) match old
+manual pipeline IR byte-for-byte. This is compatibility, not a new deobfuscation
+gain. Frozen Tigress replay gives 288 C matches and 576 complete LLVM root
+matches, with zero wrong/incomplete/unlifted/executed-undecoded cases. Real Guest
+megaInit still executes; no initialized heap snapshot is injected. Both real
+corpora: 69 inputs / 138 strategies / 206649 valid-function checkpoints;
+6530 raw + 6530 optimized modules verify, zero lift failures or coverage gaps.
+Input hashes and recorded structure retain the baseline, including its known
+anomalies. All 138 Graph / 6530 LLVM reports have audited order/status/budgets.
+MBA totals: 8 queries / 8 proved rewrites / 0 unknown / 0 rejected; ordinary-code
+counters also include state/flag helpers. One unfinished sys_python3 run was
+cancelled when concurrent large inputs exhausted VM swap; its logs remain in
+memory-retry/, and the isolated complete retry passed. No input was skipped.
+Use one heavy corpus worker on this VM. IR verify is not whole-corpus semantic
+proof. Final frozen
+interfaces, source manifests, controls and results are under
+`~/vmc-runs/pass-pipeline-20261106/`. Only use owned `~/dragon-tales-overlap`.
+
 Static function-entry views (2026-11-05/06, baseline `23f46f2`): see
 `docs/llvm-static-entry.md`. Explicit `StaticEntryPolicy::FunctionStart` in an
 empty StaticAnalysis module emits `dragon_static_entry_*` symbols accepting

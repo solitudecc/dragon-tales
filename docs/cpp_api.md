@@ -884,6 +884,15 @@ assume preserved registers. Legacy refuses CALL and transfers its two-pointer
 protocol cannot represent; the trace API remains Legacy. See the
 [execution contract](llvm-execution-contract.md) for layouts and preconditions.
 
+### Pass pipelines
+
+Composable Graph/LLVM passes use `dragon/passes/PassPipeline.hpp`.
+`dragon::passes::PassPipeline` registers typed Graph/LLVM callables, checks
+configuration and prerequisite step order, runs bounded sweeps, and returns a
+`Report` with per-invocation status/counters. Its per-run `AnalysisCache` is
+conservatively invalidated after mutating passes. See [pass pipelines](pass-pipeline.md)
+for built-ins, plugin contracts and examples. Existing `run*` methods remain available.
+
 ### Static analysis
 
 `setExecutionMode(ExecutionMode::StaticAnalysis)` emits four-pointer

@@ -379,7 +379,7 @@ print(data.hex() if data else 'unmapped')
 
 ### disassemble()
 
-`disassemble(config=None)` disassembles every executable section into a
+`disassemble(config=None, *, graph_pipeline=None)` disassembles every executable section into a
 `Graph` built for the detected architecture, so a file reaches analysis in one
 call. Pass a `Configuration` to control syntax or strategy; omit it for the
 defaults.
@@ -397,7 +397,7 @@ defaults.
 | `segments()` | `list[Section]` | ELF `PT_LOAD` regions; empty for PE |
 | `symbols()` | `list[Symbol]` | |
 | `read_virtual(address, size)` | `bytes` or `None` | `None` if the range is unmapped |
-| `disassemble(config=None)` | `Graph` | Every executable section |
+| `disassemble(config=None, *, graph_pipeline=None)` | `Graph` | Every executable section, then an optional Graph pipeline |
 
 `Section` and `Symbol` are plain data objects; `Format` and `SymbolKind` are
 the enums listed under [Enum reference](#enum-reference).
@@ -810,6 +810,18 @@ See [entry views](llvm-static-entry.md).
 Individual passes can be called separately or use `optimize()` for the
 recommended pipeline.
 
+`PassPipeline.llvm_default()` constructs the compatible named sweep. You can
+select/reorder steps, pass integer options, register callable-class plugins,
+and use `pipeline.run(lifter, max_iterations=4, max_pass_runs=32)` or
+`lifter.optimize(pipeline)` to obtain a report. Plain `lifter.optimize()` still
+returns None and runs one historical sweep through the public `run_*` hooks.
+
+Graph pipelines run via `pipeline.run(graph)` or the optional
+`graph_pipeline=` keyword of `Disassembler.analyze()` / `LoadedImage.disassemble()`.
+Existing borrowed Graph views expire after a Graph pipeline call; reacquire
+them before use. Failed automatic Graph processing closes its new Graph.
+See [pass pipelines](pass-pipeline.md) for callbacks, cache scope, errors and limits.
+
 ```python
 lifter.run_mem2reg()      # promotes allocas to SSA values
 lifter.run_inst_combine() # folds sub-register mask/OR patterns
@@ -1152,6 +1164,8 @@ lifted x86-64.
 | `dragon.Syntax` | `INTEL`, `ATT` |
 | `dragon.LLVMExecutionMode` | `LEGACY`, `STATEFUL_V2`, `STATIC_ANALYSIS` |
 | `dragon.LLVMStaticEntryPolicy` | `RESUMABLE`, `FUNCTION_START` (static mode only) |
+| `dragon.PassStage` | `GRAPH`, `LLVM` |
+| `dragon.PassStatus` | `SUCCESS`, `UNAVAILABLE`, `INCOMPLETE`, `ERROR` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
 | `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI`, `OPAQUE` (43 values) |

@@ -119,10 +119,12 @@ class _View:
 
     _raw = None
     _owner = None
+    _owner_generation = 0
 
     def _bind(self, ptr, owner):
         self._raw = ptr
         self._owner = owner
+        self._owner_generation = getattr(owner, '_pass_generation', 0)
 
     @property
     def _ptr(self):
@@ -134,6 +136,8 @@ class _View:
             raise ReferenceError(
                 f'{type(self).__name__} used after its '
                 f'{type(self._owner).__name__} was closed')
+        if self._owner_generation != getattr(self._owner, '_pass_generation', 0):
+            raise ReferenceError(f'{type(self).__name__} expired after a Graph pipeline run')
         return self._raw
 
 
@@ -351,6 +355,8 @@ class Graph:
         self._ptr = ptr
 
     def __del__(self):
+        if getattr(self, '_pass_active', False):
+            raise RuntimeError('cannot close a Graph during a pass run')
         if self._ptr:
             lib.dragon_graph_destroy(self._ptr)
             self._ptr = None
@@ -651,9 +657,11 @@ class Disassembler:
             raise RuntimeError('disassembly failed — unsupported architecture or invalid input')
         return Graph(ptr)
 
-    def analyze(self, bytes_data, base_address=0x0, hints=None):
+    def analyze(self, bytes_data, base_address=0x0, hints=None, *, graph_pipeline=None):
         """Disassemble and run architecture-specific analysis (block and function
         discovery). Returns a fully populated Graph. Raises RuntimeError on failure."""
+        if graph_pipeline is not None and not isinstance(graph_pipeline, PassPipeline):
+            raise TypeError('graph_pipeline must be a PassPipeline or None')
         buf = ffi.from_buffer(bytes_data)
         if self._ptr is None:
             raise ReferenceError('Disassembler has been closed')
@@ -678,7 +686,14 @@ class Disassembler:
                 raise RuntimeError(ffi.string(error).decode(errors='replace'))
         if ptr == ffi.NULL:
             raise RuntimeError('analysis failed — unsupported architecture or invalid input')
-        return Graph(ptr)
+        graph = Graph(ptr)
+        if graph_pipeline is not None:
+            try:
+                graph_pipeline.run(graph)
+            except BaseException:
+                graph.__del__()
+                raise
+        return graph
 
     def lift_trace(self, instructions):
         """Lift an arbitrary linear sequence of already-decoded instructions
@@ -1381,6 +1396,8 @@ class LLVMLifter:
             raise ValueError('static entry policy requires static mode and a valid policy')
 
     def __del__(self):
+        if getattr(self, '_pass_active', False):
+            raise RuntimeError('cannot close an LLVMLifter during a pass run')
         if self._ptr:
             lib.dragon_llvm_lifter_destroy(self._ptr)
             self._ptr = None
@@ -1458,14 +1475,17 @@ class LLVMLifter:
             raise ValueError('invalid LLVM lifter')
         return MBASimplifyStats(stats[0])
 
-    def optimize(self):
-        """Run mem2reg → instcombine → GVN → MBA → predicate folding → DCE."""
-        self.run_mem2reg()
-        self.run_inst_combine()
-        self.run_gvn()
-        self.run_mba_simplification()
-        self.run_predicate_folding()
-        self.run_dce()
+    def optimize(self, pipeline=None):
+        """Run the compatible default sweep, or a supplied PassPipeline.
+
+        The default keeps the historical order, options and None return value.
+        A supplied pipeline returns its report. Built-in executors still invoke
+        the public run_* methods, preserving Python instrumentation hooks.
+        """
+        if pipeline is not None:
+            return pipeline.run(self)
+        with PassPipeline.llvm_default() as default:
+            default.run(self)
 
     def __repr__(self):
         return '<LLVMLifter>'
@@ -2693,13 +2713,246 @@ class LoadedImage:
             return None
         return ffi.buffer(buf, n)[:]
 
-    def disassemble(self, config=None):
+    def disassemble(self, config=None, *, graph_pipeline=None):
         """Disassemble every executable section into a populated Graph built
         for the image's detected architecture."""
+        if graph_pipeline is not None and not isinstance(graph_pipeline, PassPipeline):
+            raise TypeError('graph_pipeline must be a PassPipeline or None')
         ptr = lib.dragon_loader_disassemble(
             self._ptr, config._ptr if config is not None else ffi.NULL)
-        return Graph(ptr)
+        graph = Graph(ptr)
+        if graph_pipeline is not None:
+            try:
+                graph_pipeline.run(graph)
+            except BaseException:
+                graph.__del__()
+                raise
+        return graph
 
     def __repr__(self):
         fmt = {Format.ELF: 'ELF', Format.PE: 'PE'}.get(self.format, 'unknown')
         return f'<LoadedImage {fmt} arch={self.architecture} entry={self.entry}>'
+
+
+class PassStage:
+    GRAPH = 0
+    LLVM = 1
+
+
+class PassStatus:
+    SUCCESS = 0
+    UNAVAILABLE = 1
+    INCOMPLETE = 2
+    ERROR = 3
+
+
+class PassResult:
+    def __init__(self, *, changed=False, status=PassStatus.SUCCESS, message='', counters=None):
+        self.changed = changed
+        self.status = status
+        self.message = message
+        self.counters = {} if counters is None else counters
+
+
+class PipelineError(RuntimeError):
+    def __init__(self, report):
+        self.report = report
+        super().__init__(report.get('error', 'pass pipeline failed'))
+
+
+class PassContext:
+    """Synchronous callback context; cached analyses expire on revision changes."""
+    def __init__(self, target):
+        self.target = target
+        self.analyses = {}
+        self.revision = None
+
+
+class PassPipeline:
+    """Named, configurable, bounded Graph/LLVM passes and in-process plugins.
+
+    Callbacks receive (PassContext, options) and return PassResult or None.
+    Mutating Graph runs expire existing borrowed views: reacquire them afterwards.
+    Plugins are trusted code and must honor read_only and prove transformations.
+    Failure stops the run without rollback; discard its target after an error.
+    """
+    DEFAULT_LLVM = ('mem2reg', 'instcombine', 'gvn', 'mba', 'predicates', 'dce')
+    _ptr = None
+
+    def __init__(self, steps=(), *, builtins=True):
+        self._ptr = lib.dragon_pass_pipeline_create(bool(builtins))
+        if self._ptr == ffi.NULL:
+            self._ptr = None
+            raise RuntimeError('failed to create pass pipeline')
+        self._callbacks = {}
+        self._running = False
+        self._context = None
+        self._callback_exception = None
+        if builtins:
+            methods = {'mem2reg': 'run_mem2reg', 'instcombine': 'run_inst_combine',
+                       'gvn': 'run_gvn', 'mba': 'run_mba_simplification',
+                       'predicates': 'run_predicate_folding', 'dce': 'run_dce'}
+            for name, method in methods.items():
+                def execute(ctx, options, method=method):
+                    stats = getattr(ctx.target, method)(**options)
+                    if stats is None:
+                        return PassResult()
+                    counters = {k: v for k, v in vars(stats).items() if k != 'available'}
+                    status = (PassStatus.UNAVAILABLE if not stats.available else
+                              PassStatus.INCOMPLETE if counters.get('unknown_queries') else PassStatus.SUCCESS)
+                    return PassResult(status=status, message='' if stats.available else 'Z3 is unavailable', counters=counters)
+                self._install(name, PassStage.LLVM, execute, override=True)
+        for step in steps:
+            if isinstance(step, str):
+                self.add(step)
+            else:
+                name, options = step
+                self.add(name, **options)
+
+    def close(self):
+        if getattr(self, '_running', False):
+            raise RuntimeError('cannot close a running pipeline')
+        if self._ptr:
+            lib.dragon_pass_pipeline_destroy(self._ptr)
+            self._ptr = None
+        self._callbacks = {}
+
+    def __del__(self):
+        if not getattr(self, '_running', False):
+            self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def _check(self):
+        if not self._ptr:
+            raise ReferenceError('pass pipeline has been closed')
+
+    @staticmethod
+    def _text(raw):
+        try:
+            return ffi.string(raw).decode()
+        finally:
+            lib.dragon_cstr_free(raw)
+
+    def _error(self):
+        return self._text(lib.dragon_pass_pipeline_error(self._ptr))
+
+    @classmethod
+    def llvm_default(cls):
+        return cls(cls.DEFAULT_LLVM)
+
+    def passes(self):
+        import json
+        self._check()
+        return json.loads(self._text(lib.dragon_pass_pipeline_describe(self._ptr)))
+
+    def add(self, name, **options):
+        import json
+        self._check()
+        if not lib.dragon_pass_pipeline_add(self._ptr, name.encode(), json.dumps(options, allow_nan=False).encode()):
+            raise ValueError(self._error())
+        return self
+
+    def clear(self):
+        self._check()
+        if not lib.dragon_pass_pipeline_clear(self._ptr):
+            raise RuntimeError(self._error())
+        return self
+
+    def _install(self, name, stage, callback, *, read_only=False, requires=(), override=False):
+        import json
+        self._check()
+        if type(stage) is not int or stage not in (PassStage.GRAPH, PassStage.LLVM):
+            raise ValueError('stage must be PassStage.GRAPH or PassStage.LLVM')
+        if not callable(callback):
+            raise TypeError('pass callback must be callable')
+        buffers = []
+
+        @ffi.callback('dragon_pass_callback_t')
+        def bridge(target, revision, options, userdata, out):
+            out.status = PassStatus.ERROR
+            try:
+                ctx = self._context
+                if ctx is None or target != ffi.cast('void *', ctx.target._ptr):
+                    raise RuntimeError('callback outside its pipeline run')
+                if ctx.revision != revision:
+                    ctx.analyses.clear()
+                    ctx.revision = revision
+                result = callback(ctx, json.loads(ffi.string(options).decode()))
+                if result is None:
+                    result = PassResult()
+                if not isinstance(result, PassResult):
+                    raise TypeError('pass must return PassResult or None')
+                if type(result.changed) is not bool or type(result.status) is not int or not 0 <= result.status <= 3:
+                    raise ValueError('invalid pass result status/changed')
+                if not isinstance(result.message, str) or not isinstance(result.counters, dict):
+                    raise TypeError('pass message/counters must be str/dict')
+                if any(not isinstance(k, str) or type(v) is not int or not 0 <= v <= 0x7fffffffffffffff
+                       for k, v in result.counters.items()):
+                    raise ValueError('pass counters must be nonnegative int64 integers')
+                payload = json.dumps(result.counters).encode()
+                status, changed, message = result.status, result.changed, result.message.encode()
+            except BaseException as error:
+                self._callback_exception = error
+                try:
+                    text = str(error)
+                except BaseException:
+                    text = type(error).__name__
+                status, changed, message, payload = PassStatus.ERROR, False, text.encode(errors='replace'), b'{}'
+            buffers[:] = [ffi.new('char[]', message), ffi.new('char[]', payload)]
+            out.changed = changed
+            out.message = buffers[0]
+            out.counters_json = buffers[1]
+            out.status = status
+
+        if override:
+            ok = lib.dragon_pass_pipeline_override(self._ptr, name.encode(), stage, bridge, ffi.NULL)
+        else:
+            ok = lib.dragon_pass_pipeline_register(self._ptr, name.encode(), stage, bridge, ffi.NULL,
+                                                  bool(read_only), json.dumps(list(requires)).encode())
+        if not ok:
+            raise ValueError(self._error())
+        self._callbacks[name] = (bridge, buffers)
+        return self
+
+    def register(self, name, callback, *, stage=PassStage.LLVM, read_only=False, requires=()):
+        return self._install(name, stage, callback, read_only=read_only, requires=requires)
+
+    def run(self, target, *, max_iterations=1, max_pass_runs=64, verify=True):
+        import json
+        self._check()
+        if self._running:
+            raise RuntimeError('recursive pipeline execution')
+        if type(max_iterations) is not int or not 1 <= max_iterations <= 64:
+            raise ValueError('max_iterations must be 1..64')
+        if type(max_pass_runs) is not int or not 0 <= max_pass_runs <= 4096:
+            raise ValueError('max_pass_runs must be 0..4096')
+        if not isinstance(target, (LLVMLifter, Graph)) or not target._ptr:
+            raise ValueError('target must be a live Graph or LLVMLifter')
+        if getattr(target, '_pass_active', False):
+            raise RuntimeError('target is already running a pass pipeline')
+        self._context = PassContext(target)
+        self._callback_exception = None
+        try:
+            self._running = True
+            target._pass_active = True
+            if isinstance(target, Graph):
+                target._pass_generation = getattr(target, '_pass_generation', 0) + 1
+                raw = lib.dragon_pass_pipeline_run_graph(self._ptr, target._ptr, max_iterations, max_pass_runs)
+            else:
+                raw = lib.dragon_pass_pipeline_run_llvm(self._ptr, target._ptr, max_iterations, max_pass_runs, bool(verify))
+            if raw == ffi.NULL:
+                raise RuntimeError(self._error())
+            report = json.loads(self._text(raw))
+            if not report['ok']:
+                raise PipelineError(report) from self._callback_exception
+            return report
+        finally:
+            target._pass_active = False
+            self._context.analyses.clear()
+            self._context = None
+            self._running = False
