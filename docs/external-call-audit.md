@@ -145,6 +145,10 @@ i386 PE 没有加入：`function_image_fixture.py` 只有 x64 PE 模板；i386 s
   没有发现错误或多余名称。
 - 递归策略的 undecoded 是未到达的代码，不是解码错误。
 
+后续 [CET 边界修正](cet-function-boundaries.md) 不再把单独的落点当作函数证据，
+保留调用、元数据、完整帧和 RET 后布局证据；它没有增加导入名或 noreturn/returns_twice 模型。
+上述为本次审计当时的冻结数据。
+
 ## 5. 复现
 
 ```sh

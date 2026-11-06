@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_64_cet_fallthrough",
+      "architecture": "x86_64",
+      "code_hex": "b807000000f30f1efa83c0038903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "expected_blocks": [
+        4096
+      ]
+    },
+    {
+      "id": "x86_64_cet_direct",
+      "architecture": "x86_64",
+      "code_hex": "b807000000eb09ccccccccccccccccccf30f1efa83c003eb07ccccccccccccccf30f1efa8903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "expected_blocks": [
+        4096,
+        4112,
+        4128
+      ]
+    },
+    {
+      "id": "x86_64_cet_computed",
+      "architecture": "x86_64",
+      "code_hex": "b830100000ba5010000083ff000f44c2ffe0ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccf30f1efab807000000eb35ccccccccccccccccccccccccccccccccccccccccccf30f1efab809000000eb15ccccccccccccccccccccccccccccccccccccccccccf30f1efa8903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "expected_blocks": [
+        4096,
+        4144,
+        4176,
+        4208
+      ]
+    }
+  ]
+}

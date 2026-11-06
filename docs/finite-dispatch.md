@@ -7,6 +7,9 @@
 这一步恢复 CFG，供后续提升和优化使用。它不自动移除分发器、不生成重编译后的可执行文件，
 也不提供内部调用摘要、镜像数据不变性证明或初始化堆模型。
 
+后续 [CET 函数边界修正](cet-function-boundaries.md) 处理了本报告中 GCC 的额外入口。
+它改善 goto 的静态执行，同时保留 indirect 的覆盖下降；下文数字是本阶段冻结记录。
+
 ## 值域与入口契约
 
 `dragon/analysis/FiniteValues.hpp` 提供 `finiteValues(graph, entries, queries, limits)`。

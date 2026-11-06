@@ -818,3 +818,93 @@ TEST_CASE("X86Analysis - a block that runs into the end of the code is kept",
     CHECK(fn.block(0x1005) != nullptr);
   }
 }
+
+TEST_CASE("X86Analysis CET jump landing pads remain blocks of one function",
+          "[x86][analysis][cet-boundary]") {
+  for(auto strategy:{dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                     dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    dragon::Configuration config;config.disassemblyStrategy=strategy;
+    dragon::Disassembler dis{dragon::Architecture::X86_64,config};
+    dragon::Graph graph{dragon::Architecture::X86_64,config};
+    std::vector<std::uint8_t> bytes(0x25,0xcc);
+    const std::vector<std::uint8_t> entry{0xb8,7,0,0,0,0xeb,9};
+    const std::vector<std::uint8_t> first{0xf3,0x0f,0x1e,0xfa,0x83,0xc0,3,0xeb,7};
+    std::copy(entry.begin(),entry.end(),bytes.begin());
+    std::copy(first.begin(),first.end(),bytes.begin()+0x10);
+    std::copy_n(first.begin(),4,bytes.begin()+0x20);bytes[0x24]=0xc3;
+    dis.disassemble(bytes,0x1000,graph);
+    CHECK(graph.validFunctionAddresses()==std::set<std::uint64_t>{0x1000});
+    for(auto at:{0x1010ULL,0x1020ULL}) {
+      REQUIRE(graph.get(at));CHECK(graph.get(at)->isBlockStart());
+      CHECK_FALSE(graph.get(at)->isFunctionStart());
+      CHECK_FALSE(graph.get(at)->isPrologue());
+      CHECK(dragon::Function{&graph,0x1000}.block(at)!=nullptr);
+    }
+  }
+}
+
+TEST_CASE("X86Analysis CET fallthrough landing pads do not split a function",
+          "[x86][analysis][cet-boundary]") {
+  for(auto strategy:{dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                     dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    dragon::Configuration config;config.disassemblyStrategy=strategy;
+    dragon::Disassembler dis{dragon::Architecture::X86_64,config};
+    dragon::Graph graph{dragon::Architecture::X86_64,config};
+    const std::vector<std::uint8_t> bytes{0xb8,7,0,0,0,0xf3,0x0f,0x1e,0xfa,0x83,0xc0,3,0xc3};
+    dis.disassemble(bytes,0x1000,graph);
+    CHECK(graph.validFunctionAddresses()==std::set<std::uint64_t>{0x1000});
+    REQUIRE(graph.get(0x1005));CHECK_FALSE(graph.get(0x1005)->isFunctionStart());
+    CHECK(dragon::Function{&graph,0x1000}.numInstructions()==4);
+  }
+}
+
+TEST_CASE("X86Analysis CET entries retain independent function evidence",
+          "[x86][analysis][cet-boundary]") {
+  for(auto strategy:{dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                     dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    for(bool called:{false,true}) {
+      dragon::Configuration config;config.disassemblyStrategy=strategy;
+      dragon::Disassembler dis{dragon::Architecture::X86_64,config};
+      dragon::Graph graph{dragon::Architecture::X86_64,config};
+      std::vector<std::uint8_t> bytes(0x16,0x90);
+      if(called) {bytes[0]=0xe8;bytes[1]=11;bytes[2]=bytes[3]=bytes[4]=0;bytes[5]=0xc3;}
+      else bytes[0]=0xc3;
+      const std::vector<std::uint8_t> leaf{0xf3,0x0f,0x1e,0xfa,0x31,0xc0,0xc3};
+      bytes.resize(0x17);std::copy(leaf.begin(),leaf.end(),bytes.begin()+0x10);
+      dragon::Disassembler::AnalysisHints hints;
+      if(!called)hints.entryPoints={0x1000,0x1010};
+      dis.disassemble(bytes,0x1000,graph,hints);
+      CHECK(graph.validFunctionAddresses()==std::set<std::uint64_t>{0x1000,0x1010});
+      REQUIRE(graph.get(0x1010));CHECK(graph.get(0x1010)->isFunctionStart());
+      CHECK(graph.get(0x1010)->isBlockStart());
+    }
+  }
+}
+
+TEST_CASE("X86Analysis CET full frames remain prologue evidence",
+          "[x86][analysis][cet-boundary]") {
+  for(auto strategy:{dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                     dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    dragon::Configuration config;config.disassemblyStrategy=strategy;
+    dragon::Disassembler dis{dragon::Architecture::X86_64,config};
+    dragon::Graph graph{dragon::Architecture::X86_64,config};
+    std::vector<std::uint8_t> bytes(0x1b,0xcc);bytes[0]=0xeb;bytes[1]=14;
+    const std::vector<std::uint8_t> body{0xf3,0x0f,0x1e,0xfa,0x55,0x48,0x89,0xe5,0x5d,0xc3};
+    std::copy(body.begin(),body.end(),bytes.begin()+0x10);
+    dis.disassemble(bytes,0x1000,graph);
+    CHECK(graph.validFunctionAddresses()==std::set<std::uint64_t>{0x1000,0x1010});
+    REQUIRE(graph.get(0x1010));CHECK(graph.get(0x1010)->isPrologue());
+  }
+}
+
+TEST_CASE("X86Analysis CET leaves retain separate post RET evidence",
+          "[x86][analysis][cet-boundary]") {
+  std::vector<std::uint8_t> bytes(0x17,0x90);bytes[0]=0xc3;
+  const std::vector<std::uint8_t> leaf{0xf3,0x0f,0x1e,0xfa,0x31,0xc0,0xc3};
+  std::copy(leaf.begin(),leaf.end(),bytes.begin()+0x10);
+  auto dis=makeAnalyzer(dragon::Architecture::X86_64);
+  auto graph=makeGraph(dragon::Architecture::X86_64);
+  dis.disassemble(bytes,0x1000,graph);
+  CHECK(graph.validFunctionAddresses()==std::set<std::uint64_t>{0x1000,0x1010});
+  REQUIRE(graph.get(0x1010));CHECK(graph.get(0x1010)->isFunctionStart());
+}

@@ -31,7 +31,7 @@ class X86Info {
   /// Returns the number of instructions consumed if the sequence matches a
   /// common x86 function prologue, or 0 if no match.
   ///
-  /// x86_64: endbr64                            -> 1 (CET landing pad alone)
+  /// x86_64: endbr64                            -> 1 (landing pad only; not independent entry proof)
   ///         push rbp / mov rbp, rsp            -> 2
   ///         endbr64 / push rbp / mov rbp, rsp  -> 3 (CET + full frame setup)
   /// x86_32: push ebp / mov ebp, esp            -> 2

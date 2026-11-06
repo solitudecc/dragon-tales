@@ -206,6 +206,33 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+CET function boundaries (2026-11-06, baseline `70a1fab`): see
+`docs/cet-function-boundaries.md`. A bare x64 ENDBR is not independent function
+evidence; keep explicit roots/callees, full frame prologues and existing post-RET
+leaf discovery. Do not force every landing pad into a block: that breaks the
+post-RET evidence rule (intermediate control fails 2 assertions). No API-name
+noreturn/returns_twice models or new call effects. Five regressions: old 20/55
+failed assertions, final 55/55. Native new 288 complete roots vs old 288 incomplete;
+no-Z3 adds 48, result/memory controls each 12 differences, zero exclusions/skips/
+normalizations. CTest 602/602, no-Z3 477/477; existing Python/guard/slice checks pass.
+Frozen original-helper Tigress four groups: 256 C matches each version, LLVM
+old 512 complete/1024 incomplete -> new 576/960, zero complete differences or
+unexecuted/unlifted. GCC extra entries linear 42/recursive 15 ->0/0. Retain the
+64 GCC linear indirect V2 runs that lose accidental resume coverage through
+false functions; they are incomplete, never passes. Remaining indirect target
+proofs/block-entry support are separate work. Both corpora: 69 inputs/138 strategies; new 205406 valid-function checks and
+1675 raw V2 modules verify (old 206649/1686). Hardware decode/known-edge hashes
+unchanged; 172570 protected entry checkpoints retained, symbol recall and
+invalid-function counts do not regress. Removed 1243 candidates: 121 inside
+ELF symbol bodies, 1122 PLT candidates (1071 .plt / 51 .plt.sec) without ordinary
+function extent truth. Do not claim all PLT entries were wrong. 1164 removed
+candidates remain outside recovered functions, 1163 outside valid
+blocks; bytes remain decoded, no guessed CFG edges. 86 affected static owner
+definitions verify raw+optimized (172 checks), not the whole optimized corpus.
+Lua unlifted histograms unchanged 188/49/90. Detailed scope is
+in the component document. Artifacts: `~/vmc-runs/cet-boundaries-20261106/`.
+Only use owned `~/dragon-tales-overlap`; one heavy worker and low VM disk space.
+
 Finite-set analysis and opt-in dispatcher recovery (2026-11-06, baseline
 `1907235`): see `docs/finite-dispatch.md`. `analysis::finiteValues` is a separate
 forward finite over-approximation; the old constant-only slicer stays unchanged.

@@ -348,6 +348,15 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
     if (size_t matched =
                 x86Info_->isCommonFunctionPrologue({window, windowSize})) {
       std::uint64_t addr = instructions[i].address();
+      // CET landing pads also mark computed-goto labels and return
+      // continuations. A bare ENDBR is not independent function evidence.
+      // Keep explicit roots/callees and full frame prologues. Leave block
+      // discovery to actual transfers, so post-RET evidence can still find
+      // separate leaves without mistaking every landing pad for an entry.
+      if (architecture_ == Architecture::X86_64 && matched == 1 &&
+          !functionStarts.contains(addr)) {
+        continue;
+      }
       // Likewise right after a conditional branch, whose fall-through it is:
       // `b.ne 1f; stp x29, x30, [sp, #-48]!` is the same function. (A
       // function proper follows a return, a jump, a trap, padding or a call.)
