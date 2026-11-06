@@ -29,6 +29,8 @@ class Graph {
 
   Graph(const Graph &) = delete;
   Graph &operator=(const Graph &) = delete;
+  /// Independent deep copy, including pending/invalid queues and provenance.
+  [[nodiscard]] Graph clone() const;
 
   [[nodiscard]] Architecture architecture() const { return architecture_; }
   [[nodiscard]] const Configuration &configuration() const {

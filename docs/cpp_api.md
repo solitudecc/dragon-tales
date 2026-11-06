@@ -893,6 +893,16 @@ configuration and prerequisite step order, runs bounded sweeps, and returns a
 conservatively invalidated after mutating passes. See [pass pipelines](pass-pipeline.md)
 for built-ins, plugin contracts and examples. Existing `run*` methods remain available.
 
+### Finite value analysis and dispatch recovery
+
+`dragon/analysis/FiniteValues.hpp` exposes bounded forward `finiteValues()` queries.
+The built-in read-only `finite-values` Graph step caches a `FiniteValueResult`.
+Explicitly register `dragon/passes/FiniteDispatch.hpp`'s `FiniteDispatchPass` for
+x86 candidate growth and final all-path revalidation on a cloned Graph.
+`Graph::clone()` independently copies instructions, IGNIL, queues and provenance.
+The default disassembler does not enable this recovery. See
+[finite sets and dispatch](finite-dispatch.md) for entries, budgets, memory barriers and examples.
+
 ### Static analysis
 
 `setExecutionMode(ExecutionMode::StaticAnalysis)` emits four-pointer

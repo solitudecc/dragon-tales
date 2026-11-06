@@ -14,6 +14,7 @@
 #include <dragon/disassembler/Instruction.hpp>
 
 namespace dragon {
+namespace analysis {class IndirectTargetResolver;}
 
 /// A disassembler for various architectures supported by LLVM
 /// the disassembler will work as a simple tool, so we can provide
@@ -81,6 +82,10 @@ class Disassembler {
     /// Returns false if the range is not mapped.
     std::function<bool(std::uint64_t address, std::span<std::uint8_t> out)>
             readMemory;
+    /// Optional, trusted target analysis. Enables bounded monotone candidate
+    /// growth with full closure revalidation; default discovery is unchanged.
+    /// The shared object is used synchronously and never retained by Graph.
+    std::shared_ptr<analysis::IndirectTargetResolver> indirectTargets;
   };
 
   /// As above, with entry points and a memory reader for the analysis.

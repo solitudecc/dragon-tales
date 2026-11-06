@@ -932,6 +932,13 @@ defaults to ERROR and must be filled explicitly. The report distinguishes
 unavailable/incomplete analysis, budget stops and execution errors.
 See [the pass architecture](pass-pipeline.md) for limits and plugin correctness/lifetime rules.
 
+`dragon_pass_pipeline_register_finite_dispatch(p, name, code, length, base, entries, count)`
+registers native x86 Graph recovery and copies both buffers; add the named step before running.
+`dragon_graph_finite_values(g, entries, count, query_block, query_offset, query_width,
+max_values, max_blocks, max_operations, max_facts)` returns owned JSON with finite/unknown/
+unreachable values. Width zero omits the register query; values/addresses use hex strings.
+Free the result with `dragon_cstr_free`. See [contracts and limits](finite-dispatch.md).
+
 The proof functions return 0 for a null lifter/output pointer and 1 otherwise.
 Without Z3 they report `available=0` and leave IR unchanged. Suggested MBA limits
 are `100/16/128/3/1000000`; see [options, statistics and scope](llvm-mba-simplification.md).

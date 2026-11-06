@@ -1,5 +1,6 @@
 #include <dragon/passes/PassPipeline.hpp>
 #include <dragon/disassembler/Graph.hpp>
+#include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/JSON.h>
@@ -113,6 +114,21 @@ PassPipeline::PassPipeline(bool builtins) {
     }
     return r;
   },true,{},none);
+  registerGraph("finite-values",[](GraphContext &c,const Options &o) {
+    auto facts=analysis::finiteValues(c.graph,{}, {},
+      {number(o,"max_values",64),number(o,"max_blocks",4096),
+       number(o,"max_operations",1000000),number(o,"max_facts",262144)});
+    Result r{facts.complete?Status::Success:Status::Incomplete,false,facts.message,
+      {{"block_visits",facts.blockVisits},{"operations",facts.operations},
+       {"finite_jumps",0},{"unknown_jumps",0},{"unreachable_jumps",0}}};
+    for(const auto &[at,values]:facts.jumpTargets) {
+      if(values.kind==analysis::ValueSetKind::Finite)++r.counters["finite_jumps"];
+      else if(values.kind==analysis::ValueSetKind::Unknown)++r.counters["unknown_jumps"];
+      else ++r.counters["unreachable_jumps"];
+    }
+    c.analyses.put("finite-values",std::move(facts));
+    return r;
+  },true,{},numeric({"max_values","max_blocks","max_operations","max_facts"}));
 }
 bool PassPipeline::fail(std::string message) {error_=std::move(message);return false;}
 bool PassPipeline::registerGraph(std::string name,GraphPass pass,bool readOnly,std::vector<std::string> dependencies,Validator validate) {

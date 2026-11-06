@@ -2,7 +2,8 @@
 
 基线 `04c6d91`，2026-11-06。第一版提供进程内注册、参数配置、阶段检查、
 有预算的重复执行、分析缓存和结构化报告。新算法可以用 C++ 可调用类、C 回调或
-Python 可调用对象接入；本版不加载共享库插件，也不宣称新增了跨调用、值集或去平坦化算法。
+Python 可调用对象接入；本版不加载共享库插件。后续新增的[有限值集与分发器 Pass](finite-dispatch.md)
+复用这套接口；跨调用摘要和去平坦化仍未实现。
 C/Python 插件可编排现有变换及分析；直接访问并改写 Graph/LLVM 数据结构使用 C++ 上下文接口。
 
 ## 两个运行位置
@@ -18,7 +19,8 @@ flowchart LR
 
 同一 `PassPipeline` 类型提供 Graph 和 LLVM 两种运行接口。一次运行只接受同一阶段的
 步骤；混合阶段在执行任何步骤前拒绝。Graph 阶段处于初始反汇编分析之后、LLVM 提升之前，
-初始反汇编器内部的目标解析策略没有迁移或改变。后续恢复目标、补充解码等算法可以
+初始反汇编器的默认目标解析策略保持兼容。可选的有限值集恢复通过专用分析钩子
+允许候选增长并最终复验；其他恢复目标、补充解码等算法也可以
 注册为 Graph Pass。LLVM 阶段复用现有优化实现。
 
 内置步骤：
@@ -26,6 +28,7 @@ flowchart LR
 | 名称 | 阶段 | 参数 |
 |---|---|---|
 | `graph-audit` | Graph，读取统计 | 无；报告指令、有效块/函数、缺失 IGNIL 和按块累加的 unlifted 记录数 |
+| `finite-values` | Graph，只读分析并缓存 | `max_values=64, max_blocks=4096, max_operations=1000000, max_facts=262144` |
 | `mem2reg` / `instcombine` / `gvn` / `dce` | LLVM | 无 |
 | `mba` | LLVM | `timeout_ms=100, max_queries=16, max_expression_nodes=128, max_variables=3, resource_limit=1000000` |
 | `predicates` | LLVM | `timeout_ms=25, max_queries=64, max_expression_nodes=256, resource_limit=200000` |
@@ -154,4 +157,5 @@ C 接口提供 opaque `dragon_pass_pipeline_t`，create/register/add/run/describ
 
 VM 产物：`~/vmc-runs/pass-pipeline-20261106/`。本轮没有修改指令提升器、IGNIL 优化算法
 或间接跳转解析策略，未另跑单指令/IGNIL 全量差分。原生函数验证覆盖调度后的执行结果；
-真实语料的 verify 只能证明 IR 合法性。跨调用、值集、堆建模和去平坦化仍是后续 Pass 的工作。
+真实语料的 verify 只能证明 IR 合法性。上述为架构首版验证；后续有限值集恢复的独立验证见
+[组件记录](finite-dispatch.md)。跨调用、堆建模和去平坦化仍是后续 Pass 的工作。

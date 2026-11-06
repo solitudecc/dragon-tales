@@ -206,6 +206,39 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Finite-set analysis and opt-in dispatcher recovery (2026-11-06, baseline
+`1907235`): see `docs/finite-dispatch.md`. `analysis::finiteValues` is a separate
+forward finite over-approximation; the old constant-only slicer stays unchanged.
+`finite-values` is a read-only cached Graph step. Register `FiniteDispatchPass`
+(C++/C/Python) with owned code/entries to opt into x86 target growth and final
+all-incoming-path checks on a cloned Graph. Global budget failure makes every
+query Unknown; capacity widening never truncates a target list. Only Guest
+STOREs supply memory values; CALL/alias/unlifted/local-flow barriers remain.
+No image/initialized-heap snapshots, API-name models, call summaries or deflat.
+Direct CALL targets discovered during expansion are independent inputs for BOTH
+the legacy and finite proofs; filtering heuristic entries must never erase
+real CALL boundaries. A pre-hardening regression fails 4 assertions; independent
+64-run / 160-transfer Unicorn entry checks detect 18 wrong edges before and
+zero after, while a missing-root-target control detects 16. Pre-hardening
+snapshots/results are in `pre-entry/` with relocation hashes and are not final
+coverage. The legacy Tigress 2.1 array-opaque regeneration attempt also remains
+explicitly failed (56 C matches / 40 reference errors / 240 unexecuted LLVM
+comparisons), superseded for combination coverage by real-megaInit frozen
+challenge replays. Extra heuristic function entries and remaining incomplete
+ordinary goto/indirect paths are retained, not passes. Final 15 C++ cases/25282 assertions; CTest 597/597 and no-Z3 472/472. Native
+new 576 full roots vs old 576 incomplete; no-Z3 adds 96 roots. Ordinary Tigress
+per version 512 C matches: new 1024 complete/2048 incomplete vs old 960/2112,
+zero complete differences; GCC recursive extra function entries 1->15 remain.
+Frozen real-megaInit 10-ELF replay per version 320 C,384 complete/256 incomplete,
+CFG wrong 0/unlifted 0; 17123 accumulated executed-undecoded observations remain
+unchanged in harder profiles. All 120 new Pass invocations there are unchanged.
+Both real corpora: 69 inputs/138 strategies/206649 function checkpoints per
+version, 1686 raw V2 modules each verify; exact old/new default Graph,IGNIL and
+raw-IR fingerprints, zero lift failures/gaps; existing alerts retained. No new
+full single-instruction/IGNIL or optimized-static corpus campaign (unchanged
+lifters/optimizer). Detailed counts and scope are in the component document; artifacts:
+`~/vmc-runs/finite-dispatch-20261106/`. Only use `~/dragon-tales-overlap`.
+
 Composable pass pipelines (2026-11-06, baseline `04c6d91`):
 `dragon/passes/PassPipeline.hpp` supplies typed Graph/LLVM registries, ordered
 steps, option/dependency preflight, bounded sweeps, per-run analysis caches and
@@ -213,8 +246,8 @@ per-invocation reports. C opaque handles/callbacks and Python callable classes
 use the same native scheduler. Python default optimize() keeps its six-step
 order/options, public run_* hooks and None return value. Optional graph_pipeline
 hooks run after initial analysis; initial disassembler algorithms are unchanged.
-Only graph-audit is built in at Graph level; no new cross-call/value-set/deflat
-algorithms or shared-library loading. See docs/pass-pipeline.md for contracts.
+At that stage only graph-audit was built in at Graph level; no new
+cross-call/value-set/deflat algorithms or shared-library loading. See docs/pass-pipeline.md for contracts.
 Mutating steps invalidate all caches conservatively; errors stop without
 rollback, so discard failed targets. Report ok/converged never means complete
 deobfuscation. Plugins are trusted code and must prove/validate transformations.

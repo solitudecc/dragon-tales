@@ -4,6 +4,7 @@
 
 // Public headers
 #include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/analysis/IndirectTargets.hpp>
 #include <dragon/analysis/SliceExpr.hpp>
 #include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/Disassembler.hpp>
@@ -641,6 +642,7 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
         std::unordered_set<std::uint64_t> &fnStarts) const {
   const bool linear = configuration_.disassemblyStrategy ==
                       DisassemblyStrategy::LINEAR_SWEEP;
+  const bool extensible=bool(hints.indirectTargets);
   // Loops in real dispatchers can be substantially deeper than the default
   // five-block slice. The slicer's per-query budget still caps join expansion.
   auto targetsAtDepth = [&](const BasicBlock &block, const Graph &cfg,
@@ -702,37 +704,65 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
     // known, so every longer slice sees a constant and the guard bounds
     // nothing. A guard proved for an arbitrary entry value holds on every
     // incoming path, including ones the table itself reveals later.
+    std::set<std::uint64_t> result;
     for (int depth: {5, 16, 64, 1}) {
-      auto targets = targetsAtDepth(block, cfg, cfgPreds, depth);
-      if (!targets.empty())
-        return targets;
+      result = targetsAtDepth(block, cfg, cfgPreds, depth);
+      if (!result.empty())break;
     }
-    return std::set<std::uint64_t>{};
+    if(extensible) {
+      if(auto additional=hints.indirectTargets->targets(block.startAddress())) {
+        for(auto target:*additional) {
+          if(target<baseAddr || target-baseAddr>=bytes.size() || (linear && !cfg.get(target)))
+            return std::set<std::uint64_t>{};
+          result.insert(target);
+        }
+      }
+      if(result.size()>hints.indirectTargets->maxTargets())return std::set<std::uint64_t>{};
+    }
+    return result;
   };
 
   // A failed hypothesis is never retried in this analysis. Restarting from
   // the original graph also removes candidates that depended on it; those
   // can be rediscovered independently. Each restart bans at least one jump.
   std::set<std::uint64_t> rejected;
+  std::uint32_t recoveryRounds=0;
   for (;;) {
     Graph tentative = copyGraph(graph);
     auto starts = blockStarts;
     auto functions = fnStarts;
     std::map<std::uint64_t, std::set<std::uint64_t>> candidates;
+    std::set<std::uint64_t> originalCandidates;
     bool restart = false;
 
     LiftState liftState; // per tentative graph: first round lifts it all
     for (;;) {
+      if(extensible && recoveryRounds++>=hints.indirectTargets->maxRounds()) {
+        hints.indirectTargets->stopped("indirect recovery round budget exhausted");
+        return; // No tentative instructions/edges have been published.
+      }
       liftPendingBlocks(tentative, liftState,
                         commitPending(tentative, starts, functions));
       Graph cfg = reachableGraph(tentative, hints);
       // cfg is not modified in this round (new edges go to `tentative`), so
       // one predecessor map serves every slice taken in it.
-      const std::set<std::uint64_t> entries = hints.entryPoints.empty()
+      std::set<std::uint64_t> entries = hints.entryPoints.empty()
           ? std::set<std::uint64_t>(cfg.validFunctionAddresses().begin(),
                                     cfg.validFunctionAddresses().end())
           : std::set<std::uint64_t>(hints.entryPoints.begin(), hints.entryPoints.end());
+      if(extensible) {
+        // Explicit roots suppress heuristic function guesses, but never a real
+        // CALL entry. Expansion may decode a new callee also reached by a tail
+        // jump; a store on that tail path cannot constrain its independent
+        // CALL input. Use the same boundary for legacy and finite proofs.
+        for(const auto &[at,insn]:cfg.listing())
+          entries.insert(insn.callees().begin(),insn.callees().end());
+      }
       const auto cfgPreds = BackwardSlicer::predecessors(cfg, entries);
+      if(extensible && !hints.indirectTargets->prepare(cfg,entries)) {
+        hints.indirectTargets->stopped("target analysis did not reach a complete fixed point");
+        return;
+      }
       // Views only for blocks whose IGNIL ends in an indirect JMP (the only
       // ones targetsFor can resolve), not for every block every round.
       std::map<std::uint64_t, BasicBlock> jumps;
@@ -751,13 +781,36 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
       // Validate *all* hypotheses after every expansion, including ones
       // resolved in earlier rounds: another table can expose a new incoming
       // path or split a dispatch block. Compare complete successor sets.
-      for (const auto &[addr, expected]: candidates) {
+      bool expanded=false;
+      auto addTargets=[&](std::uint64_t addr,const std::set<std::uint64_t> &targets) {
+        auto *jump=tentative.get(addr);
+        for(auto target:targets)if(!jump->branches().contains(target)) {
+          jump->addBranch(target);
+          starts.insert(target);
+          integrateNewBlock(target,bytes,baseAddr,tentative,starts,functions);
+        }
+        jump->setEdges(jump->branches().size());
+      };
+      for (auto &[addr, expected]: candidates) {
         auto it = jumps.find(addr);
         const bool complete = std::ranges::all_of(expected, [&](auto target) {
           return BasicBlock{&tentative, target}.isValid();
         });
-        if (!complete || it == jumps.end() ||
-            targetsFor(it->second, cfg, cfgPreds) != expected) {
+        auto current=it==jumps.end()?std::set<std::uint64_t>{}:targetsFor(it->second,cfg,cfgPreds);
+        if(extensible && complete && !current.empty()) {
+          auto grown=expected;
+          grown.insert(current.begin(),current.end());
+          if(grown.size()>hints.indirectTargets->maxTargets())current.clear();
+          else {
+            if(grown!=expected) {addTargets(addr,grown);expected=std::move(grown);expanded=true;}
+            continue; // Retaining extra proved edges is a safe over-approximation.
+          }
+        }
+        if (!complete || it == jumps.end() || current != expected) {
+          if(extensible && originalCandidates.contains(addr)) {
+            hints.indirectTargets->stopped("existing indirect edges could not be revalidated after expansion");
+            return;
+          }
           logger_.log("Rejecting tentative indirect jump @ 0x{:x}", addr);
           rejected.insert(addr);
           restart = true;
@@ -766,26 +819,33 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
       }
       if (restart)
         break;
+      if(expanded) {discoverFallthroughJoins(tentative,starts);continue;}
 
       bool changed = false;
       for (const auto &[addr, block]: jumps) {
         if (rejected.contains(addr) || candidates.contains(addr) ||
-            !tentative.get(addr)->branches().empty())
+            (!extensible && !tentative.get(addr)->branches().empty()))
           continue;
-        const auto targets = targetsFor(block, cfg, cfgPreds);
+        auto targets = targetsFor(block, cfg, cfgPreds);
+        const auto &existing=tentative.get(addr)->branches();
+        if(extensible && !existing.empty()) {
+          if(targets.empty()) {
+            hints.indirectTargets->stopped("existing indirect edges lack a complete proof");
+            return;
+          }
+          originalCandidates.insert(addr);
+          targets.insert(existing.begin(),existing.end());
+          if(targets.size()>hints.indirectTargets->maxTargets()) {
+            hints.indirectTargets->stopped("existing target set exceeds recovery budget");
+            return;
+          }
+        }
         if (targets.empty())
           continue;
         candidates.emplace(addr, targets);
         logger_.log("Tentative indirect jump @ 0x{:x}: {} targets", addr,
                     targets.size());
-        auto *jump = tentative.get(addr);
-        for (auto target: targets) {
-          jump->addBranch(target);
-          starts.insert(target);
-          integrateNewBlock(target, bytes, baseAddr, tentative, starts,
-                             functions);
-        }
-        jump->setEdges(jump->branches().size());
+        addTargets(addr,targets);
         changed = true;
       }
       if (changed) {

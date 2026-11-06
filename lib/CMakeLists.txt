@@ -7,6 +7,7 @@ add_library(libdragon SHARED
         IGNIL.cpp
         IGNILSimplify.cpp
         PassPipeline.cpp
+        FiniteDispatch.cpp
         LLVMLifter.cpp
         LLVMPredicateFolding.cpp
         LLVMMBASimplification.cpp

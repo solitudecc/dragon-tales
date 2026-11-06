@@ -9,7 +9,9 @@
 #include <dragon/assembler/Assembler.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <dragon/passes/PassPipeline.hpp>
+#include <dragon/passes/FiniteDispatch.hpp>
 #include <dragon/analysis/BackwardSlicer.hpp>
+#include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/analysis/SwitchDetector.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/Configuration.hpp>
@@ -759,6 +761,24 @@ static char *dup_string(const std::string &s) {
   return buf;
 }
 
+char *dragon_graph_finite_values(const dragon_graph_t *g,
+    const uint64_t *entries,size_t count,uint64_t query_block,
+    uint32_t query_offset,uint8_t query_width,uint32_t max_values,
+    uint32_t max_blocks,uint32_t max_operations,uint32_t max_facts) {
+  if(!g || (count && !entries) || query_width>64)return nullptr;
+  try {
+    std::set<std::uint64_t> roots;
+    if(count)roots.insert(entries,entries+count);
+    std::vector<dragon::analysis::FiniteValueQuery> queries;
+    if(query_width)queries.push_back({query_block,dragon::ignil::Reg{query_offset,query_width,{}}});
+    return dup_string(dragon::analysis::finiteValues(*as_graph(g),roots,queries,
+      {max_values,max_blocks,max_operations,max_facts}).toJSON());
+  } catch(...) {return nullptr;}
+}
+static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Unreachable)==DRAGON_VALUE_UNREACHABLE);
+static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Finite)==DRAGON_VALUE_FINITE);
+static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Unknown)==DRAGON_VALUE_UNKNOWN);
+
 void dragon_u64_array_free(uint64_t *arr) { delete[] arr; }
 
 // Never returns nullptr, even for an empty vector - callers rely on getting
@@ -1326,6 +1346,16 @@ int dragon_pass_pipeline_register(dragon_pass_pipeline_t *p,const char *name,
     p->error.clear();auto prior=dragon::passes::parseNamesJSON(dependencies?dependencies:"[]");
     if(stage==DRAGON_PASS_GRAPH) return p->pipeline.registerGraph(name,[=](dragon::passes::GraphContext &c,const auto &o){return invokePass(callback,userdata,c.bindingTarget,c.analyses,o);},readOnly!=0,std::move(prior));
     return p->pipeline.registerLLVM(name,[=](dragon::passes::LLVMContext &c,const auto &o){return invokePass(callback,userdata,c.bindingTarget,c.analyses,o);},readOnly!=0,std::move(prior));
+  } catch(const std::exception &e) {p->error=e.what();return 0;}
+}
+int dragon_pass_pipeline_register_finite_dispatch(dragon_pass_pipeline_t *p,const char *name,
+    const uint8_t *code,size_t length,uint64_t base,const uint64_t *entries,size_t count) {
+  if(!p || !name || !code || !length || (count && !entries))return 0;
+  try {
+    p->error.clear();
+    return p->pipeline.registerGraph(name,
+      dragon::passes::FiniteDispatchPass{{code,length},base,{entries,count}},
+      false,{},dragon::passes::FiniteDispatchPass::validator());
   } catch(const std::exception &e) {p->error=e.what();return 0;}
 }
 int dragon_pass_pipeline_override(dragon_pass_pipeline_t *p,const char *name,

@@ -348,6 +348,12 @@ class Function(_View):
 
 # -- Graph ---------------------------------------------------------------------
 
+class ValueSetKind:
+    UNREACHABLE = 0
+    FINITE = 1
+    UNKNOWN = 2
+
+
 class Graph:
     """Owns the instruction listing and address queues."""
 
@@ -410,6 +416,43 @@ class Graph:
         if ptr == ffi.NULL:
             return None
         return IGNILBlock(ptr, owner=self)
+
+    def finite_values(self, *, entry_points=(), query_register=None,
+                      max_values=64, max_blocks=4096,
+                      max_operations=1000000, max_facts=262144):
+        """Bounded forward finite sets. query_register is (block, offset, width).
+
+        Kind 0 is unreachable, 1 finite, 2 unknown. No image-memory assumptions
+        or call-effect models are added. All queried values are unknown if the
+        global analysis budget is exhausted. Does not change this Graph.
+        """
+        import json
+        if not self._ptr:
+            raise ReferenceError('Graph has been closed')
+        limits=(max_values,max_blocks,max_operations,max_facts)
+        if any(type(x) is not int or not 0<=x<=0xffffffff for x in limits):
+            raise ValueError('finite-value limits must be uint32 integers')
+        entries=tuple(entry_points)
+        if any(type(x) is not int or not 0<=x<=0xffffffffffffffff for x in entries):
+            raise ValueError('entry points must be uint64 integers')
+        query=(0,0,0) if query_register is None else tuple(query_register)
+        if len(query)!=3 or any(type(x) is not int for x in query) or not (
+                0<=query[0]<=0xffffffffffffffff and 0<=query[1]<=0xffffffff and
+                0<=query[2]<=64):
+            raise ValueError('query_register must be (block uint64, offset uint32, width 0..64)')
+        raw=lib.dragon_graph_finite_values(self._ptr,
+            ffi.new('uint64_t[]',entries) if entries else ffi.NULL,len(entries),
+            *query,*limits)
+        if raw==ffi.NULL:
+            raise RuntimeError('finite-value analysis failed')
+        try:
+            result=json.loads(ffi.string(raw).decode())
+        finally:
+            lib.dragon_cstr_free(raw)
+        for value in [*result['jump_targets'],*result['values']]:
+            value['values']=[int(x,16) for x in value['values']]
+        result['jump_targets']={int(v.pop('block'),16):v for v in result['jump_targets']}
+        return result
 
     def __repr__(self):
         return f'<Graph instructions={len(self)}>'
@@ -2921,6 +2964,28 @@ class PassPipeline:
 
     def register(self, name, callback, *, stage=PassStage.LLVM, read_only=False, requires=()):
         return self._install(name, stage, callback, read_only=read_only, requires=requires)
+
+    def register_finite_dispatch(self, code, base_address=0, *,
+                                 entry_points=(), name='finite-dispatch'):
+        """Register native x86 recovery with owned code/entries; then add(name).
+
+        Options: max_values, max_blocks, max_operations, max_facts, max_rounds.
+        Default discovery remains unchanged until this Graph pass is run.
+        """
+        self._check()
+        entries=tuple(entry_points)
+        if type(base_address) is not int or not 0<=base_address<=0xffffffffffffffff:
+            raise ValueError('base_address must be a uint64 integer')
+        if any(type(x) is not int or not 0<=x<=0xffffffffffffffff for x in entries):
+            raise ValueError('entry_points must contain uint64 integers')
+        data=bytes(code)
+        if not data:
+            raise ValueError('finite dispatch needs nonempty code')
+        if not lib.dragon_pass_pipeline_register_finite_dispatch(self._ptr,name.encode(),
+                ffi.from_buffer(data),len(data),base_address,
+                ffi.new('uint64_t[]',entries) if entries else ffi.NULL,len(entries)):
+            raise ValueError(self._error())
+        return self
 
     def run(self, target, *, max_iterations=1, max_pass_runs=64, verify=True):
         import json

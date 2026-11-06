@@ -2,12 +2,14 @@ add_executable(dragon_tests
         TestMain.cpp
         disassemblers/TestDisassembler.cpp
         disassemblers/TestX86Analysis.cpp
+        disassemblers/TestFiniteDispatch.cpp
         disassemblers/TestX86IGNILLifter.cpp
         disassemblers/TestARMAnalysis.cpp
         disassemblers/TestARMIGNILLifter.cpp
         disassemblers/TestTraceLifter.cpp
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
+        analysis/TestFiniteValues.cpp
         analysis/TestSwitchDetector.cpp
         analysis/TestConstantValue.cpp
         analysis/TestIGNILSimplify.cpp

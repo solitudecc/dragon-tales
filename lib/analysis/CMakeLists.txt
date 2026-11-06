@@ -2,6 +2,7 @@ target_sources(libdragon
         PRIVATE
         SliceExpr.cpp
         BackwardSlicer.cpp
+        FiniteValues.cpp
         SwitchDetector.cpp
         GuardProof.cpp
         ArgumentRecovery.cpp

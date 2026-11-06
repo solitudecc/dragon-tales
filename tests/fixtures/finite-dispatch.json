@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_32_growing",
+      "architecture": "x86_32",
+      "code_hex": "b810100000ffe0909090909090909090b820100000ebee909090909090909090b830100000ebde90909090909090909001f88903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4101,
+      "expected_targets": [
+        4112,
+        4128,
+        4144
+      ]
+    },
+    {
+      "id": "x86_32_masked_select",
+      "architecture": "x86_32",
+      "code_hex": "b820100000ba3010000083ff000f45c2ffe09090909090909090909090909090b8070000008903c39090909090909090b8090000008903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4112,
+      "expected_targets": [
+        4128,
+        4144
+      ]
+    },
+    {
+      "id": "x86_32_stack_table",
+      "architecture": "x86_32",
+      "code_hex": "c74424f840100000c74424fc50100000b90000000083ff000f94c1ff648cf8909090909090909090909090909090909090909090909090909090909090909090b8070000008903c39090909090909090b8090000008903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4123,
+      "expected_targets": [
+        4160,
+        4176
+      ]
+    },
+    {
+      "id": "x86_64_growing",
+      "architecture": "x86_64",
+      "code_hex": "b810100000ffe0909090909090909090b820100000ebee909090909090909090b830100000ebde90909090909090909001f88903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4101,
+      "expected_targets": [
+        4112,
+        4128,
+        4144
+      ]
+    },
+    {
+      "id": "x86_64_masked_select",
+      "architecture": "x86_64",
+      "code_hex": "b820100000ba3010000083ff000f45c2ffe09090909090909090909090909090b8070000008903c39090909090909090b8090000008903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4112,
+      "expected_targets": [
+        4128,
+        4144
+      ]
+    },
+    {
+      "id": "x86_64_stack_table",
+      "architecture": "x86_64",
+      "code_hex": "48c74424f04010000048c74424f850100000b90000000083ff000f94c1ff64ccf090909090909090909090909090909090909090909090909090909090909090b8070000008903c39090909090909090b8090000008903c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4125,
+      "expected_targets": [
+        4160,
+        4176
+      ]
+    }
+  ]
+}

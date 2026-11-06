@@ -822,6 +822,14 @@ Existing borrowed Graph views expire after a Graph pipeline call; reacquire
 them before use. Failed automatic Graph processing closes its new Graph.
 See [pass pipelines](pass-pipeline.md) for callbacks, cache scope, errors and limits.
 
+`pipeline.register_finite_dispatch(code, base_address, entry_points=entries)` copies
+code and entries; follow with `.add("finite-dispatch")` and `.run(graph)` to opt in
+to native x86 recovery. `graph.finite_values(entry_points=entries,
+query_register=(block, offset, width))` queries a register at block end; omit
+`query_register` to request only jump sets. `ValueSetKind` distinguishes finite,
+unknown and unreachable values. Both APIs work without Z3. See
+[finite dispatch](finite-dispatch.md) for complete entry contracts, limits and memory/call barriers.
+
 ```python
 lifter.run_mem2reg()      # promotes allocas to SSA values
 lifter.run_inst_combine() # folds sub-register mask/OR patterns

@@ -119,6 +119,18 @@
   void dragon_graph_each_function_address(const dragon_graph_t* g,
       void (*cb)(uint64_t addr, void* user), void* user);
 
+  // Owned JSON result; free with dragon_cstr_free. Empty entries use discovered
+  // function starts. query_width==0 requests only jump-target sets; otherwise
+  // also queries a register at the end of query_block. Values use hex strings.
+  // Budget exhaustion reports complete=false and Unknown, never partial sets.
+  typedef enum dragon_value_set_kind {
+    DRAGON_VALUE_UNREACHABLE=0, DRAGON_VALUE_FINITE=1, DRAGON_VALUE_UNKNOWN=2
+  } dragon_value_set_kind_t;
+  char* dragon_graph_finite_values(const dragon_graph_t* g,
+      const uint64_t* entries, size_t count, uint64_t query_block,
+      uint32_t query_offset, uint8_t query_width, uint32_t max_values,
+      uint32_t max_blocks, uint32_t max_operations, uint32_t max_facts);
+
   // -- Disassembler --------------------------------------------------------------
 
   dragon_disasm_t* dragon_disasm_create(dragon_architecture_t arch,
@@ -758,6 +770,11 @@
   int dragon_pass_pipeline_register(dragon_pass_pipeline_t* p, const char* name,
       dragon_pass_stage_t stage, dragon_pass_callback_t callback, void* userdata,
       int read_only, const char* requires_json);
+  // Registers an opt-in x86 Graph pass; copies code/entries. Uses only proved
+  // guest stores as memory facts; code is not an immutable data snapshot.
+  int dragon_pass_pipeline_register_finite_dispatch(dragon_pass_pipeline_t* p,
+      const char* name, const uint8_t* code, size_t length, uint64_t base,
+      const uint64_t* entries, size_t count);
   // Keeps existing dependency/option validation when replacing a built-in executor.
   int dragon_pass_pipeline_override(dragon_pass_pipeline_t* p, const char* name,
       dragon_pass_stage_t stage, dragon_pass_callback_t callback, void* userdata);

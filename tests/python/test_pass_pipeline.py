@@ -28,7 +28,7 @@ with lift(g) as manual,lift(g) as managed:
 
 with lift(g) as l,d.PassPipeline() as p:
     names={x['name'] for x in p.passes()}
-    assert names==set(d.PassPipeline.DEFAULT_LLVM)|{'graph-audit'}
+    assert names==set(d.PassPipeline.DEFAULT_LLVM)|{'graph-audit','finite-values'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
@@ -133,4 +133,35 @@ with d.PassPipeline(builtins=False) as p:
     p.register('fail-graph',fail_graph,stage=d.PassStage.GRAPH).add('fail-graph')
     expect(d.PipelineError,lambda:d.Disassembler().analyze(bytes.fromhex('c3'),0x1000,graph_pipeline=p))
     assert captured[0]._ptr is None
+assert d.ValueSetKind.FINITE==d.lib.DRAGON_VALUE_FINITE==1
+live=g.get_function(0x1000)
+facts=g.finite_values(entry_points=[0x1000],query_register=(0x1000,0,64))
+assert facts['complete'] and facts['values'][0]['values']==[7]
+assert live.is_valid
+with d.PassPipeline(['finite-values']) as p:
+    assert not p.run(g)['changed']
+expect(ValueError,lambda:g.finite_values(query_register=(0x1000,0,65)))
+expect(ValueError,lambda:g.finite_values(entry_points=[True]))
+expect(ValueError,lambda:g.finite_values(max_values=True))
+
+payload=bytearray(b'\x90'*0x31)
+payload[:7]=bytes.fromhex('b810100000ffe0')
+payload[0x10:0x17]=bytes.fromhex('b820100000ebee')
+payload[0x20:0x27]=bytes.fromhex('b830100000ebde')
+payload[0x30]=0xc3
+for strategy in (d.Strategy.LINEAR_SWEEP,d.Strategy.RECURSIVE_TRAVERSAL):
+    code=bytes(payload)
+    target=d.Disassembler(config=d.Configuration(strategy=strategy)).analyze(code,0x1000)
+    with d.PassPipeline() as p:
+        owned=bytearray(code)
+        p.register_finite_dispatch(owned,0x1000,entry_points=[0x1000]).add('finite-dispatch')
+        owned[:]=b'\xcc'*len(owned)
+        del owned
+        expect(ValueError,lambda:p.add('finite-dispatch',max_values=257))
+        expect(ValueError,lambda:p.add('finite-dispatch',max_rounds=True))
+        assert p.run(target)['changed']
+        assert target.get_instruction(0x1005).branches==[0x1010,0x1020,0x1030]
+        assert not p.run(target)['changed']
+    with d.PassPipeline() as p:
+        expect(ValueError,lambda:p.register_finite_dispatch(b'',0x1000))
 print('Pass pipeline: configuration, callbacks, cache, budgets and lifetime checks passed')

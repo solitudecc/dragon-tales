@@ -91,6 +91,14 @@ struct Graph::Queues {
   std::set<std::uint64_t> conflictingImportSlots;
 };
 
+Graph Graph::clone() const {
+  Graph copy{architecture_,configuration_};
+  copy.listing_=listing_;
+  copy.ignilBlocks_=ignilBlocks_;
+  *copy.queues_=*queues_;
+  return copy;
+}
+
 void detail::GraphLLVMMetadata::setImports(Graph &graph,const std::map<std::uint64_t,std::string>& slots) {
   graph.queues_->importSlots=slots;
   graph.queues_->conflictingImportSlots.clear();
