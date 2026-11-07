@@ -79,8 +79,12 @@ class LLVMLifter {
   /// Resumable contract and StatefulV2 remain unchanged.
   bool setStaticEntryPolicy(StaticEntryPolicy policy);
 
-  /// Lift one function (all its IGNIL blocks must be in the graph). Legacy
-  /// rejects transfers it cannot report; StatefulV2 emits explicit exits.
+  /// Lift one function (all its IGNIL blocks must be in the graph). Check the
+  /// return value before treating the function as lifted. Legacy returns false
+  /// if any function-member block has an unlifted marker, including a marker
+  /// whose instruction emits no IGNIL ops; this rejection leaves the module
+  /// unchanged. Legacy also rejects transfers it cannot report. StatefulV2 and
+  /// StaticAnalysis retain explicit Unsupported exits at unlifted instructions.
   /// V2 target implementations require valid caller-owned Execution.h objects.
   /// StaticAnalysis uses the same state layout and opaque external declarations;
   /// it requires no runtime or external bodies for IR analysis/optimization.

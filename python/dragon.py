@@ -1459,8 +1459,12 @@ class LLVMLifter:
     def lift(self, function, graph):
         """Lift *function* using its IGNIL blocks in *graph*.
 
-        Returns True on success; False for invalid/missing blocks or a Legacy
-        transfer the old protocol cannot represent. V2 uses explicit exits.
+        Returns True on success; check the result before using the lifted
+        function. Returns False for invalid/missing blocks or a transfer that
+        Legacy cannot represent. Legacy also rejects an unlifted marker on any
+        function-member block, including instructions that emit no IGNIL ops;
+        this rejection leaves the module unchanged. STATEFUL_V2 and
+        STATIC_ANALYSIS retain explicit Unsupported exits at those instructions.
         """
         return bool(lib.dragon_llvm_lifter_lift(
             self._ptr, function._ptr, graph._ptr))

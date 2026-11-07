@@ -182,7 +182,8 @@ TEST_CASE("LLVMLifter - IEEE double compares become fcmp",
 namespace {
 std::string liftAndVerify(const std::vector<std::uint8_t> &bytes,
                           std::uint64_t entry,
-                          std::vector<std::uint64_t> entries) {
+                          std::vector<std::uint64_t> entries,
+                          dragon::llvmlifter::ExecutionMode mode = dragon::llvmlifter::ExecutionMode::Legacy) {
   dragon::Configuration cfg;
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   dragon::Graph g(dragon::Architecture::X86_64, cfg);
@@ -192,6 +193,7 @@ std::string liftAndVerify(const std::vector<std::uint8_t> &bytes,
   const dragon::Function fn{&g, entry};
   REQUIRE(fn.isValid());
   dragon::llvmlifter::LLVMLifter llvml{dragon::Architecture::X86_64};
+  REQUIRE(llvml.setExecutionMode(mode));
   REQUIRE(llvml.lift(fn, g));
   std::string err;
   llvm::raw_string_ostream os(err);
@@ -210,7 +212,10 @@ TEST_CASE("LLVMLifter - a loop back to the function start is valid IR",
 TEST_CASE("LLVMLifter - a block ending in a trap gets a terminator",
           "[llvm][lifter]") {
   // 0x1000: test edi, edi ; je 0x1005 ; ret ; 0x1005: ud2
-  liftAndVerify({0x85, 0xff, 0x74, 0x01, 0xc3, 0x0f, 0x0b}, 0x1000, {0x1000});
+  // UD2 has an unlifted marker. Use the explicit Unsupported exit protocol
+  // to test terminator validity; Legacy cannot represent that boundary.
+  liftAndVerify({0x85, 0xff, 0x74, 0x01, 0xc3, 0x0f, 0x0b}, 0x1000, {0x1000},
+                dragon::llvmlifter::ExecutionMode::StatefulV2);
 }
 
 TEST_CASE("LLVMLifter - execution starts at the entry, not the lowest block",

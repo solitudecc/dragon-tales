@@ -22,6 +22,7 @@ add_executable(dragon_tests
         sigs/TestSignatureMatcher.cpp
         obfush/TestObfush.cpp
         lifters/TestLLVMLifter.cpp
+        lifters/TestLLVMLegacyUnlifted.cpp
         lifters/TestLLVMPredicateFolding.cpp
         lifters/TestLLVMMBA.cpp
         lifters/TestLLVMFunctionFlow.cpp
@@ -182,6 +183,17 @@ if(Python3_Interpreter_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_analysis_hints.py)
         set_tests_properties("Python API - analysis hints and calling convention"
                 PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Validation - Legacy unlifted C and Python"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_legacy_unlifted.py)
+        set_tests_properties("Validation - Legacy unlifted C and Python"
+                PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Validation - Legacy unlifted inventory controls"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PROJECT_SOURCE_DIR}/scripts/validation/legacy_unlifted_inventory.py --self-test)
+        add_test(NAME "Validation - Legacy unlifted oracle controls"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PROJECT_SOURCE_DIR}/scripts/validation/legacy_unlifted_diff.py --self-test)
         add_test(NAME "Validation - jump-table bounds follow the actual index"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)

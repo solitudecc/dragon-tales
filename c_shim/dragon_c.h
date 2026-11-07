@@ -700,8 +700,11 @@
   void dragon_llvm_execute_v2(dragon_guest_state_v2_t* state, dragon_guest_memory_v2_t* memory,
       dragon_exec_context_v2_t* context, dragon_exec_exit_v2_t* exit, uint64_t root_exit_pc);
 
-  // Lift one function. Returns 0 for invalid/missing blocks or a Legacy
-  // transfer that cannot be represented; V2 emits explicit execution exits.
+  // Lift one function. Returns 1 on success; check the result before using it.
+  // Returns 0 for invalid/missing blocks or an unrepresentable Legacy transfer.
+  // Legacy also returns 0 if any function-member block has an unlifted marker,
+  // even when that instruction emits no IGNIL ops; this rejection does not
+  // mutate the module. V2/Static retain explicit Unsupported execution exits.
   int  dragon_llvm_lifter_lift(dragon_llvm_lifter_t* l,
                                const dragon_function_t* fn,
                                const dragon_graph_t* g);

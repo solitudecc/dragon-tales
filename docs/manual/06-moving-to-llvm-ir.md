@@ -21,13 +21,18 @@ if (ok)
 
 ```python
 lifter = dragon.LLVMLifter(dragon.Architecture.ARM64, "foo_module")
-ok = lifter.lift(fn, graph)
+if not lifter.lift(fn, graph):
+    raise RuntimeError("LLVM lift refused; inspect function validity and unlifted markers")
 print(lifter.ir())
 ```
 
-`lift()` returns `false` if any block reachable from the function is
-missing an IGNIL translation — the lifter refuses to produce a function
-with a gap in it rather than silently emitting wrong code.
+`lift()` returns `false` for invalid functions or missing IGNIL blocks. In the
+default Legacy mode, it also rejects an `unlifted` marker on **any member block**
+of the function, even if the unsupported instruction emitted no IGNIL ops.
+This marker rejection happens before module mutation: existing definitions
+and the rendered IR remain unchanged. Check the result before optimizing,
+printing or executing the requested function. A supported instruction's legal
+`UNDEF` values do not by themselves make it unlifted.
 
 One lifter can hold multiple distinct functions. Re-lifting an existing symbol
 returns `false`; it does not silently create a renamed copy. Choose an execution
@@ -54,6 +59,9 @@ Python use the same layout. After compiling/JIT-loading the IR, register each
 supported Guest entry address with its four-pointer host implementation and run
 `executeV2` (C: `dragon_llvm_execute_v2`). Missing targets and exhausted budgets
 produce explicit exits with the synchronized Guest PC; they are not `unreachable`.
+An unlifted instruction similarly produces an explicit Unsupported boundary.
+V2 accepting the function does not supply the missing instruction's semantics
+or imply that execution can return normally through that boundary.
 See [the execution contract](../llvm-execution-contract.md) for ownership,
 registration, memory and state requirements.
 
@@ -104,7 +112,8 @@ Lifting the same ARM64 `foo(x)` function from chapters 3-5 and printing
 ```python
 fn = graph.get_function(0x1000)
 lifter = dragon.LLVMLifter(dragon.Architecture.ARM64, "foo_module")
-lifter.lift(fn, graph)
+if not lifter.lift(fn, graph):
+    raise RuntimeError("LLVM lift refused; inspect function validity and unlifted markers")
 
 print(lifter.ir())      # non-optimized
 lifter.optimize()
@@ -266,6 +275,8 @@ no external bodies. Unknown effects conservatively block dependent folds;
 proven independent simplifications remain possible. Static IR does not consume
 the V2 budget and must not be registered with its executor. See
 [the static contract](../llvm-static-analysis-contract.md) for staged coverage.
+Unlifted instructions retain Unsupported exits in StaticAnalysis too; successful
+IR generation or optimization is not complete execution through those instructions.
 
 For analysis starting only at each function's beginning, pass
 `static_entry_policy=dragon.LLVMStaticEntryPolicy.FUNCTION_START` to the static
@@ -296,7 +307,8 @@ while retaining the opaque external call and the dependent control flow.
 This is an example's IR size change, not a general deobfuscation ratio.
 
 The default Legacy interface keeps `void sub_<addr>(mem, regs)` and the trace
-API. It refuses CALL and transfers it cannot report. For complete Guest
+API. It refuses member-block unlifted markers, CALL and transfers it cannot report.
+For explicit Guest
 control flow, opt in before the first lift:
 
 ```python
@@ -332,11 +344,12 @@ preconditions, boundaries and unsupported conditions.
 
 ## Scope
 
-Same as chapter 5 — `LLVMLifter` consumes whatever `getIGNILBlock()` can
-produce, so it inherits IGNIL's scope: x86 (32/64) and ARM64 only. A
-`Function` with a block missing an IGNIL translation (ARM32, RISC-V, or a
-gap from an unsupported addressing mode) makes `lift()` return `false`
-rather than emit a function with a hole in it.
+Same as chapter 5 — `LLVMLifter` inherits IGNIL's architecture scope: x86
+(32/64) and ARM64. A missing IGNIL block makes `lift()` return `false`.
+An existing IGNIL block can still contain unlifted instructions, including
+zero-op unsupported stores: Legacy refuses the whole function without module
+mutation, while V2/Static represent the boundary with Unsupported. Neither
+successful lifting nor LLVM verification proves complete CPU semantics.
 
 ---
 Previous: [5. Lifting to IGNIL](05-lifting-to-ignil.md) · Next: [7. A Real-World Example](07-a-real-world-example.md)

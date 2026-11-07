@@ -106,7 +106,11 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   };
   if (mode_ == ExecutionMode::Legacy) for (const auto &[address, block] : blocks) {
     const auto *ir = graph.getIGNILBlock(address);
-    if (!ir) return false;
+    // The Legacy ABI cannot report an unsupported-instruction boundary.
+    // Check the marker even when the instruction emitted no IGNIL ops (for
+    // example an unsupported memory store), before mutating the module.
+    // UNDEF alone is still valid for architecturally undefined results.
+    if (!ir || !ir->unlifted().empty()) return false;
     // The decoder may recognize control flow with no supported IGNIL form.
     // Check machine calls too, so a dropped far/unknown call cannot bypass
     // the Legacy refusal merely by having no CALL op in the block.

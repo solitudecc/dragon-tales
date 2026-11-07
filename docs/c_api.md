@@ -833,6 +833,12 @@ further to recover here.
 heap-allocated and must be freed with `dragon_cstr_free`.
 
 `graph` must come from `dragon_disasm_analyze` — IGNIL blocks must be present.
+The default Legacy mode returns 0 if **any function-member block** has an
+unlifted marker, even when the unsupported instruction emits no IGNIL op.
+This marker rejection occurs before module mutation: previously lifted
+definitions and rendered IR remain unchanged. Check the return value before
+treating the requested function as lifted. Supported instructions may contain
+legal UNDEF values without an unlifted marker.
 
 ```c
 static const uint8_t code[] = {
@@ -871,6 +877,8 @@ if (dragon_llvm_lifter_lift(lifter, fn, graph)) {
     ir = dragon_llvm_lifter_ir(lifter);
     printf("%s", ir);
     dragon_cstr_free(ir);
+} else {
+    fprintf(stderr, "LLVM lift refused; inspect function validity and unlifted markers\n");
 }
 
 dragon_function_destroy(fn);
@@ -894,15 +902,19 @@ layout comes from `dragon/lifters/llvm/Execution.h`, included by `dragon_c.h`.
 Only Guest Return to `root_exit_pc` ends root execution; CALL/JMP to that address
 still requires an implementation. Missing targets, unsupported effects and budgets
 are explicit exits. Import names in `!dragon.imports` are diagnostic origins and
-never invoke host library functions. Legacy safely refuses CALL or transfers it
-cannot represent. See [the execution contract](llvm-execution-contract.md) for
+never invoke host library functions. Legacy safely refuses member-block
+unlifted markers, CALL or transfers it cannot represent. V2 retains explicit
+Unsupported exits at unlifted instructions; successful generation does not
+mean execution can continue normally through them. See [the execution contract](llvm-execution-contract.md) for
 supported architectures/host ABI, layouts, ownership and registration rules.
 
 `DRAGON_LLVM_STATIC_ANALYSIS` selects static IR with `dragon_static_<arch>_<addr>`
 four-pointer functions. Unknown calls remain declarations of
 `dragon_static_external`; no bodies or V2 runtime are needed for verify or
 optimization. Calls conservatively expose register/memory effects and guard
-normal continuation. Static functions are not V2 runtime targets. See
+normal continuation. Unlifted instructions also retain Unsupported boundaries;
+valid or optimized static IR does not establish complete execution past them.
+Static functions are not V2 runtime targets. See
 [the static contract](llvm-static-analysis-contract.md).
 
 **API summary**
@@ -914,7 +926,7 @@ normal continuation. Static functions are not V2 runtime targets. See
 | `dragon_llvm_lifter_set_execution_mode(l, mode)` | `int` (0/1) | Select before lifting; 0 for invalid mode or nonempty module |
 | `dragon_llvm_lifter_set_static_entry_policy(l, policy)` | `int` (0/1) | Static mode before lifting: `DRAGON_LLVM_ENTRY_RESUMABLE` (default) or `DRAGON_LLVM_ENTRY_FUNCTION_START`; the latter emits `dragon_static_entry_*` symbols and rejects other PCs with Unsupported/Entry |
 | `dragon_llvm_execute_v2(state, memory, context, exit, root_exit_pc)` | — | Executes registered V2 implementations; status is in `exit` |
-| `dragon_llvm_lifter_lift(l, fn, graph)` | `int` (0/1) | 0 for invalid/missing blocks, duplicate symbols or unsupported Legacy transfers |
+| `dragon_llvm_lifter_lift(l, fn, graph)` | `int` (0/1) | Check before using the function. 0 for invalid/missing blocks, duplicate symbols, unsupported Legacy transfers, or any member-block unlifted marker in Legacy; marker refusal leaves the module unchanged |
 | `dragon_llvm_lifter_ir(l)` | `char*` (heap) | Free with `dragon_cstr_free` |
 | `dragon_llvm_lifter_run_mem2reg(l)` | — | Promotes allocas → SSA |
 | `dragon_llvm_lifter_run_inst_combine(l)` | — | Folds sub-register patterns |

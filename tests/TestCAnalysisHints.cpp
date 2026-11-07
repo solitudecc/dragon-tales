@@ -2,6 +2,41 @@
 #include "../c_shim/dragon_c.h"
 
 #include <array>
+#include <string>
+
+TEST_CASE("C Legacy refuses unlifted memory effects before creating LLVM IR",
+          "[c-api][legacy-unlifted]") {
+  for (auto arch : {DRAGON_ARCH_X86_32, DRAGON_ARCH_X86_64}) {
+    auto *config = dragon_config_create(DRAGON_SYNTAX_INTEL, DRAGON_STRATEGY_LINEAR_SWEEP);
+    REQUIRE(config);
+    auto *dis = dragon_disasm_create(arch, config);
+    dragon_config_destroy(config);
+    REQUIRE(dis);
+    // MOVBE [EBX/RBX], EAX is unsupported and has no register definitions.
+    const std::array<uint8_t, 5> code{0x0f, 0x38, 0xf1, 0x03, 0xc3};
+    std::array<char, 256> error{};
+    auto *graph = dragon_disasm_analyze_with_hints(dis, code.data(), code.size(),
+        0x1000, nullptr, error.data(), error.size());
+    REQUIRE(graph);
+    auto *function = dragon_graph_get_function(graph, 0x1000);
+    REQUIRE(function);
+    auto *lifter = dragon_llvm_lifter_create(arch, "refusal");
+    REQUIRE(lifter);
+    auto *before = dragon_llvm_lifter_ir(lifter);
+    REQUIRE(before);
+    const std::string snapshot{before};
+    dragon_cstr_free(before);
+    CHECK(dragon_llvm_lifter_lift(lifter, function, graph) == 0);
+    auto *after = dragon_llvm_lifter_ir(lifter);
+    REQUIRE(after);
+    CHECK(std::string{after} == snapshot);
+    dragon_cstr_free(after);
+    dragon_llvm_lifter_destroy(lifter);
+    dragon_function_destroy(function);
+    dragon_graph_destroy(graph);
+    dragon_disasm_destroy(dis);
+  }
+}
 
 TEST_CASE("C LLVM static mode is an explicit opt in", "[c-api][static]") {
   auto *lifter=dragon_llvm_lifter_create(DRAGON_ARCH_X86_64,"static"); REQUIRE(lifter);

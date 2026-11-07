@@ -207,6 +207,63 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Legacy whole-function unlifted refusal (2026-11-07, baseline `a19af98`): see
+`docs/llvm-legacy-unlifted.md`. Legacy `lift(Function,Graph)` now rejects a
+marker on any member block before LLVM/module mutation, including zero-op
+unsupported STOREs and non-entry/empty-IR markers. C++/Python return false,
+C returns0; callers must consume that result. Supported legal UNDEF and NOOPs
+are not markers. Same-instance failures preserve existing/same-address
+definitions and allow later valid lifts. V2/Static retain explicit Unsupported
+instruction exits; trace refusal was already present. No ABI/default-mode/
+Graph/IGNIL/slicer/finite-analysis/deobfuscation algorithm changes. Manual06/07
+and C API examples now check acceptance; old partial IR is historical error
+evidence, not a supported “continue anyway” flow. fuzz_loader's ignored return
+still counts robustness attempts, not lift success; do not silently rewrite it.
+
+Old same-source tests fail: C++7 cases/426 assertions, four cases/70 assertions;
+C1/18 with four assertion failures; Python four methods/16 failures. Preconditions,
+supported UNDEF and V2/Static acceptance controls pass old too. Final main
+CTest653/653 and no-Z3 521/521 pass; final C++7/426, C1/18 and Python four
+methods pass. Frozen harnesses pass a final targeted2/2 rerun: inventory rejects
+11 bad reports/accepts one valid report; native has nine contract checks.
+
+Independent native-final-audit closes22 jobs. Old Legacy128 CPU observations =
+64 actual MOVBE stale EAX/RAX + four DATA-byte counterexamples /64 supported
+matches; old non-Legacy three modes add384 matches as compatibility controls.
+New Legacy16 module contracts = eight atomic marker refusals/eight accepted;
+64 successful pre-RET ABI observations compare SP/all other modelled fields+
+64KiB, with PC outside Legacy ABI and no RET-pop normalization. Refusals are
+module counts, never per-trial CPU matches. New main V2/static-resumable/
+product-FunctionStart each128 =64 roots+64 Unsupported; no-Z3 product adds128.
+Thus new full-Guest512 =256 complete roots+256 exact instruction boundaries,
+plus Legacy64 yields576 normal matches with different observation scopes.
+Result/memory controls each96/96 detect exact single-field differences; source
+native snapshots remain unchanged. Never describe Legacy as full Guest roots
+or boundary matches as complete functions.
+
+Non-Legacy LLVM88 files:64 raw.ll/unoptimized.ll files byte-identical;24 optimized.ll
+differ only in first-line ModuleID comments with the two exact old/main input
+paths, every remaining byte equal. Original exact-audit failure and native-run
+completeFalse remain; independent final audit closes this artifact-only
+distinction. Not88 byte-identical files and no Guest-state normalization.
+
+Acceptance inventory: nine binaries/18 graph views per version;6245 candidate
+records =6237 valid+eight invalid. Common accepted755 have identical IR hashes;
+67 new marker refusals,5423 existing refusals including eight invalid;822 old
+accepted becomes755. Do not attribute all existing refusal causes to this guard.
+Independent manifest/schema/exact entry coverage/source SHA/full-path two-DSO
+maps are checked;11 bad-report controls reject. Graph skeleton/acceptance/IR
+identity only, not full Graph fingerprints, verify or CPU semantics. No new
+69-input V2 or Tigress CPU matrix rerun: only Legacy entry refusal changed,
+with no upstream semantics edits. Prior-stage counts are not new coverage.
+Writable-image-table provenance/alias certificates, TLS-withdrawn targets,
+cross-call pointer/heap modelling and deflat remain separate open work. Stage:
+`~/vmc-runs/legacy-unlifted-20261107/`, Mac
+`/Users/c/Desktop/deob/validation-artifacts/legacy-unlifted-20261107/`.
+Keep old failures/initial audit records; execution validation is complete and
+archive/Git finalization is recorded externally. One heavy worker; only owned
+`~/dragon-tales-overlap`.
+
 x86 effective-address width (2026-11-07, baseline `72c37b8`): see
 `docs/x86-effective-address-width.md`. Current candidate-v1 main `223b1239…` /
 no-Z3 `c408fe2f…` has completed component/native/reference, fresh-corpus and

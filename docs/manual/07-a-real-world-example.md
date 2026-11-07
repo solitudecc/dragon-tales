@@ -9,6 +9,12 @@ that's exactly where you find the edges of what a lifter currently
 supports. This chapter compiles real C, extracts its `.text`, and runs it
 through the full pipeline from chapters 3-6, including the rough edges.
 
+The disassembly/IR listings below are historical captures, not freshly rerun
+output for the current revision. Ordinary x86 memory forms have since gained
+support, and unsupported effects must now be recorded in `unlifted`. Use the
+current graph's markers and the `lift()` result rather than treating an old
+partial listing as executable semantics.
+
 ## The source
 
 A loop-based function — genuinely different from every earlier chapter's
@@ -40,13 +46,12 @@ gcc -O1 -fno-asynchronous-unwind-tables -fno-stack-protector -c sum.c -o sum.o
   keeps every local variable on the stack and GCC/Clang's `-O0` codegen
   leans heavily on memory-destination instruction forms (`mov dword ptr
   [rbp-4], 0`, `add dword ptr [rbp-8], eax`, `cmp eax, dword ptr [rbp-20]`)
-  that — verified empirically while writing this chapter — the current x86
-  IGNIL lifter's opcode dispatch doesn't yet recognize (only the
-  register-destination forms of `MOV`/`ADD`/`CMP` are wired up). At `-O0`
-  those instructions are silently skipped — no `UNDEF`, no error, just a
-  gap — which is worse than it sounds: a later instruction that depends on
-  a skipped one (e.g. a `cmp` against memory feeding a conditional jump)
-  ends up reading stale flag values. `-O2`, at the other extreme, unrolls
+  exposed missing dispatch entries in the historical version used for this
+  capture. The ordinary `MOV`/`ADD`/`CMP` forms shown here are supported by
+  later revisions; this compiler level is not a workaround for accepting
+  unsupported code. A remaining unsupported instruction must carry an
+  `unlifted` marker, and Legacy refuses a function containing one. `-O2`, at
+  the other extreme, unrolls
   and vectorizes even this small a loop into something too dense to be a
   good teaching example. `-O1` is the sweet spot for *this* function: real
   register-allocated code, still a genuine loop.
@@ -126,16 +131,18 @@ the early-exit/normal-exit tail at `0x31`. This is the first function in
 the manual with a real loop-carried back-edge in its CFG — every earlier
 chapter's example was if/else, straight-line control flow.
 
-## The gap, in IGNIL
+## A historical gap, in IGNIL
 
 ```python
 for addr in graph.block_addresses():
-    print(graph.get_ignil_block(addr).to_string())
+    block = graph.get_ignil_block(addr)
+    print("unlifted:", [hex(pc) for pc in block.unlifted()])
+    print(block.to_string())
 ```
 
-The entry block (starting at `0x0`) is where the gap shows up. Compare the
+The historical entry block (starting at `0x0`) is where the gap showed up. Compare the
 disassembly above (`endbr64` at `0x0`, then `mov dword ptr [rsp-0x4], 0x0`
-at `0x4`, then `test edi, edi` at `0xc`) against the actual IGNIL output:
+at `0x4`, then `test edi, edi` at `0xc`) against this abbreviated old IGNIL output:
 
 ```
 IGNILBlock @ 0x0
@@ -148,52 +155,38 @@ IGNILBlock @ 0x0
   ...
 ```
 
-**There is no op at all for the `mov dword ptr [rsp-0x4], 0x0` at `0x4`.**
-It isn't lifted to `UNDEF` (which at least marks the destination as
-unknown, the way `PF`/`AF` above honestly do for x86's rarely-modeled
-parity/aux-carry flags) — it's simply absent, exactly the same "gap" chapter
-3 warned about with `hasIndirectTarget`/unclassified instructions, except
-here it's not an exotic edge case: **immediate-to-memory `mov` is one of
-the single most common instruction forms in real x86 code**, and it isn't
-in `X86IGNILLifter`'s opcode dispatch yet (only `MOV reg, reg/imm` and `MOV
-reg, [mem]` / `MOV [mem], reg` are wired up — not `MOV [mem], imm`; the
-same is true of `ADD [mem], reg/imm` and `CMP reg, [mem]`, though this
-particular function doesn't happen to use those forms).
+**The old listing has no op for `mov dword ptr [rsp-0x4], 0x0` at `0x4`.**
+It lost a real memory write. An unsupported store can have no register result
+to replace with `UNDEF`, which is why `block.unlifted()` is a separate required
+check. Fewer ops alone do not prove a gap: supported NOPs can emit no ops,
+and one supported instruction can emit many. Likewise, a legal undefined
+result in a supported instruction is not itself an unlifted marker.
 
-**The concrete consequence** shows up three chapters downstream, in the
-optimized LLVM IR below: the early-return path (`n <= 0`) ends up reading
+**The historical consequence** is visible in the old optimized LLVM IR below:
+the early-return path (`n <= 0`) reads
 `total`'s stack slot via a `load` with **no corresponding `store` anywhere
 before it** — because the `store` that should have initialized it to `0`
-was the very instruction that got dropped. The IR stays structurally valid
-(LLVM doesn't need every load to have a preceding store), but semantically,
-lifting this function's `n <= 0` path currently returns garbage instead of
-`0`. This is a real, present gap — not a hypothetical one — and it is
-exactly the kind of thing to check for before trusting a lifted result:
-look for a block whose IGNIL translation has noticeably fewer ops than the
-disassembly listing above it has instructions.
+was dropped. The IR can remain structurally valid while describing the wrong
+program. This is evidence of an incomplete old lift, not a valid current result.
 
-## Through to LLVM IR anyway
+## Refuse incomplete Legacy input before using LLVM IR
 
-The rest of the function — the actual loop — uses only register-form
-`mov`/`add`/`cmp` and register+immediate-offset `load`/`store`, all of
-which *are* supported, so it lifts and optimizes exactly like chapters 5-6
-would predict:
+Legacy returns `False` if any function-member block carries an unlifted marker,
+including a zero-op store. This rejection leaves the module unchanged. Run the
+current function only after checking acceptance; a module can still contain
+other previously lifted functions after a refusal:
 
 ```python
 lifter = dragon.LLVMLifter(dragon.Architecture.X86_64, "sum_module")
-lifter.lift(fn, graph)
-# non-optimized: 228 lines, one alloca per touched register, explicit
-# %regs loads for EAX/EDX/RSP/EDI/CF/PF/AF/ZF/SF/OF/DF up front, e.g.:
-#   %EAX = alloca i32, align 4
-#   ...
-#   %0 = getelementptr i8, ptr %regs, i32 0
-#   %1 = load i32, ptr %0, align 4
-#   store i32 %1, ptr %EAX, align 4
-#   ... (same pattern for every other touched register)
+if not lifter.lift(fn, graph):
+    raise RuntimeError("Incomplete or unsupported Legacy function; inspect unlifted markers")
 
 lifter.optimize()
 print(lifter.ir())
 ```
+
+The following old dump is retained to explain the missing-store failure. It is
+**not** the current snippet's output or an example to execute despite a marker:
 
 ```llvm
 define void @sub_0(ptr %mem, ptr %regs) {
@@ -250,13 +243,11 @@ bb_49:                                            ; preds = %bb_0.bb_49_crit_edg
 }
 ```
 
-Despite the gap, this is a genuinely good result: `bb_32` is a real,
-optimized loop with a `phi`-carried accumulator (`%EAX.0`) and induction
-variable, GVN has proven the loop only needs to load `total`'s memory slot
-once per iteration rather than on every access, and DCE has pruned every
-flag computation the function doesn't branch on. The marked line is the one
-place where the earlier gap surfaces — everything else here is a correct,
-verified translation of real compiled code.
+The `phi` nodes and loop shape illustrate LLVM's transformations, but optimizing
+partial IR cannot restore the missing store. Do not interpret this dump as a
+correct whole function. V2 and StaticAnalysis may accept a marked function by
+emitting an explicit Unsupported exit at the instruction; that boundary still
+does not implement the instruction or establish a complete normal root return.
 
 ## Cross-compiling for ARM64
 
@@ -312,7 +303,7 @@ function (it never calls anything), so at `-O1` Clang doesn't bother
 establishing a stack frame — no `stp x29, x30, [sp, ...]!`, no `mov x29,
 sp`. Chapter 5's ARM64 running example (`foo`, back in chapter 2) always
 had exactly that prologue, because it was hand-written to include one.
-dragon-tales' current ARM64 function-start heuristic looks for that
+the ARM64 function-start heuristic used in this capture looked for that
 `stp`-based frame-establishment pattern specifically — a real, common ARM64
 leaf function that omits it (which is the default at `-O1`+ for any
 function that doesn't itself call out) won't be recognized as a function
@@ -337,8 +328,9 @@ code questions reading it can't answer — what input satisfies this check,
 which branches are real, where a computed jump goes. For topics beyond that,
 see [IDEAS.md](IDEAS.md) (RISC-V once it has lifter support, writing a custom
 analysis pass). If you run into a gap like the
-two in this chapter on your own code, that's not a dead end: both are
-scope limitations of the current lifter/analysis, not fundamental — the
+two captured historically in this chapter on your own code, that's not a dead end:
+first inspect current markers, function validity and the lift result. Such
+scope limitations are not fundamental — the
 IGNIL opcode set and the `Graph`/`BasicBlock`/`Function` model in chapters
 4-5 have everything needed to describe the missing cases; they just need a
 dispatch entry or a heuristic extended.
