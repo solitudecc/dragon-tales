@@ -1,5 +1,11 @@
 # 可组合的 Graph / LLVM Pass 流水线
 
+后续[表内容证明修复](table-content-proof.md)改变跳转表发布前提，扩展了 FiniteDispatch
+的 hints 路由、内存预算和 Python 回调快照/错误清理。本文首版历史验证数字保持原样；
+当前使用新增可信读取契约时，还须遵守下面的注册生命周期说明。
+内容复验 Incomplete 时也可能撤回旧推断并报告 `changed=true`。分析撤回作用于整个 Graph，
+但本次重新证明只覆盖传入代码 region，其他 region 的旧推断不会自动恢复。
+
 基线 `04c6d91`，2026-11-06。第一版提供进程内注册、参数配置、阶段检查、
 有预算的重复执行、分析缓存和结构化报告。新算法可以用 C++ 可调用类、C 回调或
 Python 可调用对象接入；本版不加载共享库插件。后续新增的[有限值集与分发器 Pass](finite-dispatch.md)
@@ -96,11 +102,27 @@ if (!report.ok) throw std::runtime_error(report.error);
 本次运行的 `AnalysisCache&`。缓存提供 `put<T>`、`get<T>` 和 `invalidate()`。
 C++ validator 可返回错误说明，拒绝该步骤的配置。
 
+FiniteDispatch 的新注册重载可复制 `AnalysisHints`，合并其入口与显式入口，并在重新分析
+时使用同一份 `readKnownMemory` 契约。C++ 复制的是 `std::function`，不是其闭包中所有借用
+资源；调用者仍须维持捕获引用有效。内存证明与其他有限分析共享每轮预算，缓存只在本轮
+不变 CFG 内复用；预算/Unknown 不会回退到更宽松的默认分析。
+
 C 接口提供 opaque `dragon_pass_pipeline_t`，create/register/add/run/describe/destroy，
 阶段、状态和回调类型在 `dragon_c.h` 中。run 返回自有 JSON 字符串，须用
 `dragon_cstr_free` 释放。回调目标是本次运行借用的 Graph/lifter；不得关闭或销毁它。
 回调输出默认 ERROR，完成填写其他字段后必须显式设置状态。输出字符串须保持有效，
 直到本次回调返回给框架并完成复制。Python 桥接负责这些缓冲区的生命周期。
+
+C 的 `dragon_pass_pipeline_register_finite_dispatch_with_hints` 复制 hints，但 reader 的
+函数指针/userdata 仍借用到 executor 被替换或 pipeline 销毁；`clear` 只清步骤。
+新可信 reader 返回负数使原生调度器立即产生 ERROR 并停止后续步骤，0/其他正数表示
+Unknown，只有 1 表示有效内容。这不改变原普通 image reader 的返回协议。
+
+Python `register_finite_dispatch(..., hints=hints)` 为两种 reader 创建独立桥和错误列表，
+持有注册时的回调对象与入口副本。随后替换/关闭原 hints 不影响注册；成功 override/close
+释放失效快照，run 的 finally 清理错误引用。快照不深复制回调捕获的可变数据。
+可信 reader 异常导致 `PipelineError`，原错误保存在 `__cause__`；失败目标仍须丢弃，
+不能把错误后的 Graph 当作已验证结果。外部持有异常/traceback 时，它可继续保留 reader。
 
 ## 调度、缓存和失败规则
 

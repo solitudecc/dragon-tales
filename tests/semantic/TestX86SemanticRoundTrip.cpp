@@ -10,6 +10,7 @@
 #endif
 
 #include <vector>
+#include <utility>
 
 using namespace dragon::test;
 
@@ -17,17 +18,32 @@ using namespace dragon::test;
 TEST_CASE("Switch bounds include every guarded Unicorn target or stay unresolved",
           "[semantic][switch][bound-proof]") {
   using namespace dragon::test;
-  std::vector<guard::Fixture> fixtures{guard::narrow(true), guard::signExtended(true),
-                                       guard::signExtended(false), guard::wrappedPrefix()};
+  std::vector<std::pair<guard::Fixture, bool>> fixtures{
+      {guard::narrow(true), false}, {guard::signExtended(true), false},
+      {guard::signExtended(false), true}, {guard::wrappedPrefix(), true}};
   for (auto rare: {6u, 17u, 31u, 127u, 255u})
-    fixtures.push_back(guard::hole(rare));
-  for (const auto &fixture: fixtures) {
+    fixtures.emplace_back(guard::hole(rare), false);
+  for (const auto &[fixture, resolves]: fixtures) {
     dragon::Configuration cfg;
     cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
     dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+    dragon::Disassembler::AnalysisHints hints;
+    // Separate trusted table object; the index proof itself is still tested
+    // against Unicorn, rather than hidden by a missing contents contract.
+    hints.readKnownMemory = [&](const dragon::Disassembler::MemoryReadSite &,
+        std::uint64_t at, std::span<std::uint8_t> out) {
+      if (at < guard::table || at - kCodeBase > fixture.bytes.size() ||
+          out.size() > fixture.bytes.size() - (at - kCodeBase)) return false;
+      std::copy_n(fixture.bytes.begin() + (at - kCodeBase), out.size(), out.begin());
+      return true;
+    };
     dragon::Graph g{dragon::Architecture::X86_64, cfg};
-    dis.disassemble(fixture.bytes, kCodeBase, g);
+    dis.disassemble(fixture.bytes, kCodeBase, g, hints);
     const auto successors = dragon::BasicBlock{&g, fixture.dispatch}.successors();
+    CHECK(successors.empty() == !resolves);
+    dragon::Graph untrusted{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(fixture.bytes, kCodeBase, untrusted);
+    CHECK(dragon::BasicBlock{&untrusted, fixture.dispatch}.successors().empty());
     for (std::uint64_t input: {0ULL, 1ULL, 2ULL, 6ULL, 17ULL, 31ULL, 127ULL,
                                255ULL, 256ULL, 257ULL, 258ULL, 259ULL, 0xffffffffULL}) {
       auto regs = defaultInitialRegs();

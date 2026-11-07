@@ -72,6 +72,9 @@ class Graph {
   [[nodiscard]] std::size_t size() const { return listing_.size(); }
   [[nodiscard]] bool empty() const { return listing_.empty(); }
 
+  /// Merging changes the proof context and retracts analysis-derived edges.
+  /// Compatible duplicate encodings union explicit evidence; incompatible
+  /// instructions retain the destination (historical first-wins policy).
   void merge(Graph other);
 
   // -- Query helpers used by BasicBlock, Function, and analysis passes --------

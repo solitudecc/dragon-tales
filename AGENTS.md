@@ -207,6 +207,83 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Table contents at the actual LOAD (2026-11-07, baseline `777712f`): see
+`docs/table-content-proof.md`. x86/A64 table publication needs the existing
+bound/shape proof AND complete current contents from admitted Guest STOREs or
+explicit trusted `AnalysisHints::readKnownMemory`. Image bytes, ordinary
+`readMemory` and section permissions are not immutable-memory certificates.
+The callback asserts exact bytes at this LOAD on ALL admitted executions/visits.
+
+Raw analysis, LoadedImage and FiniteDispatch route the same hints contract.
+Every decoded direct callee remains an independent input, even with explicit
+roots; a tail-path initializer cannot constrain arbitrary CALL entry. C++
+`finiteMemoryValues` queries fixed cells before a real same-width LOAD, with
+alias/CALL/unlifted/local-control barriers and no image/heap seed. This stage
+does not implement general initialization, heap modelling or de-flattening.
+
+Reanalysis withdraws inferred edges globally but rebuilds only the supplied
+region; other regions' old targets do not recover automatically. Explicit
+caller/decoder edges remain. Graph.merge retracts inference from both graphs,
+unions explicit evidence on compatible same-byte/control-category collisions,
+and retains first-wins for incompatible collisions. Incomplete may remove old
+inference and report changed=true. Memory proofs share per-round operation/fact
+budgets and caches; Unknown/budget failure never retries unbudgeted defaults.
+x86 expansion cap exhaustion aborts the whole tentative transaction. The trusted
+resolver can only lower the built-in 1<<20 cap; default-cap exhaustion was not
+run, and whole-block predecode makes this no hard CPU/memory limit.
+
+Python finite registration retains independent callback bridges, errors and
+entries; replacing/closing source hints is safe. Override/close releases old
+snapshots and run finally clears internal error references. C known-reader
+results: 1=fact, 0/other positive=Unknown, negative=ERROR and stop later passes.
+C callback/userdata remain borrowed for the synchronous call or registered
+executor lifetime. Active Python loader/disassembler close is rejected; hints
+may still close/change. Returned Graphs never borrow readers. Public C++ layouts
+changed: REBUILD clients with matching SDK headers/libraries. Existing opaque
+C symbols and Guest ABI remain; new hint-routing symbols require the new shim.
+
+Tested production v8 is frozen. CTest 690/690, no-Z3 558/558; component 50 cases/
+3936 assertions per build. Guard truth: 27 CFGs/20736 Unicorn runs/0 wrong sets.
+A64 region ownership and separate ARM32/A64 classifier statics are fixed; fresh
+process tests are Graph classification, not ARM32 execution. Old-library failures,
+oracle mode corrections and three OOM recoveries remain in the component report.
+
+Final native audit: 1420 normal exact matches = 1104 complete root returns and
+316 precise boundaries; 340 single-result-field/byte-memory controls detected.
+Every run compares seven Exit fields, PC/SP, modelled fields and all 64 KiB;
+zero exclusions/skips/normalizations, empty Graph unlifted reports. The separate
+220 CPU/Graph checks are not 220 native complete functions or new diagnostic inputs.
+
+Both corpora: 69 inputs/138 strategies per version. Old `777712f` has 205406 valid
+candidate checkpoints, Graph-only; new has 205018 and 1671 fresh V2 raw modules.
+No old LLVM rerun or prior-stage raw reuse. New workers: original first 60,
+lifecycle last 9, with all nine cleanup receipts. Independent forward/precision
+audits pass, not semantic or Graph compatibility. Candidates removed 388/added 0
+are not proven losses of real functions. Retained indirect sites becoming
+unresolved: 2957 (input,PC,strategy), 1524 (input,PC) over 54 inputs after folding
+strategy, with 42063 target memberships withdrawn. These are observations, not
+globally unique functions/programs. Retained instruction byte changes and direct
+branch/callee target losses are 0/0/0; source-disappeared edges are separate. Unlifted
+233134->231798 is coverage loss, not more supported instructions.
+
+Default Tigress six switch-type ELFs: C 288 matches, LLVM 0 complete/288 incomplete,
+all six original rc1 retained, CFG wrong/unlifted 0; executed-undecoded 6857 address
+observations, not global-unique addresses or errors. DEFAULT STATIC IR HAS NO
+COMPLETE RETURN COMPARISON ON THESE SIX ELFs. Historical 223b 288 complete is
+historical measurement only, not fresh old LLVM replay. Wrong=0 or smaller IR
+is not deobfuscation gain. Independent aggregate audit passes metadata; semantic
+and compatibility completion remain false. Next gap: provable initialization/
+readonly-table memory contents with entry/alias guarantees, not automatic flags.
+
+Artifacts: `~/vmc-runs/table-content-20261107/` and Mac
+`/Users/c/Desktop/deob/validation-artifacts/table-content-20261107/`; historical
+candidate/failure manifests remain distinct. Storage restore chains are in
+`storage-migration-artifact-index.json`. All 402 generated object-cache files
+were dual-archived; reuse only with matching source/toolchain pins, otherwise let
+Ninja rebuild. Current libraries/test executables/source/build graphs stay intact;
+storage operations add zero semantic tests. Only use owned
+`~/dragon-tales-overlap`; one heavy VM worker.
+
 Legacy whole-function unlifted refusal (2026-11-07, baseline `a19af98`): see
 `docs/llvm-legacy-unlifted.md`. Legacy `lift(Function,Graph)` now rejects a
 marker on any member block before LLVM/module mutation, including zero-op

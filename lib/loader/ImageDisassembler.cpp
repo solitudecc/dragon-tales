@@ -12,6 +12,11 @@
 namespace dragon::loader {
 
 Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
+  return disassembleImage(image,config,{});
+}
+
+Graph disassembleImage(const LoadedImage &image, const Configuration &config,
+                       const Disassembler::AnalysisHints &extraHints) {
   // Windows x64 code passes arguments in RCX, RDX, R8, R9, not System V's
   // RDI, RSI, ... - without this, argument recovery read PE functions with
   // the wrong registers.
@@ -27,6 +32,7 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
 
   // Known code addresses: the entry point and every function symbol.
   std::vector<std::uint64_t> seeds;
+  seeds.insert(seeds.end(),extraHints.entryPoints.begin(),extraHints.entryPoints.end());
   seeds.insert(seeds.end(), image.functionEntries().begin(), image.functionEntries().end());
   if (auto entry = image.entryPoint())
     seeds.push_back(*entry);
@@ -56,9 +62,16 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config) {
   // Analyse [start, end of s) with `entries` as its entry points.
   auto analyse = [&](const Section &s, std::uint64_t start,
                      std::vector<std::uint64_t> entries) {
-    Disassembler::AnalysisHints hints;
+    auto hints=extraHints;
     hints.entryPoints = std::move(entries);
-    hints.readMemory = readMemory;
+    // A decoded entry in another section can jump into this section. It is
+    // still an independent input for proofs even though this invocation does
+    // not decode its bytes. Do not constrain it by a local initialiser path.
+    hints.entryPoints.insert(hints.entryPoints.end(),seeds.begin(),seeds.end());
+    std::sort(hints.entryPoints.begin(),hints.entryPoints.end());
+    hints.entryPoints.erase(std::unique(hints.entryPoints.begin(),hints.entryPoints.end()),
+                           hints.entryPoints.end());
+    if (!hints.readMemory) hints.readMemory = readMemory;
     const std::span<const std::uint8_t> bytes(s.bytes);
     dis.disassemble(bytes.subspan(start - s.address), start, graph, hints);
   };

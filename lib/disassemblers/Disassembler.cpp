@@ -117,6 +117,14 @@ void dragon::Disassembler::disassemble(std::span<const std::uint8_t> bytes,
     return;
   }
 
+  // A new analysis invocation may have different entries or memory contracts.
+  // New cross-region paths can invalidate an old region's memory proof too.
+  // Withdraw analysis-derived edges globally; explicit caller and decoder
+  // edges are separate evidence and remain intact. Regions outside this
+  // invocation remain unresolved until they are analysed again.
+  for (const auto &[address, instruction] : graph.listing())
+    graph.get(address)->clearInferredBranches();
+
   switch (architecture_) {
     case Architecture::X86_32:
     case Architecture::X86_64: {

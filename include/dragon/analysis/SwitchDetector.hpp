@@ -86,6 +86,8 @@ std::optional<SwitchCandidate> detectPossibleSwitch(
         const BackwardSlicer::Predecessors *predecessors = nullptr);
 
 /// Read numCases pointer-sized entries from the jump table encoded in bytes.
+/// This is byte decoding only: it does not prove the runtime contents at a
+/// LOAD or authorise publishing these addresses as a complete CFG target set.
 ///
 /// Entries are read as little-endian integers; for a table of offsets each is
 /// turned into targetBase + (ext(entry) << entryShift).

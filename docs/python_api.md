@@ -172,6 +172,8 @@ later step needs blocks, functions or IGNIL.
 block starts and recursive traversal roots. Entries outside the supplied code
 buffer are ignored. An optional `read_memory(address, size)` callable returns
 exactly `size` bytes (a bytes-like object), or `None` for an unavailable range.
+This ordinary reader exposes initial image bytes. It cannot certify runtime
+jump-table contents, even when the section is read-only.
 
 ```python
 def read_table(address, size):
@@ -186,11 +188,39 @@ with dragon.AnalysisHints(entry_points=[0x1000, 0x1100],
 # graph remains valid after hints are closed
 ```
 
-Both `entry_points` and `read_memory` are writable properties. The hints keep
+`entry_points`, `read_memory` and the optional `read_known_memory` are writable
+properties. The hints keep
 their reader alive, and the callback is used only during analysis. Callback
 exceptions are propagated after the native call returns; incorrect byte counts
 raise `ValueError`. Access after explicitly closing hints raises
 `ReferenceError`.
+
+`read_known_memory(block, op_index, instruction_pc, address, size)` returns
+exactly `size` bytes or None. It explicitly asserts contents immediately
+before that IGNIL LOAD for all executions/visits admitted by the entry
+contract, including paths exposed by later CFG expansion. It is not a dynamic
+snapshot or an initial heap model. An unsupported entry remains unknown; no
+partial target list is published. For example, an independent certificate can
+serve reads keyed by the current LOAD identity:
+
+```python
+def certified_read(block, index, pc, address, size):
+    data = certified_reads.get((block, index, pc, address))
+    return data if data is not None and len(data) == size else None
+
+with dragon.AnalysisHints(read_known_memory=certified_read) as hints:
+    graph = dis.analyze(code, base_address=0x1000, hints=hints)
+```
+
+`certified_reads` must come from an independent proof, rather than a renamed
+image byte map. A callback may be asked for individual entries repeatedly.
+Trusted-reader exceptions stop native analysis and are re-raised with their
+original identity; bad byte counts raise ValueError. Callbacks may replace or
+close hints. Explicitly closing the active disassembler or loaded image from
+its callback raises RuntimeError, and the object remains usable afterwards.
+See [the full content contract](table-content-proof.md).
+Decoded direct callees remain independent inputs even with explicit entry
+points; tail-jump initialization does not constrain arbitrary CALL entries.
 
 `Configuration.calling_convention` is readable and writable:
 `CallingConvention.DEFAULT`, `SYSV`, or `WIN64`. Set it before constructing the
@@ -683,6 +713,9 @@ Recognizes a jump-table indirect-branch pattern from a backward-slice
 result (typically the target of an indirect jump, sliced with
 `BackwardSlicer` above) and reads the concrete targets out of the table's
 raw bytes.
+`read_table_targets()` only decodes the supplied bytes. The shape and bound
+alone do not prove the values seen by the runtime LOAD; automatic CFG recovery
+uses Guest STORE facts or the explicit trusted callback.
 
 ```python
 with dragon.BackwardSlicer() as slicer:
@@ -824,7 +857,29 @@ See [pass pipelines](pass-pipeline.md) for callbacks, cache scope, errors and li
 
 `pipeline.register_finite_dispatch(code, base_address, entry_points=entries)` copies
 code and entries; follow with `.add("finite-dispatch")` and `.run(graph)` to opt in
-to native x86 recovery. `graph.finite_values(entry_points=entries,
+to native x86 recovery. Optional `hints=hints` unions both entry lists and
+snapshots the two reader callables into independent bridges/error lists.
+Replacing or closing the original hints does not alter the registration;
+successful override/close releases the snapshot, while `clear()` only clears
+steps. The callable's captured mutable data is not deep-copied.
+Trusted-reader errors stop subsequent passes and raise PipelineError with the
+original exception as its cause. A failed target must be discarded. Finally
+clears the pipeline's error references; caller-held tracebacks can still retain
+their reader. `hints=None` keeps the original C entry point.
+
+`LoadedImage.disassemble(config, hints=hints)` forwards the same contract and
+adds caller entries to image metadata seeds. It snapshots hints synchronously,
+destroys a failed intermediate graph before re-raising callback errors, and
+does not retain readers in the returned Graph. Its default `hints=None` path
+also uses the original C symbol. These new hint-routing features require the
+updated shim; the Guest ABI is unchanged.
+Reanalysis withdraws inferred edges across the Graph but rebuilds only the
+supplied code region. Other regions' inferred targets do not recover
+automatically. Incomplete can consequently report `changed=True` and removed
+edges; reacquire views and do not interpret it as an unchanged or complete
+deobfuscation result.
+
+`graph.finite_values(entry_points=entries,
 query_register=(block, offset, width))` queries a register at block end; omit
 `query_register` to request only jump sets. `ValueSetKind` distinguishes finite,
 unknown and unreachable values. Both APIs work without Z3. See

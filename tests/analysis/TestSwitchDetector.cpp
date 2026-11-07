@@ -13,8 +13,11 @@
 
 #include <llvm/IR/Verifier.h>
 
+#include <algorithm>
 #include <cstring>
 #include <set>
+#include <span>
+#include <utility>
 #include "SwitchGuardFixtures.hpp"
 
 // Namespace aliases to disambiguate slice::Const from ignil::Const.
@@ -288,13 +291,38 @@ std::vector<std::uint8_t> layout(std::vector<std::uint8_t> code,
   return buf;
 }
 
-std::set<std::uint64_t> blockStarts(dragon::Architecture arch,
+// These fixtures explicitly assert that their separate table object has the
+// supplied contents at every admitted visit. This is a test input contract,
+// not a fact inferred from the image reader, buffer layout or section flags.
+dragon::Disassembler::AnalysisHints trustedTable(
+    const std::vector<std::uint8_t> &bytes, std::uint64_t address = kTable,
+    std::size_t length = 0) {
+  REQUIRE(address >= kBase);
+  REQUIRE(address - kBase <= bytes.size());
+  const auto offset = static_cast<std::size_t>(address - kBase);
+  if (length == 0) length = bytes.size() - offset;
+  REQUIRE(length <= bytes.size() - offset);
+  std::vector<std::uint8_t> contents(bytes.begin() + offset,
+                                     bytes.begin() + offset + length);
+  dragon::Disassembler::AnalysisHints hints;
+  hints.readKnownMemory = [address, contents = std::move(contents)](
+      const dragon::Disassembler::MemoryReadSite &, std::uint64_t at,
+      std::span<std::uint8_t> out) {
+    if (at < address || at - address > contents.size() ||
+        out.size() > contents.size() - (at - address)) return false;
+    std::copy_n(contents.begin() + (at - address), out.size(), out.begin());
+    return true;
+  };
+  return hints;
+}
+
+std::set<std::uint64_t> blockStartsWithTable(dragon::Architecture arch,
                                     const std::vector<std::uint8_t> &bytes) {
   dragon::Configuration cfg;
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
   dragon::Disassembler dis(arch, cfg);
   dragon::Graph g{arch, cfg};
-  dis.disassemble(bytes, kBase, g);
+  dis.disassemble(bytes, kBase, g, trustedTable(bytes));
   std::set<std::uint64_t> out;
   for (const auto &b: g.blocks())
     out.insert(b.startAddress());
@@ -327,7 +355,7 @@ TEST_CASE("SwitchDetector - i386 gcc dispatch: jmp [eax*4 + table]",
   putLE(code, 9, kDefault - 0x100d, 4);
   putLE(code, 16, kTable, 4);
   requireExactlyCases(
-          blockStarts(dragon::Architecture::X86_32, layout(code, 7, 4)), 7);
+          blockStartsWithTable(dragon::Architecture::X86_32, layout(code, 7, 4)), 7);
 }
 
 TEST_CASE("SwitchDetector - x86-64 gcc non-PIC dispatch: mov edi, edi ; "
@@ -341,7 +369,7 @@ TEST_CASE("SwitchDetector - x86-64 gcc non-PIC dispatch: mov edi, edi ; "
   putLE(code, 5, kDefault - 0x1009, 4);
   putLE(code, 14, kTable, 4);
   requireExactlyCases(
-          blockStarts(dragon::Architecture::X86_64, layout(code, 7, 8)), 7);
+          blockStartsWithTable(dragon::Architecture::X86_64, layout(code, 7, 8)), 7);
 }
 
 TEST_CASE("SwitchDetector - x86-64 register dispatch with a jae guard",
@@ -356,7 +384,7 @@ TEST_CASE("SwitchDetector - x86-64 register dispatch with a jae guard",
   putLE(code, 5, kDefault - 0x1009, 4);
   putLE(code, 15, kTable, 4);
   requireExactlyCases(
-          blockStarts(dragon::Architecture::X86_64, layout(code, 5, 8)), 5);
+          blockStartsWithTable(dragon::Architecture::X86_64, layout(code, 5, 8)), 5);
 }
 
 TEST_CASE("SwitchDetector - a signed guard is not a table bound",
@@ -369,7 +397,7 @@ TEST_CASE("SwitchDetector - a signed guard is not a table bound",
                                     0xff, 0x24, 0xfd, 0, 0, 0, 0};
   putLE(code, 5, kDefault - 0x1009, 4);
   putLE(code, 14, kTable, 4);
-  auto blocks = blockStarts(dragon::Architecture::X86_64, layout(code, 7, 8));
+  auto blocks = blockStartsWithTable(dragon::Architecture::X86_64, layout(code, 7, 8));
   CHECK_FALSE(blocks.count(kCase0));
 }
 
@@ -435,7 +463,7 @@ TEST_CASE("SwitchDetector - resolved cases are CFG edges of the jump",
     cfg.disassemblyStrategy = strategy;
     dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
     dragon::Graph g{dragon::Architecture::X86_64, cfg};
-    dis.disassemble(bytes, kBase, g);
+    dis.disassemble(bytes, kBase, g, trustedTable(bytes));
 
     const dragon::BasicBlock jumpBlock{&g, 0x1009};
     REQUIRE(jumpBlock.isValid());
@@ -458,11 +486,12 @@ TEST_CASE("SwitchDetector - resolved cases are CFG edges of the jump",
 }
 
 TEST_CASE("SwitchDetector - a table outside the code bytes is read through "
-          "AnalysisHints::readMemory",
+          "an explicit contents contract",
           "[switch][e2e][cfg]") {
   auto image = nonPicDispatch();
   // Hand the analysis only the code, as loader::disassembleImage does with
-  // .text; the table stays reachable through readMemory.
+  // .text. An ordinary reader can see the table but cannot certify its value
+  // at the machine LOAD. The explicit contract supplies that separate fact.
   const std::vector<std::uint8_t> code(image.begin(),
                                        image.begin() + (kTable - kBase));
   dragon::Configuration cfg;
@@ -477,9 +506,33 @@ TEST_CASE("SwitchDetector - a table outside the code bytes is read through "
     return true;
   };
   dis.disassemble(code, kBase, g, hints);
-  const dragon::BasicBlock jumpBlock{&g, 0x1009};
+  REQUIRE(g.get(0x100b));
+  CHECK(g.get(0x100b)->branches().empty());
+  hints.readKnownMemory = trustedTable(image).readKnownMemory;
+  dragon::Graph known{dragon::Architecture::X86_64, cfg};
+  dis.disassemble(code, kBase, known, hints);
+  const dragon::BasicBlock jumpBlock{&known, 0x1009};
   REQUIRE(jumpBlock.isValid());
   CHECK(jumpBlock.successors().size() == 7);
+}
+
+TEST_CASE("SwitchDetector - inline image bytes alone do not certify a table",
+          "[switch][e2e][table-contents]") {
+  const auto bytes = nonPicDispatch();
+  for (auto strategy : {dragon::DisassemblyStrategy::LINEAR_SWEEP,
+                        dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL}) {
+    dragon::Configuration cfg;
+    cfg.disassemblyStrategy = strategy;
+    dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
+    dragon::Graph unknown{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(bytes, kBase, unknown);
+    REQUIRE(unknown.get(0x100b));
+    CHECK(unknown.get(0x100b)->branches().empty());
+    dragon::Graph known{dragon::Architecture::X86_64, cfg};
+    dis.disassemble(bytes, kBase, known, trustedTable(bytes));
+    REQUIRE(known.get(0x100b));
+    CHECK(known.get(0x100b)->branches().size() == 7);
+  }
 }
 
 TEST_CASE("SwitchDetector - overlapping paths share one guard block",
@@ -505,7 +558,8 @@ TEST_CASE("SwitchDetector - overlapping paths share one guard block",
         cfg.disassemblyStrategy = strategy;
         dragon::Disassembler dis{arch, cfg};
         dragon::Graph g{arch, cfg};
-        dis.disassemble(layout(code, 3, entrySize), kBase, g);
+        const auto bytes = layout(code, 3, entrySize);
+        dis.disassemble(bytes, kBase, g, trustedTable(bytes));
         REQUIRE(g.isValidBlock(0x1009));
         const auto predecessors = dragon::BackwardSlicer::predecessors(g);
         REQUIRE(predecessors.contains(0x1012));
@@ -539,7 +593,7 @@ TEST_CASE("SwitchDetector - late overlap relifts every owner of a split suffix",
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
   dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
   dragon::Graph g{dragon::Architecture::X86_64, cfg};
-  dragon::Disassembler::AnalysisHints hints;
+  auto hints = trustedTable(bytes);
   hints.entryPoints = {kBase, 0x1100, 0x1102};
   dis.disassemble(bytes, kBase, g, hints);
   REQUIRE(g.get(0x1105));
@@ -744,7 +798,7 @@ TEST_CASE("SwitchDetector - code reachable from a case is decoded too",
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   dragon::Graph g{dragon::Architecture::X86_64, cfg};
-  dis.disassemble(bytes, kBase, g);
+  dis.disassemble(bytes, kBase, g, trustedTable(bytes));
 
   for (std::uint64_t a: {std::uint64_t{0x1104}, std::uint64_t{0x1180}}) {
     INFO("block 0x" << std::hex << a);
@@ -767,14 +821,16 @@ TEST_CASE("SwitchDetector - code reachable from a case is decoded too",
 
 namespace {
 
-std::set<std::uint64_t> jumpSuccessors(dragon::Architecture arch,
+std::set<std::uint64_t> jumpSuccessorsWithTable(dragon::Architecture arch,
                                        const std::vector<std::uint8_t> &bytes,
-                                       std::uint64_t jumpBlock) {
+                                       std::uint64_t jumpBlock,
+                                       std::uint64_t table = kTable,
+                                       std::size_t tableBytes = 0) {
   dragon::Configuration cfg;
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
   dragon::Disassembler dis(arch, cfg);
   dragon::Graph g{arch, cfg};
-  dis.disassemble(bytes, kBase, g);
+  dis.disassemble(bytes, kBase, g, trustedTable(bytes, table, tableBytes));
   const dragon::BasicBlock bb{&g, jumpBlock};
   REQUIRE(bb.isValid());
   return bb.successors();
@@ -809,7 +865,7 @@ TEST_CASE("SwitchDetector - x86-64 PIC table of 32-bit offsets",
   for (unsigned i = 7; i < 11; ++i) // decoys past the bound
     putLE(bytes, kTable - kBase + 4 * i, kCase0 + 0x10 * i + 8 - kTable, 4);
 
-  CHECK(jumpSuccessors(dragon::Architecture::X86_64, bytes, 0x1009) == cases);
+  CHECK(jumpSuccessorsWithTable(dragon::Architecture::X86_64, bytes, 0x1009) == cases);
 }
 
 TEST_CASE("SwitchDetector - AArch64 gcc table of 16-bit offsets",
@@ -843,7 +899,7 @@ TEST_CASE("SwitchDetector - AArch64 gcc table of 16-bit offsets",
   for (unsigned i = 7; i < 11; ++i)
     putLE(bytes, kTable - kBase + 2 * i, (kCase0 + 0x10 * i + 8 - kLabel) / 4,
           2);
-  CHECK(jumpSuccessors(dragon::Architecture::ARM64, bytes, 0x1008) == cases);
+  CHECK(jumpSuccessorsWithTable(dragon::Architecture::ARM64, bytes, 0x1008) == cases);
 }
 
 TEST_CASE("readTableTargets - signed, shifted offsets", "[switch][relative]") {
@@ -909,7 +965,8 @@ TEST_CASE("SwitchDetector - iteratively proves a loop invariant table base",
     cfg.disassemblyStrategy = strategy;
     dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
     dragon::Graph g{dragon::Architecture::X86_64, cfg};
-    dis.disassemble(loopDispatch(false), kBase, g);
+    const auto bytes = loopDispatch(false);
+    dis.disassemble(bytes, kBase, g, trustedTable(bytes));
     REQUIRE(g.get(0x1033));
     CHECK(g.get(0x1033)->branches() ==
           std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
@@ -928,7 +985,8 @@ TEST_CASE("SwitchDetector - rolls back a base modified by a tentative case",
     cfg.disassemblyStrategy = strategy;
     dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
     dragon::Graph g{dragon::Architecture::X86_64, cfg};
-    dis.disassemble(loopDispatch(true), kBase, g);
+    const auto bytes = loopDispatch(true);
+    dis.disassemble(bytes, kBase, g, trustedTable(bytes));
     REQUIRE(g.get(0x1033));
     CHECK(g.get(0x1033)->branches().empty());
     CHECK(g.get(0x1033)->edges() == 1); // original unresolved jump metadata
@@ -966,7 +1024,7 @@ TEST_CASE("SwitchDetector - rechecks earlier tables after dependent resolution",
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   dragon::Graph g{dragon::Architecture::X86_64, cfg};
-  dis.disassemble(bytes, kBase, g);
+  dis.disassemble(bytes, kBase, g, trustedTable(bytes));
   REQUIRE(g.get(0x1033));
   CHECK(g.get(0x1033)->branches().empty());
   CHECK(g.get(0x1140) == nullptr);
@@ -988,7 +1046,7 @@ TEST_CASE("SwitchDetector - rolls back a case that bypasses the index guard",
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::RECURSIVE_TRAVERSAL;
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   dragon::Graph g{dragon::Architecture::X86_64, cfg};
-  dis.disassemble(bytes, kBase, g);
+  dis.disassemble(bytes, kBase, g, trustedTable(bytes));
   REQUIRE(g.get(0x100b));
   CHECK(g.get(0x100b)->branches().empty());
   CHECK(g.get(kCase0) == nullptr);
@@ -1006,7 +1064,7 @@ TEST_CASE("SwitchDetector - explicit entries exclude speculative function roots"
   cfg.disassemblyStrategy = dragon::DisassemblyStrategy::LINEAR_SWEEP;
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   dragon::Graph g{dragon::Architecture::X86_64, cfg};
-  dragon::Disassembler::AnalysisHints hints;
+  auto hints = trustedTable(bytes);
   hints.entryPoints = {kBase};
   dis.disassemble(bytes, kBase, g, hints);
   REQUIRE(g.get(0x1033));
@@ -1059,7 +1117,7 @@ TEST_CASE("SwitchDetector - 32-bit index writes remain bounded across joins",
       cfg.disassemblyStrategy = strategy;
       dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
       dragon::Graph g{dragon::Architecture::X86_64, cfg};
-      dis.disassemble(bytes, kBase, g);
+      dis.disassemble(bytes, kBase, g, trustedTable(bytes));
       REQUIRE(g.get(0x1051));
       if (clobber)
         CHECK(g.get(0x1051)->branches().empty());
@@ -1078,7 +1136,7 @@ TEST_CASE("SwitchDetector - a reloaded index after a write is not the guarded va
       0xff, 0x24, 0xc5, 0, 0, 0, 0};
   putLE(code, 7, kDefault - 0x100b, 4);
   putLE(code, 22, kTable, 4);
-  CHECK(jumpSuccessors(dragon::Architecture::X86_64,
+  CHECK(jumpSuccessorsWithTable(dragon::Architecture::X86_64,
                         layout(code, 3, 8), 0x100b).empty());
 }
 
@@ -1093,7 +1151,7 @@ TEST_CASE("SwitchDetector - wide signed guards cannot bound a truncated index",
       cfg.disassemblyStrategy = strategy;
       dragon::Disassembler dis{dragon::Architecture::X86_64, cfg};
       dragon::Graph g{dragon::Architecture::X86_64, cfg};
-      dis.disassemble(fixture.bytes, kBase, g);
+      dis.disassemble(fixture.bytes, kBase, g, trustedTable(fixture.bytes));
       const dragon::BasicBlock block{&g, fixture.dispatch};
       REQUIRE(block.isValid());
       if (signedGuard)
@@ -1109,7 +1167,7 @@ TEST_CASE("SwitchDetector - isolated accepted indices cannot hide beyond probes"
   for (std::uint32_t rare: {6u, 17u, 31u, 127u, 255u, 0x12345678u}) {
     INFO("rare " << rare);
     const auto fixture = dragon::test::guard::hole(rare);
-    CHECK(jumpSuccessors(dragon::Architecture::X86_64,
+    CHECK(jumpSuccessorsWithTable(dragon::Architecture::X86_64,
                           fixture.bytes, fixture.dispatch).empty());
   }
 }
@@ -1117,7 +1175,7 @@ TEST_CASE("SwitchDetector - isolated accepted indices cannot hide beyond probes"
 TEST_CASE("SwitchDetector - a vacuous guard cannot bound a masked index",
           "[switch][e2e][bound-proof]") {
   const auto fixture = dragon::test::guard::masked();
-  CHECK(jumpSuccessors(dragon::Architecture::X86_64,
+  CHECK(jumpSuccessorsWithTable(dragon::Architecture::X86_64,
                         fixture.bytes, fixture.dispatch).empty());
 }
 
@@ -1125,7 +1183,7 @@ TEST_CASE("SwitchDetector - sign extended indices need a guard excluding negativ
           "[switch][e2e][bound-proof]") {
   for (bool signedGuard: {false, true}) {
     const auto fixture = dragon::test::guard::signExtended(signedGuard);
-    const auto targets = jumpSuccessors(dragon::Architecture::X86_64,
+    const auto targets = jumpSuccessorsWithTable(dragon::Architecture::X86_64,
                                          fixture.bytes, fixture.dispatch);
     if (signedGuard)
       CHECK(targets.empty());
@@ -1137,7 +1195,7 @@ TEST_CASE("SwitchDetector - sign extended indices need a guard excluding negativ
 TEST_CASE("SwitchDetector - safe wrapped preimages preserve a narrow bound",
           "[switch][e2e][bound-proof]") {
   const auto fixture = dragon::test::guard::wrappedPrefix();
-  CHECK(jumpSuccessors(dragon::Architecture::X86_64, fixture.bytes, fixture.dispatch) ==
+  CHECK(jumpSuccessorsWithTable(dragon::Architecture::X86_64, fixture.bytes, fixture.dispatch) ==
         std::set<std::uint64_t>{0x1100, 0x1110, 0x1120});
 }
 
@@ -1180,8 +1238,8 @@ TEST_CASE("SwitchDetector - index re-read after a store to another field",
     return layout(code, 7, 4);
   };
   requireExactlyCases(
-          blockStarts(dragon::Architecture::X86_32, build(0x4f)), 7);
-  auto blocks = blockStarts(dragon::Architecture::X86_32, build(0x4d));
+          blockStartsWithTable(dragon::Architecture::X86_32, build(0x4f)), 7);
+  auto blocks = blockStartsWithTable(dragon::Architecture::X86_32, build(0x4d));
   CHECK_FALSE(blocks.count(kCase0));
 }
 
@@ -1230,7 +1288,8 @@ TEST_CASE("SwitchDetector - a guarded remainder index is bounded",
     cfg.disassemblyStrategy = strategy;
     dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
     dragon::Graph g{dragon::Architecture::X86_64, cfg};
-    dis.disassemble(remainderDispatch(5), kBase, g);
+    const auto bytes = remainderDispatch(5);
+    dis.disassemble(bytes, kBase, g, trustedTable(bytes, 0x1100, 9 * 8));
     REQUIRE(g.get(kBase + 0x2a));
     CHECK(g.get(kBase + 0x2a)->branches() == cases);
   }
@@ -1240,7 +1299,8 @@ TEST_CASE("SwitchDetector - a guarded remainder index is bounded",
 // nothing about the table's length and must not be accepted.
 TEST_CASE("SwitchDetector - a guard implied by the remainder is not a bound",
           "[switch][e2e][bound-proof]") {
-  CHECK(jumpSuccessors(dragon::Architecture::X86_64, remainderDispatch(8), kBase + 0x2a).empty());
+  CHECK(jumpSuccessorsWithTable(dragon::Architecture::X86_64, remainderDispatch(8),
+                                kBase + 0x2a, 0x1100, 9 * 8).empty());
 }
 #endif
 
@@ -1272,7 +1332,7 @@ TEST_CASE("SwitchDetector - a flattening dispatcher with a register state",
     cfg.disassemblyStrategy = strategy;
     dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
     dragon::Graph g{dragon::Architecture::X86_64, cfg};
-    dis.disassemble(bytes, kBase, g);
+    dis.disassemble(bytes, kBase, g, trustedTable(bytes, 0x1100, 3 * 8));
     REQUIRE(g.get(kBase + 0x16));
     CHECK(g.get(kBase + 0x16)->branches() == cases);
   }

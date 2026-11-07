@@ -580,24 +580,37 @@ class Configuration:
 # -- Analysis hints ------------------------------------------------------------
 
 class AnalysisHints(_View):
-    """Entry points and an optional read_memory(address, size) callback.
+    """Entry points, an image reader, and optional trusted LOAD contents.
 
-    The reader returns exactly size bytes, or None for an unmapped range.
-    It is kept alive until replaced or the hints are closed. Analysis uses
-    hints synchronously; returned graphs do not borrow them. Reader exceptions
-    are re-raised by analyze(), after the native call returns safely.
+    read_memory(address, size) reads initial image bytes. It does not prove
+    that a machine LOAD sees those bytes and cannot supply jump-table targets.
+    read_known_memory(block, op_index, instruction_pc, address, size) returns
+    exact contents immediately before that IGNIL LOAD. It is a trusted
+    assertion for every execution/visit admitted by the entry contract,
+    including paths exposed by later CFG expansion, not an image snapshot.
+    Neither section permissions nor read_memory imply this assertion.
+
+    Both callbacks return exactly size bytes, or None when unavailable. They
+    stay alive until replaced or closed. Analysis is synchronous; graphs do
+    not borrow hints. Callback exceptions are re-raised by analyze() after
+    the native call returns safely.
     """
 
-    def __init__(self, entry_points=(), read_memory=None):
+    def __init__(self, entry_points=(), read_memory=None, read_known_memory=None):
         self._bind(lib.dragon_analysis_hints_create(), None)
         self._reader = None
         self._callback = None
+        self._known_reader = None
+        self._known_callback = None
         self._errors = []
         if self._raw == ffi.NULL:
             self._raw = None
             raise MemoryError('failed to create analysis hints')
         self.entry_points = entry_points
         self.read_memory = read_memory
+        # Keep default construction usable with an older native library.
+        if read_known_memory is not None:
+            self.read_known_memory = read_known_memory
 
     def __del__(self):
         if self._raw:
@@ -605,6 +618,8 @@ class AnalysisHints(_View):
         self._raw = None
         self._callback = None
         self._reader = None
+        self._known_callback = None
+        self._known_reader = None
 
     def __enter__(self):
         self._ptr
@@ -612,6 +627,11 @@ class AnalysisHints(_View):
 
     def __exit__(self, *_):
         self.__del__()
+
+    def _snapshot(self):
+        """Own independent callback bridges/errors for a native registration."""
+        self._ptr
+        return AnalysisHints(self.entry_points, self._reader, self._known_reader)
 
     @property
     def entry_points(self):
@@ -668,6 +688,42 @@ class AnalysisHints(_View):
         self._reader, self._callback = reader, callback
         self._errors.clear()
 
+    @property
+    def read_known_memory(self):
+        self._ptr
+        return self._known_reader
+
+    @read_known_memory.setter
+    def read_known_memory(self, reader):
+        ptr = self._ptr
+        if reader is not None and not callable(reader):
+            raise TypeError('read_known_memory must be callable or None')
+        callback = ffi.NULL
+        if reader is not None:
+            errors = self._errors
+
+            @ffi.callback('int(uint64_t, size_t, uint64_t, uint64_t, uint8_t *, size_t, void *)', error=-1)
+            def callback(block, index, instruction_pc, address, out, size, _):
+                if errors:
+                    return -1
+                try:
+                    data = reader(block, index, instruction_pc, address, size)
+                    if data is None:
+                        return 0
+                    data = memoryview(data).tobytes()
+                    if len(data) != size:
+                        raise ValueError('read_known_memory must return exactly size bytes or None')
+                    ffi.memmove(out, data, size)
+                    return 1
+                except BaseException as error:
+                    errors.append(error)
+                    return -1
+
+        if not lib.dragon_analysis_hints_set_known_memory_reader(ptr, callback, ffi.NULL):
+            raise RuntimeError('failed to set known memory reader')
+        self._known_reader, self._known_callback = reader, callback
+        self._errors.clear()
+
 
 # -- Disassembler --------------------------------------------------------------
 
@@ -675,6 +731,7 @@ class Disassembler:
     """Disassembles raw bytes into a Graph given an architecture and configuration."""
 
     def __init__(self, arch=Architecture.X86_64, config=None):
+        self._analysis_depth = 0
         if config is None:
             config = Configuration()
         self._config = config
@@ -683,6 +740,8 @@ class Disassembler:
             raise RuntimeError('failed to create disassembler')
 
     def __del__(self):
+        if getattr(self, '_analysis_depth', 0):
+            raise RuntimeError('cannot close a Disassembler during analysis')
         if self._ptr:
             lib.dragon_disasm_destroy(self._ptr)
             self._ptr = None
@@ -707,23 +766,33 @@ class Disassembler:
 
     def analyze(self, bytes_data, base_address=0x0, hints=None, *, graph_pipeline=None):
         """Disassemble and run architecture-specific analysis (block and function
-        discovery). Returns a fully populated Graph. Raises RuntimeError on failure."""
+        discovery). Returns a fully populated Graph. Raises RuntimeError on failure.
+        Closing this Disassembler from an active analysis callback is rejected.
+        """
         if graph_pipeline is not None and not isinstance(graph_pipeline, PassPipeline):
             raise TypeError('graph_pipeline must be a PassPipeline or None')
         buf = ffi.from_buffer(bytes_data)
         if self._ptr is None:
             raise ReferenceError('Disassembler has been closed')
         if hints is None:
-            ptr = lib.dragon_disasm_analyze(self._ptr, buf, len(bytes_data), base_address)
+            self._analysis_depth += 1
+            try:
+                ptr = lib.dragon_disasm_analyze(self._ptr, buf, len(bytes_data), base_address)
+            finally:
+                self._analysis_depth -= 1
         else:
             if not isinstance(hints, AnalysisHints):
                 raise TypeError('hints must be AnalysisHints or None')
             hints_ptr = hints._ptr
-            callback_ref = hints._callback  # keep cffi trampoline alive during native call
+            callback_ref = (hints._callback, hints._known_callback)  # keep both trampolines alive
             hints._errors.clear()
             error = ffi.new('char[1024]')
-            ptr = lib.dragon_disasm_analyze_with_hints(
-                self._ptr, buf, len(bytes_data), base_address, hints_ptr, error, 1024)
+            self._analysis_depth += 1
+            try:
+                ptr = lib.dragon_disasm_analyze_with_hints(
+                    self._ptr, buf, len(bytes_data), base_address, hints_ptr, error, 1024)
+            finally:
+                self._analysis_depth -= 1
             if hints._errors:
                 if ptr != ffi.NULL:
                     lib.dragon_graph_destroy(ptr)
@@ -2663,6 +2732,7 @@ class LoadedImage:
 
     def __init__(self, ptr):
         self._ptr = ptr
+        self._analysis_depth = 0
 
     @classmethod
     def load_file(cls, path):
@@ -2683,6 +2753,8 @@ class LoadedImage:
         return cls(ptr)
 
     def __del__(self):
+        if getattr(self, '_analysis_depth', 0):
+            raise RuntimeError('cannot close a LoadedImage during analysis')
         if self._ptr:
             lib.dragon_loader_destroy(self._ptr)
             self._ptr = None
@@ -2765,13 +2837,44 @@ class LoadedImage:
             return None
         return ffi.buffer(buf, n)[:]
 
-    def disassemble(self, config=None, *, graph_pipeline=None):
+    def disassemble(self, config=None, *, graph_pipeline=None, hints=None):
         """Disassemble every executable section into a populated Graph built
-        for the image's detected architecture."""
+        for the image's detected architecture. Optional hints add entry seeds
+        to the image metadata and supply explicit trusted LOAD contents.
+        Readers are synchronous and their exceptions are re-raised safely.
+        Closing this image from an active analysis callback is rejected.
+        """
         if graph_pipeline is not None and not isinstance(graph_pipeline, PassPipeline):
             raise TypeError('graph_pipeline must be a PassPipeline or None')
-        ptr = lib.dragon_loader_disassemble(
-            self._ptr, config._ptr if config is not None else ffi.NULL)
+        if not self._ptr:
+            raise ReferenceError('LoadedImage has been closed')
+        config_ptr = config._ptr if config is not None else ffi.NULL
+        if hints is None:
+            self._analysis_depth += 1
+            try:
+                ptr = lib.dragon_loader_disassemble(self._ptr, config_ptr)
+            finally:
+                self._analysis_depth -= 1
+        else:
+            if not isinstance(hints, AnalysisHints):
+                raise TypeError('hints must be AnalysisHints or None')
+            hints_ptr = hints._ptr
+            callback_refs = (hints._callback, hints._known_callback)
+            errors = hints._errors
+            errors.clear()
+            self._analysis_depth += 1
+            try:
+                ptr = lib.dragon_loader_disassemble_with_hints(self._ptr, config_ptr, hints_ptr)
+            finally:
+                self._analysis_depth -= 1
+            if errors:
+                if ptr != ffi.NULL:
+                    lib.dragon_graph_destroy(ptr)
+                failure = errors[0]
+                errors.clear()
+                raise failure
+        if ptr == ffi.NULL:
+            raise RuntimeError('image analysis failed')
         graph = Graph(ptr)
         if graph_pipeline is not None:
             try:
@@ -2837,6 +2940,7 @@ class PassPipeline:
             self._ptr = None
             raise RuntimeError('failed to create pass pipeline')
         self._callbacks = {}
+        self._hint_snapshots = {}
         self._running = False
         self._context = None
         self._callback_exception = None
@@ -2868,6 +2972,10 @@ class PassPipeline:
             lib.dragon_pass_pipeline_destroy(self._ptr)
             self._ptr = None
         self._callbacks = {}
+        for snapshot in getattr(self, '_hint_snapshots', {}).values():
+            snapshot.__exit__()
+        self._hint_snapshots = {}
+        self._callback_exception = None
 
     def __del__(self):
         if not getattr(self, '_running', False):
@@ -2969,18 +3077,26 @@ class PassPipeline:
         if not ok:
             raise ValueError(self._error())
         self._callbacks[name] = (bridge, buffers)
+        prior = self._hint_snapshots.pop(name, None)
+        if prior is not None:
+            prior.__exit__()
         return self
 
     def register(self, name, callback, *, stage=PassStage.LLVM, read_only=False, requires=()):
         return self._install(name, stage, callback, read_only=read_only, requires=requires)
 
     def register_finite_dispatch(self, code, base_address=0, *,
-                                 entry_points=(), name='finite-dispatch'):
+                                 entry_points=(), name='finite-dispatch', hints=None):
         """Register native x86 recovery with owned code/entries; then add(name).
 
         Options: max_values, max_blocks, max_operations, max_facts, max_rounds,
         prove_leaf_calls (0 or 1; default 0).
         Default discovery remains unchanged until this Graph pass is run.
+        Optional hints copy entry points and snapshot the two reader callables
+        at registration. The pipeline retains independent callback bridges and
+        errors until replacement/close; replacing or closing the source hints
+        does not change the registered executor. Trusted-reader errors stop the
+        native run and raise PipelineError with the original exception as its cause.
         """
         self._check()
         entries=tuple(entry_points)
@@ -2991,10 +3107,26 @@ class PassPipeline:
         data=bytes(code)
         if not data:
             raise ValueError('finite dispatch needs nonempty code')
-        if not lib.dragon_pass_pipeline_register_finite_dispatch(self._ptr,name.encode(),
-                ffi.from_buffer(data),len(data),base_address,
-                ffi.new('uint64_t[]',entries) if entries else ffi.NULL,len(entries)):
-            raise ValueError(self._error())
+        arguments = (self._ptr, name.encode(), ffi.from_buffer(data), len(data), base_address,
+                     ffi.new('uint64_t[]', entries) if entries else ffi.NULL, len(entries))
+        snapshot = None
+        try:
+            if hints is None:
+                ok = lib.dragon_pass_pipeline_register_finite_dispatch(*arguments)
+            else:
+                if not isinstance(hints, AnalysisHints):
+                    raise TypeError('hints must be AnalysisHints or None')
+                snapshot = hints._snapshot()
+                ok = lib.dragon_pass_pipeline_register_finite_dispatch_with_hints(
+                    *arguments, snapshot._ptr)
+            if not ok:
+                raise ValueError(self._error())
+        except BaseException:
+            if snapshot is not None:
+                snapshot.__exit__()
+            raise
+        if snapshot is not None:
+            self._hint_snapshots[name] = snapshot
         return self
 
     def run(self, target, *, max_iterations=1, max_pass_runs=64, verify=True):
@@ -3012,6 +3144,9 @@ class PassPipeline:
             raise RuntimeError('target is already running a pass pipeline')
         self._context = PassContext(target)
         self._callback_exception = None
+        snapshots = tuple(self._hint_snapshots.values())
+        for snapshot in snapshots:
+            snapshot._errors.clear()
         try:
             self._running = True
             target._pass_active = True
@@ -3020,13 +3155,30 @@ class PassPipeline:
                 raw = lib.dragon_pass_pipeline_run_graph(self._ptr, target._ptr, max_iterations, max_pass_runs)
             else:
                 raw = lib.dragon_pass_pipeline_run_llvm(self._ptr, target._ptr, max_iterations, max_pass_runs, bool(verify))
+            reader_failure = next((snapshot._errors[0] for snapshot in snapshots if snapshot._errors), None)
+            if reader_failure is not None:
+                self._callback_exception = reader_failure
             if raw == ffi.NULL:
+                if reader_failure is not None:
+                    raise PipelineError({'ok': False, 'runs': [],
+                        'error': 'analysis hints callback failed'}) from reader_failure
                 raise RuntimeError(self._error())
             report = json.loads(self._text(raw))
+            if reader_failure is not None and report['ok']:
+                # The native error protocol must stop the pass, never turn an
+                # exception into an ordinary unknown content result.
+                raise PipelineError({**report, 'ok': False,
+                    'error': 'analysis hints callback error was not rejected by native code',
+                    'native_ok': True}) from reader_failure
             if not report['ok']:
                 raise PipelineError(report) from self._callback_exception
             return report
         finally:
+            for snapshot in snapshots:
+                snapshot._errors.clear()
+            # PipelineError already owns its explicit cause. The pipeline must
+            # not retain that traceback (and its old callback snapshot).
+            self._callback_exception = None
             target._pass_active = False
             self._context.analyses.clear()
             self._context = None

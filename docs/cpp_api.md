@@ -33,6 +33,11 @@ Link against `libdragon`. The x86/AArch64 register-constant headers
 below. The Z3 and symbolic-execution surface requires a build with
 `-DDRAGON_USE_Z3=ON`.
 
+The [table-content update](table-content-proof.md) changes public C++ object
+layouts, including `Instruction`, `AnalysisHints` and `FiniteDispatchPass`.
+Rebuild clients with headers and libraries from the same SDK. Existing opaque
+C entry points and the Guest ABI remain available.
+
 ---
 
 ## Configuration
@@ -343,7 +348,8 @@ jumps resolve. The entry point and every function-typed symbol are passed to
 the analysis as entry points (`Disassembler::AnalysisHints`): each is a
 function and block start, and a root of a recursive traversal. A call into
 another section (a `.plt` stub) is analysed as an entry point of that
-section, and a jump table in a data section is read from the image.
+section. Image bytes can be read from data sections, but their contents at a
+runtime LOAD require a separate proof. Read-only section flags do not provide it.
 
 The same hints are available on raw bytes:
 
@@ -353,11 +359,28 @@ hints.entryPoints = {0x401000, 0x401230};          // known code addresses
 hints.readMemory = [&](uint64_t addr, std::span<uint8_t> out) {
     return readFromMyImage(addr, out);             // false if unmapped
 };
+// Optional independent proof, not a copy of the initial image reader:
+hints.readKnownMemory = [&](const dragon::Disassembler::MemoryReadSite &site,
+                           uint64_t addr, std::span<uint8_t> out) {
+    return certifiedContentsAt(site, addr, out);
+};
 dis.disassemble(textBytes, 0x401000, graph, hints);
 ```
 
+`MemoryReadSite` contains `blockAddress`, `opIndex` and `instructionAddress`.
+Returning true asserts all requested bytes immediately before this exact
+IGNIL LOAD on every admitted execution/visit, including later-discovered
+incoming paths. Returning false leaves the contents unknown. The callback is
+not an initial-memory seed. The three-argument
+`loader::disassembleImage(image, config, hints)` overload forwards this
+contract and unions caller entries with metadata seeds. Hints are used
+synchronously; Graph does not borrow them. See [proof scope](table-content-proof.md).
+Decoded direct callees still admit independent arbitrary inputs even when the
+caller supplies explicit roots. A STORE on a tail-jump path is not an initializer
+for arbitrary CALL entries to the same callee.
+
 Resolved indirect jumps are CFG edges: the targets of a recognised jump
-table become branches of the jump instruction, so they are the jump block's
+table with a proved bound and complete contents become branches of the jump instruction, so they are the jump block's
 successors, members of its function, and an LLVM `switch` in lifted IR. An
 unresolved indirect jump has no successors. Under `LINEAR_SWEEP` only
 recognised tables whose targets are already-decoded instructions are used.
@@ -903,6 +926,31 @@ x86 candidate growth and final all-path revalidation on a cloned Graph.
 The default disassembler does not enable this recovery. See
 [finite sets and dispatch](finite-dispatch.md) for entries, budgets, memory barriers and examples.
 
+`finiteMemoryValues(graph, entries, queries, limits)` uses
+`FiniteMemoryQuery{block, beforeOpIndex, address, width}` to query fixed Guest
+cells immediately before a real LOAD, rather than at block end. Width must
+match its destination; invalid queries yield Unknown. Only admitted Guest
+STORE facts supply these values. No image contents are seeded.
+
+`FiniteDispatchPass{code, base, entries, hints}` copies hints and unions both
+entry lists. Its own resolver supplies bounded memory queries, sharing the
+round's operation budget and a fact-limited cache; budget/Unknown never causes
+an unbudgeted fallback. The copied `std::function` can still capture borrowed
+resources, whose lifetime remains the caller's responsibility.
+
+Analysis edges are retractable `Instruction::inferredBranches()`; caller or
+decoder `addBranch()` evidence is explicit. `Graph::merge()` retracts inferred
+edges from both fragments. Compatible same-byte/control-category collisions
+union explicit branches/callees and structure flags; incompatible collisions
+retain first-wins behavior. Reanalyse the merged graph under its full entry
+and content contract before relying on inferred dispatch edges.
+Any analysis invocation on an existing Graph withdraws inferred edges globally,
+then rebuilds only its supplied code region. Other regions retain decoded nodes
+and explicit evidence, but their old inferred targets are not automatically
+restored. This also applies to image-region analysis and FiniteDispatch; a local
+reanalysis is not a whole-image proof. Incomplete may therefore have
+`changed=true`/`removed_edges`; do not assume it leaves the target unchanged.
+
 ### Static analysis
 
 `setExecutionMode(ExecutionMode::StaticAnalysis)` emits four-pointer
@@ -1272,6 +1320,9 @@ both operand orderings before failing:
 
 `SwitchDetector.hpp` identifies jump-table indirect branches from a
 backward-sliced expression and reads the table entries from the binary image.
+Shape/bound recognition and raw-byte decoding do not certify runtime memory.
+Automatic target publication additionally requires a Guest STORE proof or
+`AnalysisHints::readKnownMemory`; `readMemory` alone is insufficient.
 
 Recognition is two-phase:
 
@@ -1325,7 +1376,7 @@ if (sw) {
               << "  cases=" << sw->numCases << "\n";
 
     if (sw->numCases > 0) {
-        // Read the actual target addresses from the binary image
+        // Decode this image snapshot; this alone is not a runtime proof.
         auto targets = dragon::slice::readTableTargets(*sw, bytes, baseAddr);
         for (uint64_t t : targets)
             std::cout << "  case -> 0x" << std::hex << t << "\n";

@@ -97,12 +97,15 @@ class X86Analysis {
 
   /// Disassemble instructions at target and integrate them into the graph,
   /// updating blockStarts and fnStarts with any newly discovered addresses.
-  /// Returns true if new instructions were added.
+  /// Returns true if new instructions were added. A decoding-budget failure
+  /// sets complete=false and publishes none of this expansion's instructions.
   bool integrateNewBlock(std::uint64_t target,
                          std::span<const std::uint8_t> bytes,
                          std::uint64_t baseAddr, Graph &graph,
                          std::unordered_set<std::uint64_t> &blockStarts,
-                         std::unordered_set<std::uint64_t> &fnStarts) const;
+                         std::unordered_set<std::uint64_t> &fnStarts,
+                         bool &complete,
+                         std::size_t maxNewInstructions = 1u << 20) const;
 
   /// Split the common suffix when independently decoded instruction paths
   /// converge at the same exact next address.

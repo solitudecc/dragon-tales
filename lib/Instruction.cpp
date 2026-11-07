@@ -44,6 +44,7 @@ dragon::Instruction::Instruction(const Instruction &other) :
     operands_(other.operands_), disassembly_(other.disassembly_),
     pattern_(other.pattern_), bytes_(other.bytes_),
     chromosomeMask_(other.chromosomeMask_), branches_(other.branches_),
+    inferredBranches_(other.inferredBranches_),
     callees_(other.callees_), edges_(other.edges_),
     isBlockStart_(other.isBlockStart_),
     isFunctionStart_(other.isFunctionStart_), isPrologue_(other.isPrologue_),
@@ -65,6 +66,7 @@ dragon::Instruction &dragon::Instruction::operator=(const Instruction &other) {
   bytes_ = other.bytes_;
   chromosomeMask_ = other.chromosomeMask_;
   branches_ = other.branches_;
+  inferredBranches_ = other.inferredBranches_;
   callees_ = other.callees_;
   edges_ = other.edges_;
   isBlockStart_ = other.isBlockStart_;

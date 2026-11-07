@@ -103,12 +103,14 @@ class ARMAnalysis {
                          std::span<const std::uint8_t> bytes,
                          std::uint64_t baseAddr, Graph &graph,
                          std::unordered_set<std::uint64_t> &blockStarts,
-                         std::unordered_set<std::uint64_t> &fnStarts) const;
+                         std::unordered_set<std::uint64_t> &fnStarts,
+                         bool &complete) const;
 
   /// Scan all lifted IGNIL blocks for unresolved indirect JMPs, resolve them
   /// via backward slicing (and optionally Z3), and integrate new targets.
-  /// Returns true if at least one new block start was discovered.
-  bool resolveIndirectJumps(Graph &graph, std::span<const std::uint8_t> bytes,
+  /// Expand on a clone and publish only a fully revalidated fixed point.
+  /// A rejected candidate and all dependent speculative decoding are discarded.
+  void resolveIndirectJumps(Graph &graph, std::span<const std::uint8_t> bytes,
                             std::uint64_t baseAddr,
                             const Disassembler::AnalysisHints &hints,
                             std::unordered_set<std::uint64_t> &blockStarts,

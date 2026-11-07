@@ -36,6 +36,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -205,6 +206,24 @@ int dragon_analysis_hints_set_memory_reader(dragon_analysis_hints_t *h,
         return reader(address, out.data(), out.size(), user) == 1;
       };
     else h->hints.readMemory = {};
+    return 1;
+  } catch (...) { return 0; }
+}
+
+int dragon_analysis_hints_set_known_memory_reader(dragon_analysis_hints_t *h,
+    dragon_known_memory_reader_t reader, void *user) {
+  if (!h) return 0;
+  try {
+    if (reader)
+      h->hints.readKnownMemory = [reader, user](
+          const dragon::Disassembler::MemoryReadSite &site,
+          uint64_t address, std::span<uint8_t> out) {
+        const int result = reader(site.blockAddress, site.opIndex, site.instructionAddress,
+                                  address, out.data(), out.size(), user);
+        if (result < 0) throw std::runtime_error("known memory reader failed");
+        return result == 1;
+      };
+    else h->hints.readKnownMemory = {};
     return 1;
   } catch (...) { return 0; }
 }
@@ -591,11 +610,19 @@ size_t dragon_loader_read_virtual(const dragon_loader_t *l, uint64_t addr,
 
 dragon_graph_t *dragon_loader_disassemble(const dragon_loader_t *l,
                                           const dragon_config_t *config) {
-  dragon::Configuration cfg =
-      config ? config->config : dragon::Configuration{};
-  auto *g = new dragon::Graph(
-      dragon::loader::disassembleImage(*as_loader(l), cfg));
-  return reinterpret_cast<dragon_graph_t *>(g);
+  return dragon_loader_disassemble_with_hints(l, config, nullptr);
+}
+
+dragon_graph_t *dragon_loader_disassemble_with_hints(const dragon_loader_t *l,
+    const dragon_config_t *config, const dragon_analysis_hints_t *hints) {
+  if (!l) return nullptr;
+  try {
+    const auto cfg = config ? config->config : dragon::Configuration{};
+    const auto snapshot = hints ? hints->hints : dragon::Disassembler::AnalysisHints{};
+    auto graph = std::make_unique<dragon::Graph>(
+        dragon::loader::disassembleImage(*as_loader(l), cfg, snapshot));
+    return reinterpret_cast<dragon_graph_t *>(graph.release());
+  } catch (...) { return nullptr; }
 }
 
 // -- Instruction
@@ -1357,13 +1384,21 @@ int dragon_pass_pipeline_register(dragon_pass_pipeline_t *p,const char *name,
 }
 int dragon_pass_pipeline_register_finite_dispatch(dragon_pass_pipeline_t *p,const char *name,
     const uint8_t *code,size_t length,uint64_t base,const uint64_t *entries,size_t count) {
+  return dragon_pass_pipeline_register_finite_dispatch_with_hints(
+      p,name,code,length,base,entries,count,nullptr);
+}
+int dragon_pass_pipeline_register_finite_dispatch_with_hints(dragon_pass_pipeline_t *p,const char *name,
+    const uint8_t *code,size_t length,uint64_t base,const uint64_t *entries,size_t count,
+    const dragon_analysis_hints_t *hints) {
   if(!p || !name || !code || !length || (count && !entries))return 0;
   try {
     p->error.clear();
+    const auto snapshot = hints ? hints->hints : dragon::Disassembler::AnalysisHints{};
     return p->pipeline.registerGraph(name,
-      dragon::passes::FiniteDispatchPass{{code,length},base,{entries,count}},
+      dragon::passes::FiniteDispatchPass{{code,length},base,{entries,count},snapshot},
       false,{},dragon::passes::FiniteDispatchPass::validator());
   } catch(const std::exception &e) {p->error=e.what();return 0;}
+  catch(...) {p->error="finite dispatch registration failed";return 0;}
 }
 int dragon_pass_pipeline_override(dragon_pass_pipeline_t *p,const char *name,
     dragon_pass_stage_t stage,dragon_pass_callback_t callback,void *userdata) {

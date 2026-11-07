@@ -70,10 +70,20 @@ def main():
         upper = (0,) if bits == 8 else (0, 0x100, 1 << (bits-1), ((1 << bits)-1) ^ 255)
         for mode in modes:
             image, dispatch = fixture(bits, mode)
-            graph = disassembler.analyze(image, BASE)
+            # An explicit fixture premise: this separate table object has the
+            # stated contents at every admitted visit to its LOAD. Merely
+            # placing the bytes in the image does not certify that premise.
+            def known_table(block, index, instruction_pc, address, size):
+                if TABLE <= address <= TABLE + 256 * 8 and size <= TABLE + 256 * 8 - address:
+                    return image[address-BASE:address-BASE+size]
+                return None
+            with dragon.AnalysisHints(read_known_memory=known_table) as hints:
+                graph = disassembler.analyze(image, BASE, hints)
             targets = set(graph.get_block(dispatch).successors())
             positive = mode in ("unsigned_prefix", "unsigned_large_prefix", "redundant_prefix")
             assert bool(targets) == positive, (bits, mode, "resolution", len(targets))
+            with disassembler.analyze(image, BASE) as untrusted:
+                assert not untrusted.get_block(dispatch).successors(), (bits, mode, "untrusted image")
             emulator = Uc(UC_ARCH_X86, UC_MODE_64)
             emulator.mem_map(BASE, 0x4000)
             emulator.mem_write(BASE, image)

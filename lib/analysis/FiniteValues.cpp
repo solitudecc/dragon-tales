@@ -439,7 +439,8 @@ class Engine {
     provenSites.insert(op.address);result.provenCalls=provenSites.size();
     return true;
   }
-  Transfer transfer(std::uint64_t block,const State &in) {
+  Transfer transfer(std::uint64_t block,const State &in,
+                    std::optional<std::size_t> beforeOp = std::nullopt) {
     Transfer t{in,{}};
     const auto *ib=graph.getIGNILBlock(block);
     if(!ib || !ib->unlifted().empty() ||
@@ -447,7 +448,9 @@ class Engine {
       t.state.regs.clear();t.state.memory.clear();return t;
     }
     std::map<std::uint32_t,const ignil::Op *> definitions;
-    for(const auto &op:ib->ops()) {
+    const auto count=std::min(beforeOp.value_or(ib->ops().size()),ib->ops().size());
+    for(std::size_t index=0;index<count;++index) {
+      const auto &op=ib->ops()[index];
       if(!spend())return t;
       if(op.opcode==O::CALL) {
         if(!call(t,op)) {t.state.regs.clear();t.state.memory.clear();}
@@ -530,10 +533,14 @@ class Engine {
   std::uint64_t proofFacts=0;
   bool failed=false;
 };
-} // namespace
-
-FiniteValueResult finiteValues(const Graph &graph,const std::set<std::uint64_t> &given,
-    std::span<const FiniteValueQuery> queries,const FiniteValueLimits &limits) {
+template<typename Query>
+FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &given,
+    std::span<const Query> queries,const FiniteValueLimits &limits) {
+  constexpr bool memoryQueries=std::is_same_v<Query,FiniteMemoryQuery>;
+  auto queryWidth=[](const Query &query) {
+    if constexpr(memoryQueries)return query.width;
+    else return ignil::widthOf(query.value);
+  };
   Engine e{graph,limits};
   std::map<std::uint64_t,State> states;
   std::map<std::uint64_t,std::vector<std::uint64_t>> successors;
@@ -571,28 +578,61 @@ FiniteValueResult finiteValues(const Graph &graph,const std::set<std::uint64_t> 
   e.result.values.resize(queries.size());
   for(std::size_t i=0;i<queries.size();++i) {
     requested[queries[i].block].push_back(i);
-    e.result.values[i]={ValueSetKind::Unreachable,ignil::widthOf(queries[i].value),{}};
+    e.result.values[i]={memoryQueries?ValueSetKind::Unknown:ValueSetKind::Unreachable,queryWidth(queries[i]),{}};
   }
   for(auto at:graph.validBlockAddresses()) {
     const auto *ib=graph.getIGNILBlock(at);
     const bool jump=ib && !ib->empty() && ib->ops().back().opcode==O::JMP && !ib->ops().back().srcs.empty();
     if(!jump && !requested.contains(at))continue;
     const auto it=states.find(at);const bool reached=it!=states.end() && it->second.reached;
-    Transfer out=reached && !e.failed?e.transfer(at,it->second):Transfer{};
+    Transfer out=reached && !e.failed && (jump || !memoryQueries)?e.transfer(at,it->second):Transfer{};
     if(jump) {
       const auto &value=ib->ops().back().srcs[0];
       e.result.jumpTargets.emplace(at,e.report(reached?e.operand(out,value):Value{ignil::widthOf(value)},reached));
     }
-    for(auto i:requested[at])
-      e.result.values[i]=e.report(reached?e.operand(out,queries[i].value):Value{ignil::widthOf(queries[i].value)},reached);
+    if constexpr(memoryQueries) {
+      // All cells requested at the same LOAD share one prefix evaluation.
+      // Do not retain a State per query: table queries may contain many cells.
+      std::map<std::size_t,std::vector<std::size_t>> points;
+      for(auto i:requested[at]) {
+        const auto &query=queries[i];
+        if(!ib || !query.width || query.width>64 || query.beforeOpIndex>=ib->ops().size())continue;
+        const auto &op=ib->ops()[query.beforeOpIndex];
+        if(op.opcode!=O::LOAD || !op.dst || op.srcs.size()!=1 || ignil::widthOf(*op.dst)!=query.width)continue;
+        points[query.beforeOpIndex].push_back(i);
+      }
+      for(const auto &[before,indices]:points) {
+        Transfer prefix=reached && !e.failed?e.transfer(at,it->second,before):Transfer{};
+        for(auto i:indices) {
+          const auto &query=queries[i];
+          auto value=reached && !e.failed?e.readMemory(prefix.state,Pointer{0,query.address,64},query.width):Value{query.width};
+          e.result.values[i]=e.report(value,reached);
+        }
+      }
+    } else {
+      for(auto i:requested[at])
+        e.result.values[i]=e.report(reached?e.operand(out,queries[i].value):Value{queryWidth(queries[i])},reached);
+    }
   }
   if(e.failed) {
     e.result.complete=false;e.result.message="finite-value analysis budget exhausted or invalid limits";
     for(auto &[at,value]:e.result.jumpTargets)value={ValueSetKind::Unknown,value.width,{}};
-    for(std::size_t i=0;i<queries.size();++i)e.result.values[i]={ValueSetKind::Unknown,ignil::widthOf(queries[i].value),{}};
+    for(std::size_t i=0;i<queries.size();++i)e.result.values[i]={ValueSetKind::Unknown,queryWidth(queries[i]),{}};
   }
   return std::move(e.result);
 }
+} // namespace
+
+FiniteValueResult finiteValues(const Graph &graph,const std::set<std::uint64_t> &given,
+    std::span<const FiniteValueQuery> queries,const FiniteValueLimits &limits) {
+  return runFinite(graph,given,queries,limits);
+}
+
+FiniteValueResult finiteMemoryValues(const Graph &graph,const std::set<std::uint64_t> &given,
+    std::span<const FiniteMemoryQuery> queries,const FiniteValueLimits &limits) {
+  return runFinite(graph,given,queries,limits);
+}
+
 std::string FiniteValueResult::toJSON() const {
   auto encode=[](const FiniteValues &v) {
     llvm::json::Array values;

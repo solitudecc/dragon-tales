@@ -63,8 +63,9 @@ class Instruction {
     return chromosomeMask_;
   }
 
-  /// Known direct branch targets (filled in by the disassembler for jumps).
-  /// Empty for indirect or non-branch instructions.
+  /// Explicit decoder/caller targets and currently inferred indirect targets.
+  /// Inference is retractable on reanalysis; explicit caller edges are trusted
+  /// input evidence. An empty indirect set means unresolved, not unreachable.
   [[nodiscard]] const std::set<std::uint64_t> &branches() const {
     return branches_;
   }
@@ -125,7 +126,25 @@ class Instruction {
   void setPrologue(bool v) { isPrologue_ = v; }
 
   /// Register a direct branch target address.
-  void addBranch(std::uint64_t addr) { branches_.insert(addr); }
+  void addBranch(std::uint64_t addr) {
+    branches_.insert(addr);
+    inferredBranches_.erase(addr); // Explicit caller/decoder evidence owns it.
+  }
+
+  /// Analysis-derived edges are retractable when their proof context changes.
+  /// Never replace or erase an explicitly supplied branch with inference.
+  void addInferredBranch(std::uint64_t addr) {
+    if (branches_.insert(addr).second) inferredBranches_.insert(addr);
+  }
+  void clearInferredBranches() {
+    if (inferredBranches_.empty()) return;
+    for (auto address : inferredBranches_) branches_.erase(address);
+    inferredBranches_.clear();
+    edges_ = branches_.size();
+  }
+  [[nodiscard]] const std::set<std::uint64_t> &inferredBranches() const {
+    return inferredBranches_;
+  }
 
   /// Register a direct call target address.
   void addCallee(std::uint64_t addr) { callees_.insert(addr); }
@@ -173,6 +192,7 @@ class Instruction {
   std::vector<std::uint8_t> chromosomeMask_;
 
   std::set<std::uint64_t> branches_;
+  std::set<std::uint64_t> inferredBranches_;
   std::set<std::uint64_t> callees_;
   std::size_t edges_{};
 

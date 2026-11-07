@@ -390,12 +390,23 @@ TEST_CASE("Finite dispatch rechecks existing edges after a different dispatcher 
     PassPipeline p;REQUIRE(p.registerGraph("resolve",FiniteDispatchPass{code,0x1000,std::span{&entry,1}}));
     REQUIRE(p.add("resolve"));
     const auto result=p.run(g);REQUIRE(result.ok);
-    CHECK_FALSE(result.changed);
+    // Old inference is not caller evidence. The new B closure is complete,
+    // but exposes an arbitrary ECX input to A, so A's old edge is withdrawn.
+    CHECK(result.changed);
     CHECK(result.runs[0].result.status==Status::Incomplete);
     CHECK(result.runs[0].result.counters.at("rounds")>=3);
-    CHECK(g.size()==oldSize);
-    CHECK(g.get(0x1010)->branches()==std::set<std::uint64_t>{0x1050});
-    CHECK(g.get(0x1035)->branches().empty());
+    CHECK(g.size()==oldSize+(strategy==DisassemblyStrategy::RECURSIVE_TRAVERSAL?4:0));
+    CHECK(g.get(0x1010)->branches().empty());
+    CHECK(g.get(0x1035)->branches()==std::set<std::uint64_t>{0x1060,0x1070});
+    const auto &counts=result.runs[0].result.counters;
+    const auto removed=counts.find("removed_edges");
+    CHECK(removed!=counts.end());
+    if(removed!=counts.end())CHECK(removed->second==1);
+    CHECK(counts.at("new_edges")==2);
+    for(auto target:{0x1060u,0x1070u}) {
+      REQUIRE(g.get(target));
+      CHECK(g.get(target)->bytes()[0]==(target==0x1060?0xb8:0x89));
+    }
   }
 }
 TEST_CASE("Finite dispatch admits independent inputs at newly decoded direct callees","[finite-dispatch]") {

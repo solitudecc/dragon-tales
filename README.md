@@ -11,6 +11,7 @@ Features:
 - **LLVMLifter** — lifts a recovered `Function`, or a single flattened IGNIL block (no CFG needed), to LLVM IR, with an optimization pipeline (mem2reg/instcombine/GVN/DCE) on top
 - **Composable pass pipelines** — register C++/C/Python plugins for Graph or LLVM stages, configure steps and budgets, track analysis invalidation and inspect per-pass reports. The default LLVM sweep remains compatible; see [architecture and plugin examples](docs/pass-pipeline.md).
 - **Finite-set dispatcher recovery** — opt-in Graph pass grows and revalidates computed jump targets, with conservative call/alias barriers and explicit-store stack tables. C++/C/Python APIs work without Z3; see [scope and validation](docs/finite-dispatch.md).
+- **Jump-table content proofs** — x86/AArch64 targets require contents proved at the actual LOAD, from Guest writes or an explicit trusted read contract. Initial image bytes and read-only section flags are insufficient; see [contracts and compatibility](docs/table-content-proof.md).
 - **Proved call effects** — optional finite analysis derives preserved state, stack write footprints and agreed constants from bounded x86 call trees, including restored stack frames; see [proof limits](docs/stack-call-effects.md).
 - **Integer predicate folding** — optional bounded Z3 proofs replace constant branch/select conditions and simplify LLVM CFGs; included in Python `LLVMLifter.optimize()`. See [scope, API and validation](docs/llvm-predicate-folding.md).
 - **Linear MBA simplification** — synthesizes smaller integer expressions from truth signatures, requires a word-level Z3 equivalence proof for every rewrite, and preserves independent SSA/memory inputs. Included in Python `LLVMLifter.optimize()`; see [limits and validation](docs/llvm-mba-simplification.md).
@@ -18,7 +19,7 @@ Features:
 - **LLVM Guest execution (V2)** — opt-in x86-32/x86-64/AArch64 state and memory dispatch, architectural near CALL/RET, explicit transfer/missing-target/budget exits, and conservative import provenance. Legacy and trace interfaces remain available; see the [execution contract](docs/llvm-execution-contract.md).
 - **Z3 integration** — lower a sliced expression to a Z3 bitvector formula, enumerate the concrete values it can take, or solve for a unique one
 - **Symbolic execution** — run an IGNIL block over Z3 bitvectors with registers and memory seeded concretely or symbolically: solve for an input that makes a check pass, prove what an obfuscated expression really computes, and resolve a computed jump (jump table, VM dispatch) to the concrete addresses it can reach
-- **SwitchDetector** — recognize a jump-table indirect-branch pattern from a sliced jump target and read its concrete case targets
+- **SwitchDetector** — recognize a jump-table pattern and bound, and decode supplied table bytes; runtime CFG targets additionally require a content proof
 - **FLIRT-compatible signature matching** — identify known functions from `.pat` signature databases
 - **Trace lifting** — lift an arbitrary linear instruction sequence (e.g. a captured execution trace) straight to IGNIL, bypassing CFG/function/block-validity analysis entirely
 - **Binary loader** — parse an ELF or PE/COFF file (or in-memory bytes) straight into a `LoadedImage`: sections and ELF `PT_LOAD` segments at their virtual addresses with R/W/X permissions, entry point, image base, symbols with import/export flags, and the architecture auto-detected from the header (no need to name it). `loader::disassembleImage` goes from a file to a populated `Graph` in one call. Built on LLVM's `llvm::object`, so no extra dependency
@@ -55,6 +56,11 @@ share/dragon/python/dragon.py   the Python API
 
 Point the Python API at the bundled library with
 `DRAGON_C_LIB=/path/to/lib/libdragon_c.so` (`.dylib`/`.dll` as appropriate).
+
+Use headers and libraries from the same SDK. The table-content update changes
+public C++ object layouts, so C++ clients must rebuild. Existing opaque C entry
+points and the Guest ABI remain available; the stricter default analysis can
+leave unproved image tables unresolved.
 
 To build from source instead:
 

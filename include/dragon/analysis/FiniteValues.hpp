@@ -1,7 +1,9 @@
 #pragma once
 
 #include <dragon/lifters/ignil/IGNIL.hpp>
+#include <cstddef>
 #include <cstdint>
+#include <cstddef>
 #include <map>
 #include <set>
 #include <span>
@@ -32,6 +34,16 @@ struct FiniteValueQuery {
   std::uint64_t block;
   ignil::Value value; ///< Value at the end of this block.
 };
+/// Read a fixed Guest address from the state immediately before an IGNIL LOAD.
+/// The queried address can be another table cell than the LOAD's runtime
+/// address. beforeOpIndex must identify a LOAD with a destination of exactly
+/// width bits; widths outside 1..64 and invalid program points yield Unknown.
+struct FiniteMemoryQuery {
+  std::uint64_t block;
+  std::size_t beforeOpIndex;
+  std::uint64_t address;
+  ignil::Width width;
+};
 struct FiniteValueResult {
   bool complete = true; ///< Fixed point reached; not CFG/deobfuscation completeness.
   std::string message;
@@ -61,6 +73,18 @@ struct FiniteValueResult {
 FiniteValueResult finiteValues(
     const Graph &graph, const std::set<std::uint64_t> &entries = {},
     std::span<const FiniteValueQuery> queries = {},
+    const FiniteValueLimits &limits = {});
+
+/// Same fixed-point/root/alias/budget rules as finiteValues(), with .values
+/// corresponding to fixed-address reads immediately before the queried LOADs.
+/// Only preceding Guest STOREs supply memory facts: code/image bytes and a
+/// readMemory callback are never initial-memory assumptions. Invalid queries
+/// yield Unknown even in an unreachable block; valid unreachable queries yield
+/// Unreachable. A global budget failure makes every result Unknown.
+/// Entire blocks containing unlifted markers or local control remain barriers.
+FiniteValueResult finiteMemoryValues(
+    const Graph &graph, const std::set<std::uint64_t> &entries,
+    std::span<const FiniteMemoryQuery> queries,
     const FiniteValueLimits &limits = {});
 
 } // namespace analysis

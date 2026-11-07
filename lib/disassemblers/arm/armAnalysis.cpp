@@ -1,5 +1,6 @@
 #include "disassemblers/arm/armAnalysis.hpp"
 #include "disassemblers/arm/armIGNILLifter.hpp"
+#include "analysis/TableContents.hpp"
 
 // Public headers
 #include <dragon/analysis/BackwardSlicer.hpp>
@@ -17,7 +18,9 @@
 // C++ headers
 #include <algorithm>
 #include <iterator>
+#include <map>
 #include <optional>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -28,12 +31,19 @@ dragon::arm::ARMAnalysis::ARMAnalysis(Architecture architecture,
                                       const llvm::MCRegisterInfo &regInfo) :
     architecture_(architecture), disassembler_(disassembler),
     configuration_(configuration), instrInfo_(instrInfo), regInfo_(regInfo) {
-  static const ARMInfo armInfo32{Architecture::ARM32, instrInfo, regInfo};
-  static const ARMInfo armInfo64{Architecture::ARM64, instrInfo, regInfo};
+  // ARM and AArch64 use different LLVM opcode/register ID namespaces. Only
+  // initialize the classifier for the target whose tables we actually have;
+  // initializing both here poisoned the other architecture's first use.
+  if (architecture == Architecture::ARM32) {
+    static const ARMInfo armInfo32{Architecture::ARM32, instrInfo, regInfo};
+    armInfo_ = &armInfo32;
+  } else {
+    static const ARMInfo armInfo64{Architecture::ARM64, instrInfo, regInfo};
+    armInfo_ = &armInfo64;
+  }
   logger_ = internal::Logger{configuration_.logging};
   armIgnilLifter_ = std::make_unique<ARMIGNILLifter>(logger_, architecture,
                                                      instrInfo, regInfo);
-  armInfo_ = (architecture == Architecture::ARM32) ? &armInfo32 : &armInfo64;
 }
 
 dragon::arm::ARMAnalysis::~ARMAnalysis() = default;
@@ -96,17 +106,9 @@ bool dragon::arm::ARMAnalysis::analyze(std::span<const std::uint8_t> bytes,
   // resolveIndirectJumps): a free-form slice or Z3 guess can land
   // mid-instruction or inside data the sweep decoded as code.
 
-  bool changed = true;
   LiftState liftState;
-  while (changed) {
-    changed = false;
-    const auto added = commitPending(graph, blockStarts, fnStarts);
-    liftPendingBlocks(graph, liftState, added);
-    if (resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts,
-                             fnStarts)) {
-      changed = true;
-    }
-  }
+  liftPendingBlocks(graph, liftState, commitPending(graph, blockStarts, fnStarts));
+  resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts, fnStarts);
 
   return true;
 }
@@ -150,6 +152,22 @@ void dragon::arm::ARMAnalysis::discoverEpilogues(
         std::vector<Instruction> &instructions,
         std::unordered_set<std::uint64_t> &blockStarts,
         std::unordered_set<std::uint64_t> &functionStarts) const {
+  if (instructions.empty()) return;
+  // As on x86, RET plus alignment is ambiguous inside an unresolved
+  // dispatcher: the next leaf may be another case. Delimit regions only by
+  // entries already justified by roots, direct calls or real prologues, so a
+  // dispatch in one region does not suppress discovery in a separate one.
+  std::vector<std::uint64_t> knownEntries(functionStarts.begin(),functionStarts.end());
+  std::sort(knownEntries.begin(),knownEntries.end());
+  const auto regionFor = [&](std::uint64_t address) {
+    const auto next = std::upper_bound(knownEntries.begin(),knownEntries.end(),address);
+    return next == knownEntries.begin() ? instructions.front().address() : *std::prev(next);
+  };
+  std::unordered_set<std::uint64_t> indirectRegions;
+  for (const auto &instruction : instructions)
+    if (instruction.isJump() && !instruction.isReturn() &&
+        instruction.hasIndirectTarget() && instruction.branches().empty())
+      indirectRegions.insert(regionFor(instruction.address()));
   const size_t n = instructions.size();
   size_t i = 0;
   while (i < n) {
@@ -207,6 +225,10 @@ void dragon::arm::ARMAnalysis::discoverEpilogues(
         logger_.log("Epilogue at 0x{:x}: 0x{:x} is a branch target, skipping "
                     "function-start promotion",
                     instructions[i].address(), next.address());
+      } else if (indirectRegions.contains(regionFor(next.address())) &&
+                 !functionStarts.contains(next.address())) {
+        logger_.log("Post-RET candidate at 0x{:x} may be an indirect case; "
+                    "not promoting it to a function",next.address());
       } else {
         functionStarts.insert(next.address());
         blockStarts.insert(next.address());
@@ -398,7 +420,8 @@ bool dragon::arm::ARMAnalysis::integrateNewBlock(
         std::uint64_t target, std::span<const std::uint8_t> bytes,
         std::uint64_t baseAddr, Graph &graph,
         std::unordered_set<std::uint64_t> &blockStarts,
-        std::unordered_set<std::uint64_t> &fnStarts) const {
+        std::unordered_set<std::uint64_t> &fnStarts,
+        bool &complete) const {
   if (graph.get(target))
     return false;
 
@@ -420,6 +443,10 @@ bool dragon::arm::ARMAnalysis::integrateNewBlock(
     for (auto &insn: disassembler_.disassembleBlock(bytes, baseAddr, at)) {
       if (graph.get(insn.address()) || seen.contains(insn.address()))
         break; // ran into code already decoded
+      if (newInstrs.size() >= kMaxNewInstructions) {
+        complete = false;
+        return false; // No partial decode has reached the tentative graph.
+      }
       seen.insert(insn.address());
       for (std::uint64_t t: insn.branches())
         work.push_back(t);
@@ -429,6 +456,10 @@ bool dragon::arm::ARMAnalysis::integrateNewBlock(
         work.push_back(insn.address() + insn.size());
       newInstrs.push_back(std::move(insn));
     }
+  }
+  if (!work.empty()) {
+    complete = false;
+    return false;
   }
   if (newInstrs.empty())
     return false;
@@ -448,128 +479,168 @@ bool dragon::arm::ARMAnalysis::integrateNewBlock(
   return true;
 }
 
-bool dragon::arm::ARMAnalysis::resolveIndirectJumps(
+namespace {
+// Analysis views may filter unreachable blocks, but retain the full listing so
+// linear-sweep target checks still require real decoded instruction boundaries.
+dragon::Graph reachableGraph(const dragon::Graph &source,
+                             const dragon::Disassembler::AnalysisHints &hints) {
+  std::set<std::uint64_t> reached;
+  std::vector<std::uint64_t> work = hints.entryPoints;
+  if (work.empty())
+    work.assign(source.validFunctionAddresses().begin(), source.validFunctionAddresses().end());
+  for (const auto &[address,instruction] : source.listing())
+    work.insert(work.end(),instruction.callees().begin(),instruction.callees().end());
+  while (!work.empty()) {
+    const auto address = work.back();
+    work.pop_back();
+    if (!reached.insert(address).second) continue;
+    const dragon::BasicBlock block{&source,address};
+    if (!block.isValid()) continue;
+    for (auto successor : block.successors()) work.push_back(successor);
+    for (const auto *instruction : block.instructions())
+      for (auto callee : instruction->callees()) work.push_back(callee);
+  }
+  dragon::Graph copy{source.architecture(),source.configuration()};
+  for (const auto &[address,instruction] : source.listing()) copy.addInstruction(instruction);
+  for (auto address : source.validBlockAddresses()) if (reached.contains(address)) {
+    copy.addBlock(address);
+    if (const auto *block = source.getIGNILBlock(address)) copy.addIGNILBlock(*block);
+  }
+  for (auto address : source.validFunctionAddresses()) copy.addFunction(address);
+  return copy;
+}
+} // namespace
+
+void dragon::arm::ARMAnalysis::resolveIndirectJumps(
         Graph &graph, std::span<const std::uint8_t> bytes,
         std::uint64_t baseAddr, const Disassembler::AnalysisHints &hints,
         std::unordered_set<std::uint64_t> &blockStarts,
         std::unordered_set<std::uint64_t> &fnStarts) const {
-  const bool linear = configuration_.disassemblyStrategy ==
-                      DisassemblyStrategy::LINEAR_SWEEP;
-  bool changed = false;
-
-  // The predecessor map every slice needs is rebuilt only after this pass
-  // changed the graph: block starts and IGNIL stay as they are until the
-  // next commit, so only a new branch on a jump or newly decoded code can
-  // alter it. Most indirect jumps (PLT stubs, tail calls) resolve to nothing
-  // and change nothing; rebuilding for each made an aarch64 sqlite analysis
-  // spend most of its time in BackwardSlicer::predecessors.
-  std::optional<BackwardSlicer::Predecessors> preds;
-  auto currentPreds = [&]() -> const BackwardSlicer::Predecessors & {
-    if (!preds)
-      preds = BackwardSlicer::predecessors(graph);
-    return *preds;
+  const bool linear = configuration_.disassemblyStrategy == DisassemblyStrategy::LINEAR_SWEEP;
+  auto targetsFor = [&](const BasicBlock &block, const Graph &cfg,
+                        const BackwardSlicer::Predecessors &preds,
+                        const std::set<std::uint64_t> &entries) {
+    std::set<std::uint64_t> result;
+    const auto *ir = cfg.getIGNILBlock(block.startAddress());
+    if (!ir || ir->empty()) return result;
+    const auto &tail = ir->ops().back();
+    if (tail.opcode != ignil::Opcode::JMP || tail.srcs.empty() ||
+        std::holds_alternative<ignil::Const>(tail.srcs[0])) return result;
+    constexpr int depth = 5;
+    const auto expression = BackwardSlicer{depth}.slice(tail.srcs[0],block.startAddress(),cfg,&preds);
+    const bool tablesOnly = linear || std::holds_alternative<ignil::Temp>(tail.srcs[0]);
+    std::vector<std::uint64_t> values;
+    if (auto table = slice::detectPossibleSwitch(expression,block.startAddress(),cfg,depth,&preds)) {
+      if (table->numCases)
+        values = analysis::detail::provedTableTargets(*table,expression,cfg,entries,hints);
+      else if (!tablesOnly)
+        values = collectTargets(expression,block.startAddress());
+    } else if (!tablesOnly) {
+      values = collectTargets(expression,block.startAddress());
+    }
+    // A proved set is accepted in full. A target outside this code range or
+    // outside linear sweep's decoded boundaries invalidates the whole set.
+    for (auto target : values) {
+      if (target < baseAddr || target - baseAddr >= bytes.size() || (linear && !cfg.get(target)))
+        return std::set<std::uint64_t>{};
+      result.insert(target);
+    }
+    return result;
   };
 
-  // Only blocks whose IGNIL ends in an indirect JMP get a BasicBlock view:
-  // building one for every block, every round, dominated large binaries.
-  const std::vector<std::uint64_t> starts(graph.validBlockAddresses().begin(),
-                                          graph.validBlockAddresses().end());
-  for (std::uint64_t start: starts) {
-    const auto *ignilBlock = graph.getIGNILBlock(start);
-    if (!ignilBlock || ignilBlock->ops().empty())
-      continue;
-    const auto &tail = ignilBlock->ops().back();
-    if (tail.opcode != ignil::Opcode::JMP || tail.srcs.empty() ||
-        std::holds_alternative<ignil::Const>(tail.srcs[0]))
-      continue;
-    const BasicBlock block{&graph, start};
-    if (!block.isValid())
-      continue;
-
-    const auto &last = ignilBlock->ops().back();
-    // An indirect jump: through a register (`jmp rax`, `br x0`) or straight
-    // through memory (`jmp [eax*4 + table]`, lifted as t = LOAD(..); JMP t -
-    // the usual i386 jump-table dispatch). Either is sliced from its operand.
-    if (last.opcode != ignil::Opcode::JMP || last.srcs.empty() ||
-        std::holds_alternative<ignil::Const>(last.srcs[0]))
-      continue;
-
-    // The guard is sliced one block shorter (see detectPossibleSwitch).
-    constexpr int kSliceDepth = 5;
-    BackwardSlicer slicer{kSliceDepth};
-    slice::Expr result = slicer.slice(last.srcs[0], ignilBlock->startAddress(),
-                                      graph, &currentPreds());
-    // A memory-indirect jump's target is a value loaded from memory the
-    // slicer cannot read, so only a recognised jump table resolves it -
-    // enumerating the free load (Z3 fallback) would yield arbitrary targets,
-    // e.g. for every `jmp [import_slot]` thunk. Linear sweep takes tables
-    // only, for the reason given in analyze().
-    const bool tablesOnly =
-            linear || std::holds_alternative<ignil::Temp>(last.srcs[0]);
-
-    std::vector<std::uint64_t> targets;
-    if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
-                                              graph, kSliceDepth,
-                                              &currentPreds())) {
-      if (sw->numCases > 0) {
-        logger_.log("Switch at 0x{:x}: table=0x{:x} entries={} entrySize={}",
-                    block.startAddress(), sw->tableBase, sw->numCases,
-                    sw->entrySize);
-        targets = slice::readTableTargets(*sw, bytes, baseAddr);
-        // The table usually lives outside the code bytes (.rodata/.rdata).
-        if (targets.empty() && hints.readMemory) {
-          std::vector<std::uint8_t> table(std::size_t{sw->numCases} *
-                                          sw->entrySize);
-          if (hints.readMemory(sw->tableBase, table))
-            targets = slice::readTableTargets(*sw, table, sw->tableBase);
+  // Restart from the original graph after any failed hypothesis. This removes
+  // all its speculative edges, decodes, function guesses and block splits,
+  // including candidates which depended on it. Each restart bans one new PC.
+  std::set<std::uint64_t> rejected;
+  for (;;) {
+    Graph tentative = graph.clone();
+    auto starts = blockStarts;
+    auto functions = fnStarts;
+    std::map<std::uint64_t,std::set<std::uint64_t>> candidates;
+    LiftState liftState;
+    bool restart = false;
+    for (;;) {
+      liftPendingBlocks(tentative,liftState,commitPending(tentative,starts,functions));
+      Graph cfg = reachableGraph(tentative,hints);
+      std::set<std::uint64_t> entries = hints.entryPoints.empty()
+          ? cfg.validFunctionAddresses()
+          : std::set<std::uint64_t>(hints.entryPoints.begin(),hints.entryPoints.end());
+      // Every decoded direct callee also admits independent arbitrary inputs,
+      // even when a tail path reaches it with initialized table bytes.
+      for (const auto &[address,instruction] : cfg.listing())
+        entries.insert(instruction.callees().begin(),instruction.callees().end());
+      const auto preds = BackwardSlicer::predecessors(cfg,entries);
+      std::map<std::uint64_t,BasicBlock> jumps;
+      for (auto address : cfg.validBlockAddresses()) {
+        const auto *ir = cfg.getIGNILBlock(address);
+        if (!ir || ir->empty() || ir->ops().back().opcode != ignil::Opcode::JMP ||
+            ir->ops().back().srcs.empty() ||
+            std::holds_alternative<ignil::Const>(ir->ops().back().srcs[0])) continue;
+        BasicBlock block{&cfg,address};
+        if (const auto *last = block.terminator(); last && last->isJump() && last->hasIndirectTarget())
+          jumps.emplace(last->address(),std::move(block));
+      }
+      // Recompute every old candidate against this round's entire CFG and
+      // memory fixed point. Newly revealed paths can invalidate STORE facts.
+      for (const auto &[address,expected] : candidates) {
+        const auto found = jumps.find(address);
+        const bool complete = std::ranges::all_of(expected,[&](auto target) {
+          return BasicBlock{&tentative,target}.isValid();
+        });
+        if (!complete || found == jumps.end() ||
+            targetsFor(found->second,cfg,preds,entries) != expected) {
+          logger_.log("Rejecting tentative indirect jump @ 0x{:x}",address);
+          rejected.insert(address);
+          restart = true;
+          break;
         }
-      } else {
-        logger_.log(
-                "Switch at 0x{:x}: table=0x{:x} (bounds unknown, falling back)",
-                block.startAddress(), sw->tableBase);
-        if (!tablesOnly)
-          targets = collectTargets(result, block.startAddress());
       }
-    } else if (!tablesOnly) {
-      targets = collectTargets(result, block.startAddress());
-    }
+      if (restart) break;
 
-    Instruction *jump = graph.get(block.terminatorAddress());
-    for (std::uint64_t target: targets) {
-      if (target < baseAddr || target >= baseAddr + bytes.size()) {
-        logger_.log("Resolved target 0x{:x} is out of range, skipping", target);
-        continue;
-      }
-      if (linear && !graph.get(target)) {
-        logger_.log("Resolved target 0x{:x} is not on a decoded instruction, "
-                    "skipping",
-                    target);
-        continue;
-      }
-
-      logger_.log("Resolved indirect jump @ 0x{:x} -> 0x{:x}",
-                  block.startAddress(), target);
-
-      // Record the target as a CFG edge of the jump, so BasicBlock
-      // successors, Function membership and the LLVM lifter see it - the
-      // target used to become a block of its own, reachable from nothing.
-      if (jump && !jump->branches().contains(target)) {
-        jump->addBranch(target);
+      bool changed = false;
+      for (const auto &[address,block] : jumps) {
+        // Direct and explicitly caller-supplied evidence is owned by the
+        // caller/decoder; recovery never erases it or calls it a new proof.
+        if (rejected.contains(address) || candidates.contains(address) ||
+            !tentative.get(address)->branches().empty()) continue;
+        auto targets = targetsFor(block,cfg,preds,entries);
+        if (targets.empty()) continue;
+        candidates.emplace(address,targets);
+        auto *jump = tentative.get(address);
+        for (auto target : targets) {
+          jump->addInferredBranch(target);
+          starts.insert(target);
+          bool complete = true;
+          integrateNewBlock(target,bytes,baseAddr,tentative,starts,functions,complete);
+          if (!complete) {
+            logger_.log("Indirect recovery decoding budget exhausted");
+            return; // No speculative graph objects have been published.
+          }
+        }
         jump->setEdges(jump->branches().size());
         changed = true;
-        preds.reset();
       }
+      if (changed) continue;
+      if (candidates.empty()) return;
 
-      if (blockStarts.insert(target).second)
-        changed = true;
-
-      if (integrateNewBlock(target, bytes, baseAddr, graph, blockStarts,
-                            fnStarts)) {
-        changed = true;
-        preds.reset();
+      // Publish only the fully revalidated fixed point. Existing map objects
+      // are updated in place so borrowed Instruction/IGNIL pointers survive.
+      for (const auto &[address,instruction] : tentative.listing()) {
+        if (graph.get(address)) graph.update(instruction);
+        else graph.addInstruction(instruction);
       }
+      for (auto address : tentative.validBlockAddresses()) {
+        graph.addBlock(address);
+        if (const auto *ir = tentative.getIGNILBlock(address)) {
+          if (auto *existing = graph.getIGNILBlock(address)) *existing = *ir;
+          else graph.addIGNILBlock(*ir);
+        }
+      }
+      for (auto address : tentative.validFunctionAddresses()) graph.addFunction(address);
+      blockStarts = std::move(starts);
+      fnStarts = std::move(functions);
+      return;
     }
+    if (!restart) return;
   }
-
-  return changed;
 }

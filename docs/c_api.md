@@ -128,6 +128,23 @@ are ignored. The hints own a copy of the entry array. A memory reader returns
 Its function pointer and `user` data must remain valid during the synchronous
 analysis call; the resulting graph does not borrow them.
 
+`set_memory_reader` reads initial image bytes; readable data or section
+permissions do not certify runtime table contents. To assert contents before a
+specific IGNIL LOAD, use `dragon_analysis_hints_set_known_memory_reader`:
+
+```c
+typedef int (*dragon_known_memory_reader_t)(uint64_t block, size_t op_index,
+    uint64_t instruction_pc, uint64_t address, uint8_t* out, size_t size,
+    void* user);
+```
+
+Returning 1 asserts every requested byte for **all admitted executions and
+visits** to that LOAD, including later-discovered CFG paths. Return 0/another
+positive number for unknown, or a negative number for an error. Errors stop
+native analysis/pass execution. This is an explicit trusted premise, not an
+initial-memory seed. A missing entry cannot be replaced by image data. See
+[the content contract](table-content-proof.md).
+
 ```c
 dragon_analysis_hints_t* hints = dragon_analysis_hints_create();
 uint64_t entries[] = {0x1000, 0x1100};
@@ -135,6 +152,8 @@ if (!hints || !dragon_analysis_hints_set_entries(hints, entries, 2)) {
     /* allocation / argument failure */
 }
 // Optional: dragon_analysis_hints_set_memory_reader(hints, reader, user);
+// Independent proof, if available:
+// dragon_analysis_hints_set_known_memory_reader(hints, certified_reader, user);
 char error[256];
 dragon_graph_t* graph = dragon_disasm_analyze_with_hints(
     dis, code, sizeof(code), 0x1000, hints, error, sizeof(error));
@@ -144,9 +163,12 @@ if (!graph) { /* error contains a NUL-terminated diagnostic */ }
 
 `dragon_analysis_hints_entry_count` and `dragon_analysis_hints_entry` inspect
 the copied entries. Passing NULL/0 to `set_entries` clears the list; passing a
-NULL reader to `set_memory_reader` clears the callback. Setters and the indexed
+NULL reader to either reader setter clears that callback. Setters and the indexed
 entry accessor return 1 on success, 0 on failure. NULL hints in the analysis
 call select the default behavior. The caller destroys the returned graph.
+Do not destroy the active disassembler/loader from its callback.
+Analysed direct callees remain independent input entries even with an explicit
+entry list. An entry-path STORE cannot constrain arbitrary CALL inputs.
 
 ### Instruction flags
 
@@ -240,6 +262,12 @@ header. `dragon_loader_disassemble` goes straight from a loaded image to a
 populated graph without having to carve out a `.text` blob or name the
 architecture.
 
+`dragon_loader_disassemble_with_hints(loader, config, hints)` additionally
+unions caller entries with image metadata roots and forwards the explicit
+contents contract. It snapshots hints synchronously and returns NULL on an
+exception; returned graphs do not retain callback/userdata. The original
+two-argument function remains available.
+
 Both constructors return `NULL` on failure; when `err` is non-NULL a
 NUL-terminated reason of at most `err_cap` bytes is written. The loader owns
 every name, section-bytes and segment-bytes pointer it hands out — all are
@@ -278,6 +306,7 @@ for (size_t i = 0; i < dragon_loader_symbol_count(ld); ++i) {
 
 // Straight to a populated graph (config may be NULL for defaults)
 dragon_graph_t* graph = dragon_loader_disassemble(ld, NULL);
+if (!graph) { dragon_loader_destroy(ld); return 1; }
 printf("%zu instructions\n", dragon_graph_size(graph));
 
 dragon_graph_destroy(graph);
@@ -777,6 +806,9 @@ Wraps `dragon::slice::detectPossibleSwitch` / `readTableTargets` — recognizes
 a jump-table indirect-branch pattern from a backward-slice result (typically
 the target of an indirect `JMP`, sliced with the backward slicer above) and
 reads the concrete targets out of the table's raw bytes.
+These functions recognize a shape/bound and decode supplied bytes. They do not
+prove those bytes are present at the runtime LOAD. Automatic CFG publication
+requires a Guest STORE proof or the explicit trusted callback above.
 
 ```c
 dragon_slice_expr_t* jump_target = dragon_slicer_slice_reg(
@@ -946,10 +978,24 @@ See [the pass architecture](pass-pipeline.md) for limits and plugin correctness/
 
 `dragon_pass_pipeline_register_finite_dispatch(p, name, code, length, base, entries, count)`
 registers native x86 Graph recovery and copies both buffers; add the named step before running.
+The `_with_hints(..., hints)` variant also copies hints and unions both entry
+lists. Reader function pointers and userdata stay borrowed until that executor
+is replaced or the pipeline is destroyed; clearing steps does not unregister
+it. A negative trusted-reader result stops the run with ERROR. Unknown or a
+budget stop never retries the proof with unbounded/default limits.
+`INCOMPLETE` may still report `changed=true` and `removed_edges`: stale inferred
+edges are withdrawn rather than reused as proof. Reanalysis withdraws inferred
+edges throughout the Graph but only rebuilds the supplied code region; other
+regions' old inference is not restored automatically. Explicit caller/decoder
+edges remain separate evidence.
 `dragon_graph_finite_values(g, entries, count, query_block, query_offset, query_width,
 max_values, max_blocks, max_operations, max_facts)` returns owned JSON with finite/unknown/
 unreachable values. Width zero omits the register query; values/addresses use hex strings.
 Free the result with `dragon_cstr_free`. See [contracts and limits](finite-dispatch.md).
+
+The content-proof update changes public C++ object layouts, requiring matching
+C++ headers/libraries and a client rebuild. Existing opaque C symbols and the
+Guest ABI are preserved; new hint-routing symbols require the updated shim.
 
 The proof functions return 0 for a null lifter/output pointer and 1 otherwise.
 Without Z3 they report `available=0` and leave IR unchanged. Suggested MBA limits

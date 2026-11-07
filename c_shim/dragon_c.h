@@ -80,8 +80,19 @@
   // Analysis hints own a copy of entry points. The memory reader and its user
   // data are borrowed and must remain alive during analyze_with_hints (only).
   // Reader must fill all len bytes and return 1, or return 0 for unmapped data.
+  // This ordinary image reader does not establish runtime LOAD contents and
+  // cannot by itself supply jump-table targets.
   typedef int (*dragon_memory_reader_t)(uint64_t address, uint8_t* out,
                                         size_t len, void* user);
+  // Explicit trusted contents at one exact IGNIL LOAD, immediately before it
+  // executes. Returning 1 asserts these bytes on every execution/visit admitted
+  // by the entry contract, including paths discovered by later CFG expansion.
+  // Initial image bytes and section permissions do not establish this fact.
+  // Fill all len bytes and return 1. Zero/other positive values mean unknown;
+  // a negative value reports an error and stops the analysis/pass run.
+  typedef int (*dragon_known_memory_reader_t)(uint64_t block_address,
+      size_t op_index, uint64_t instruction_address, uint64_t address,
+      uint8_t* out, size_t len, void* user);
   dragon_analysis_hints_t* dragon_analysis_hints_create(void);
   void dragon_analysis_hints_destroy(dragon_analysis_hints_t* h);
   // Setters/accessors return 1 on success and 0 on invalid arguments/failure.
@@ -94,6 +105,10 @@
   int dragon_analysis_hints_set_memory_reader(dragon_analysis_hints_t* h,
                                               dragon_memory_reader_t reader,
                                               void* user);
+  // NULL reader clears the trusted callback. Callback/user data are borrowed
+  // synchronously, like the ordinary reader above; Graph never retains them.
+  int dragon_analysis_hints_set_known_memory_reader(dragon_analysis_hints_t* h,
+      dragon_known_memory_reader_t reader, void* user);
 
   // -- Graph ---
 
@@ -238,6 +253,12 @@
   // destroys the graph.
   dragon_graph_t* dragon_loader_disassemble(const dragon_loader_t* l,
                                             const dragon_config_t* config);
+  // Adds caller entries to image metadata seeds and forwards trusted LOAD
+  // contents. Hints/callbacks are borrowed only during this synchronous call.
+  // Returns NULL for invalid input or an exception; ordinary image reads do
+  // not become trusted runtime contents.
+  dragon_graph_t* dragon_loader_disassemble_with_hints(const dragon_loader_t* l,
+      const dragon_config_t* config, const dragon_analysis_hints_t* hints);
 
   // -- Instruction ---------------------------------------------------------------
 
@@ -785,6 +806,12 @@
   int dragon_pass_pipeline_register_finite_dispatch(dragon_pass_pipeline_t* p,
       const char* name, const uint8_t* code, size_t length, uint64_t base,
       const uint64_t* entries, size_t count);
+  // Also copies hints and unions their entries with entries/count. Callback
+  // function pointers/user data remain borrowed until the registered executor
+  // is replaced or the pipeline is destroyed (clear removes steps only).
+  int dragon_pass_pipeline_register_finite_dispatch_with_hints(dragon_pass_pipeline_t* p,
+      const char* name, const uint8_t* code, size_t length, uint64_t base,
+      const uint64_t* entries, size_t count, const dragon_analysis_hints_t* hints);
   // Keeps existing dependency/option validation when replacing a built-in executor.
   int dragon_pass_pipeline_override(dragon_pass_pipeline_t* p, const char* name,
       dragon_pass_stage_t stage, dragon_pass_callback_t callback, void* userdata);

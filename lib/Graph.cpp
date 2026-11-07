@@ -1,5 +1,6 @@
 #include <dragon/disassembler/Graph.hpp>
 #include "LLVMImportMetadata.hpp"
+#include <algorithm>
 #include <utility>
 
 // ---------------------------------------------------------------------------
@@ -221,8 +222,32 @@ const std::set<std::uint64_t> &dragon::Graph::validFunctionAddresses() const {
 }
 
 void dragon::Graph::merge(Graph other) {
-  for (auto &[addr, insn] : other.listing_)
-    listing_.try_emplace(addr, std::move(insn));
+  // Independently proved fragments do not establish a proof for their union:
+  // the other graph can introduce new incoming paths and independent entries.
+  // Preserve caller/decoder evidence, retract inference, and require reanalysis.
+  for (auto &[address, instruction] : listing_) instruction.clearInferredBranches();
+  for (auto &[address, instruction] : other.listing_) instruction.clearInferredBranches();
+  for (auto &[addr, insn] : other.listing_) {
+    auto [where,inserted]=listing_.try_emplace(addr,std::move(insn));
+    if(inserted)continue;
+    auto &kept=where->second;
+    // Preserve explicit evidence on compatible copies of the same decoded
+    // instruction. Incompatible encodings retain the historical first-wins
+    // policy; combining those would mix distinct instruction semantics.
+    if(architecture_!=other.architecture_ || kept.size()!=insn.size() ||
+       kept.bytes()!=insn.bytes() || kept.isJump()!=insn.isJump() ||
+       kept.isCall()!=insn.isCall() || kept.isReturn()!=insn.isReturn() ||
+       kept.isConditional()!=insn.isConditional() || kept.isTrap()!=insn.isTrap() ||
+       kept.hasIndirectTarget()!=insn.hasIndirectTarget())continue;
+    for(auto target:insn.branches())kept.addBranch(target);
+    for(auto target:insn.callees())kept.addCallee(target);
+    // Preserve explicit edge-count metadata as well as known targets.
+    if(!kept.branches().empty())
+      kept.setEdges(std::max({kept.edges(),insn.edges(),kept.branches().size()}));
+    kept.setBlockStart(kept.isBlockStart() || insn.isBlockStart());
+    kept.setFunctionStart(kept.isFunctionStart() || insn.isFunctionStart());
+    kept.setPrologue(kept.isPrologue() || insn.isPrologue());
+  }
 
   auto &dst = *queues_;
   const auto &src = *other.queues_;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <memory>
 #include <span>
 #include <vector>
@@ -69,6 +70,11 @@ class Disassembler {
 
   /// Extra knowledge about the code being analysed, for the Graph overload
   /// below. Everything is optional.
+  struct MemoryReadSite {
+    std::uint64_t blockAddress;
+    std::size_t opIndex;
+    std::uint64_t instructionAddress;
+  };
   struct AnalysisHints {
     /// Addresses known to be code entry points - an image's entry point, its
     /// function symbols and exports. Each becomes a function start and a
@@ -86,6 +92,14 @@ class Disassembler {
     /// growth with full closure revalidation; default discovery is unchanged.
     /// The shared object is used synchronously and never retained by Graph.
     std::shared_ptr<analysis::IndirectTargetResolver> indirectTargets;
+    /// Trusted content assertion at one exact IGNIL LOAD, before it executes.
+    /// Returning true asserts that all requested bytes have these values on
+    /// every execution/visit admitted by the entry contract, including paths
+    /// exposed by later CFG expansion. This is stronger than reading initial
+    /// image bytes. Neither readMemory nor section permissions imply it.
+    /// Called synchronously; Graph does not retain the callback or its data.
+    std::function<bool(const MemoryReadSite &site, std::uint64_t address,
+                       std::span<std::uint8_t> out)> readKnownMemory;
   };
 
   /// As above, with entry points and a memory reader for the analysis.

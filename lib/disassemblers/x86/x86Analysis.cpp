@@ -1,6 +1,7 @@
 #include "disassemblers/x86/x86Analysis.hpp"
 #include "disassemblers/x86/X86IGNILLifter.hpp"
 #include "analysis/ConstantValue.hpp"
+#include "analysis/TableContents.hpp"
 
 // Public headers
 #include <dragon/analysis/BackwardSlicer.hpp>
@@ -106,8 +107,12 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
   // Copy the seeds: integration can add more starts to the sets.
   const std::vector<std::uint64_t> directStarts(blockStarts.begin(),
                                                 blockStarts.end());
-  for (auto target : directStarts)
-    integrateNewBlock(target, bytes, baseAddr, graph, blockStarts, fnStarts);
+  bool directDecodeComplete = true;
+  for (auto target : directStarts) {
+    integrateNewBlock(target, bytes, baseAddr, graph, blockStarts, fnStarts,
+                      directDecodeComplete);
+    if (!directDecodeComplete) break;
+  }
   discoverFallthroughJoins(graph, blockStarts);
 
   // Indirect-jump resolution. Under linear sweep only recognised jump tables
@@ -120,7 +125,13 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
     liftPendingBlocks(graph, liftState,
                       commitPending(graph, blockStarts, fnStarts));
   }
-  resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts, fnStarts);
+  if (directDecodeComplete)
+    resolveIndirectJumps(graph, bytes, baseAddr, hints, blockStarts, fnStarts);
+  else {
+    logger_.log("Direct recovery decoding budget exhausted");
+    if (hints.indirectTargets)
+      hints.indirectTargets->stopped("direct recovery decoding budget exhausted");
+  }
 
   return true;
 }
@@ -521,7 +532,8 @@ bool dragon::x86::X86Analysis::integrateNewBlock(
         std::uint64_t target, std::span<const std::uint8_t> bytes,
         std::uint64_t baseAddr, Graph &graph,
         std::unordered_set<std::uint64_t> &blockStarts,
-        std::unordered_set<std::uint64_t> &fnStarts) const {
+        std::unordered_set<std::uint64_t> &fnStarts,
+        bool &complete, std::size_t maxNewInstructions) const {
   if (graph.get(target))
     return false;
 
@@ -531,11 +543,12 @@ bool dragon::x86::X86Analysis::integrateNewBlock(
   // block registered those as block starts with no instruction behind them
   // (250 empty blocks in a recursive i686 Lua analysis once its jump tables
   // resolved). Known code stops the walk.
-  constexpr std::size_t kMaxNewInstructions = 1 << 20;
+  // Providers can reduce, but never raise, the historical expansion ceiling.
+  const auto limit = std::min<std::size_t>(maxNewInstructions, 1u << 20);
   std::vector<Instruction> newInstrs;
   std::unordered_set<std::uint64_t> seen;
   std::vector<std::uint64_t> work{target};
-  while (!work.empty() && newInstrs.size() < kMaxNewInstructions) {
+  while (!work.empty() && newInstrs.size() < limit) {
     const std::uint64_t at = work.back();
     work.pop_back();
     if (graph.get(at) || seen.contains(at))
@@ -543,6 +556,10 @@ bool dragon::x86::X86Analysis::integrateNewBlock(
     for (auto &insn: disassembler_.disassembleBlock(bytes, baseAddr, at)) {
       if (graph.get(insn.address()) || seen.contains(insn.address()))
         break; // ran into code already decoded
+      if (newInstrs.size() >= limit) {
+        complete = false;
+        return false;
+      }
       seen.insert(insn.address());
       for (std::uint64_t t: insn.branches())
         work.push_back(t);
@@ -552,6 +569,10 @@ bool dragon::x86::X86Analysis::integrateNewBlock(
         work.push_back(insn.address() + insn.size());
       newInstrs.push_back(std::move(insn));
     }
+  }
+  if (!work.empty()) {
+    complete = false;
+    return false;
   }
   if (newInstrs.empty())
     return false;
@@ -625,6 +646,8 @@ dragon::Graph reachableGraph(
   if (work.empty())
     work.assign(source.validFunctionAddresses().begin(),
                 source.validFunctionAddresses().end());
+  for (const auto &[address, instruction] : source.listing())
+    work.insert(work.end(), instruction.callees().begin(), instruction.callees().end());
   while (!work.empty()) {
     const auto addr = work.back();
     work.pop_back();
@@ -652,6 +675,8 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
   const bool linear = configuration_.disassemblyStrategy ==
                       DisassemblyStrategy::LINEAR_SWEEP;
   const bool extensible=bool(hints.indirectTargets);
+  const auto decodeLimit = extensible
+      ? hints.indirectTargets->maxNewInstructions() : 1u << 20;
   // Loops in real dispatchers can be substantially deeper than the default
   // five-block slice. The slicer's per-query budget still caps join expansion.
   auto targetsAtDepth = [&](const BasicBlock &block, const Graph &cfg,
@@ -680,13 +705,8 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
     } else if (auto sw = slice::detectPossibleSwitch(result, block.startAddress(),
                                               cfg, depth, &cfgPreds);
         sw && sw->numCases > 0) {
-      values = slice::readTableTargets(*sw, bytes, baseAddr);
-      if (values.empty() && hints.readMemory) {
-        std::vector<std::uint8_t> table(std::size_t{sw->numCases} *
-                                        sw->entrySize);
-        if (hints.readMemory(sw->tableBase, table))
-          values = slice::readTableTargets(*sw, table, sw->tableBase);
-      }
+      std::set<std::uint64_t> entries(hints.entryPoints.begin(), hints.entryPoints.end());
+      values = analysis::detail::provedTableTargets(*sw, result, cfg, entries, hints);
     } else if (!tablesOnly) {
       values = collectTargets(result, block.startAddress());
     }
@@ -759,11 +779,11 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
           ? std::set<std::uint64_t>(cfg.validFunctionAddresses().begin(),
                                     cfg.validFunctionAddresses().end())
           : std::set<std::uint64_t>(hints.entryPoints.begin(), hints.entryPoints.end());
-      if(extensible) {
+      {
         // Explicit roots suppress heuristic function guesses, but never a real
         // CALL entry. Expansion may decode a new callee also reached by a tail
         // jump; a store on that tail path cannot constrain its independent
-        // CALL input. Use the same boundary for legacy and finite proofs.
+        // CALL input. Use the same boundary for all target/content proofs.
         for(const auto &[at,insn]:cfg.listing())
           entries.insert(insn.callees().begin(),insn.callees().end());
       }
@@ -794,11 +814,20 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
       auto addTargets=[&](std::uint64_t addr,const std::set<std::uint64_t> &targets) {
         auto *jump=tentative.get(addr);
         for(auto target:targets)if(!jump->branches().contains(target)) {
-          jump->addBranch(target);
+          jump->addInferredBranch(target);
           starts.insert(target);
-          integrateNewBlock(target,bytes,baseAddr,tentative,starts,functions);
+          bool complete = true;
+          integrateNewBlock(target,bytes,baseAddr,tentative,starts,functions,
+                            complete,decodeLimit);
+          if (!complete) {
+            logger_.log("Indirect recovery decoding budget exhausted");
+            if (extensible)
+              hints.indirectTargets->stopped("indirect recovery decoding budget exhausted");
+            return false;
+          }
         }
         jump->setEdges(jump->branches().size());
+        return true;
       };
       for (auto &[addr, expected]: candidates) {
         auto it = jumps.find(addr);
@@ -811,7 +840,10 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
           grown.insert(current.begin(),current.end());
           if(grown.size()>hints.indirectTargets->maxTargets())current.clear();
           else {
-            if(grown!=expected) {addTargets(addr,grown);expected=std::move(grown);expanded=true;}
+            if(grown!=expected) {
+              if(!addTargets(addr,grown))return;
+              expected=std::move(grown);expanded=true;
+            }
             continue; // Retaining extra proved edges is a safe over-approximation.
           }
         }
@@ -854,7 +886,7 @@ void dragon::x86::X86Analysis::resolveIndirectJumps(
         candidates.emplace(addr, targets);
         logger_.log("Tentative indirect jump @ 0x{:x}: {} targets", addr,
                     targets.size());
-        addTargets(addr,targets);
+        if(!addTargets(addr,targets))return;
         changed = true;
       }
       if (changed) {

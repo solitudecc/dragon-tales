@@ -2,6 +2,12 @@ add_executable(dragon_tests
         TestMain.cpp
         disassemblers/TestDisassembler.cpp
         disassemblers/TestX86Analysis.cpp
+        disassemblers/TestTableContents.cpp
+        disassemblers/TestInferredBranches.cpp
+        disassemblers/TestARMTableClosure.cpp
+        disassemblers/TestARMCaseMembership.cpp
+        disassemblers/TestTableContentBudgets.cpp
+        disassemblers/TestX86DecodeClosure.cpp
         disassemblers/TestFiniteDispatch.cpp
         disassemblers/TestCallEffectSafety.cpp
         disassemblers/TestX86IGNILLifter.cpp
@@ -13,6 +19,7 @@ add_executable(dragon_tests
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
         analysis/TestFiniteValues.cpp
+        analysis/TestFiniteMemory.cpp
         analysis/TestSwitchDetector.cpp
         analysis/TestConstantValue.cpp
         analysis/TestIGNILSimplify.cpp
@@ -48,6 +55,8 @@ if(DRAGON_USE_UNICORN AND DRAGON_USE_Z3)
 endif()
 
 if(DRAGON_USE_UNICORN)
+    set_property(SOURCE disassemblers/TestX86DecodeClosure.cpp APPEND
+            PROPERTY COMPILE_DEFINITIONS DRAGON_WITH_UNICORN)
     target_sources(dragon_tests PRIVATE
         semantic/TestX86SemanticRoundTrip.cpp
         semantic/TestX86Div128.cpp
@@ -191,6 +200,12 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - Legacy unlifted inventory controls"
                  COMMAND ${Python3_EXECUTABLE}
                          ${PROJECT_SOURCE_DIR}/scripts/validation/legacy_unlifted_inventory.py --self-test)
+        add_test(NAME "Validation - table content Graph controls"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PROJECT_SOURCE_DIR}/scripts/validation/table_content_diff.py --self-test)
+        add_test(NAME "Validation - table content native controls"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PROJECT_SOURCE_DIR}/scripts/validation/table_content_native_diff.py --self-test)
         add_test(NAME "Validation - Legacy unlifted oracle controls"
                  COMMAND ${Python3_EXECUTABLE}
                          ${PROJECT_SOURCE_DIR}/scripts/validation/legacy_unlifted_diff.py --self-test)
