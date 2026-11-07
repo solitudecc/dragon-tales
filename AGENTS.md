@@ -207,6 +207,103 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+x86 effective-address width (2026-11-07, baseline `72c37b8`): see
+`docs/x86-effective-address-width.md`. Current candidate-v1 main `223b1239…` /
+no-Z3 `c408fe2f…` has completed component/native/reference, fresh-corpus and
+limited Tigress validation. Git finalization is tracked by the external receipt.
+Private AddressContext carries effective 16/32/64-bit width separately from 32/64-bit
+linear Guest pointers, data widths and implicit stack widths. Wrap base +
+scaled index + displacement first, then zero-extend once; subsequent vector,
+x87 and string data bytes span linearly. Strings update indices/count at
+effective width, retaining REP-zero and read-before-write. EIP aliases RIP
+privately; pin each complete instruction's next-PC before address arithmetic.
+Moffs is Imm + Segment, not a five-tuple: validate it separately in the new
+address-register gate. Only NoRegister/EIZ/RIZ mean zero; unknown real base/
+index stays unlifted. BT register bitstrings retain signed
+max(indexWidth,EAWidth) through word selection before truncating byte delta.
+POP reads old full SP, increments by data slot, then computes destination EA;
+PUSH reads its source before SP moves. Unsupported LEA16/word PUSH forms
+remain unlifted. No public ABI/Guest/opcode/Graph-strategy changes; segment
+guards stay in force.
+
+Main CTest 642/642, no Z3 510/510; component 10 cases / 10087 assertions pass,
+old same tests fail 75 assertions in 8/10 cases. No-Z3 component 3/212 passes.
+Sparse independent UC-vs-IGNIL/Z3: 76 trace configurations (x64 51 / i386 25),
+old 35 different / 41 match, new 76 match; these are not 76 LLVM functions or
+JIT roots. Native main: 26 fixtures × O0/O2 × 8 × six mode/strategy groups =
+2496 complete full-state roots. No-Z3 product-s0 only adds 416, not six no-Z3
+groups. All 76/52 modelled fields, PC/SP, 64 KiB and exact RootReturn compare;
+312 + 52 root Graph reports verify. Main ldd 324 = 312 matrix executables +
+eight controls + four old-extra executables; no-Z3 52 and old24 48 are separate.
+Result/memory controls: 32 each, exact one-bit/one-byte errors; zero new native exclusions/
+skips/normalizations. Old 416 comparisons are 128 root matches / 32 completed-root
+RAX differences / 256 MemoryBounds boundary differences. Old 24-fixture 384
+records were freshly executed on 7223 in this stage, frozen, then combined
+with extra two-fixture 32 fresh old records for audit; no prior-stage native
+cache. They are never new passes or 288 completed-root semantic failures.
+
+reference-audit.json (`5c3f4567…bc5322`) retains nine execution receipts/maps
+and all blind spots: single-x64 986 ok are templates (TRIALS=8; actual compare/
+fault totals unreported, not 7888 full matches); SSE 393 × fixed 60 = 23580
+reference trials, 700 unknown NaN fields. IGNIL raw/opt i386 each: 305 compared /
+15 faults, 22 outside writes un-compared; x64 each: 298/22, 37 high-memory and
+23 outside writes un-compared. Legacy i386 current/old each: 24 blocks retain
+two UC-fault skips, one unlifted skip and one DIFFERENT with byte-identical
+stdout. x64: 24 blocks, four high-address + one fault skips, zero DIFFERENT.
+The i386 0x43319d FXAM unnormal result is the prior Intel + Rosetta-confirmed
+Unicorn reference defect, with exact-seed state/bytes reconstructed; keep the
+raw difference, no new normalization. Block scripts omit unknown fields and
+limit memory coverage; rc0 is not full-state/whole-program compatibility.
+
+Corpus execution completed: baseline/new each 69 fresh Graph inputs / 138
+strategies; new raw V2 verifies 205406 valid-function checkpoints / 1675 modules
+(chunk 128, LLVM_OPTIMIZE=0). Old LLVM not rerun, prior-stage raw reuse zero,
+no full optimized/static corpus. Old/new markers both 233134; warning counters
+6 missingIGNIL / 26 undecoded-edge / 3 invalid / 0 empty-symbol / 146 objdump
+missing unchanged. Driver records 60 changed canonical strategy graphs / 3440
+kind-2 block records. Independent corpus-forward-audit.json (SHA256
+f1c57a8082fbefe75d954809f061a68f3ad1a33e4d8c34422d938ef7332da05e) verifies
+255 source identities and complete coverage/definition sets: 3796 PC-level
+changes are strictly same-width string-pointer COPY insertion + temp renumbering,
+zero hardware/CFG/target/member/unlifted/warning changes or unexplained rewrites.
+All 14 TLS observations remain unresolved with unchanged instruction records:
+seven input-local PC sites / four Lua ELFs / eight strategy graphs, not recovery.
+Deleted full canonical streams/raw IR were not independently recomputed or
+reverified by the audit; retained payload/count/provenance checks are not CPU
+semantic proof or general compatibility.
+
+Retain resource history: one 512 MiB disk-guard stop before worker22, one
+normal resume refusal of its empty001 (reviewed, then explicit --retry-failed),
+and input66 worker SIGKILL(-9) coinciding with a kernel Python OOM event.
+The frozen worker did not save its child PID: do not claim a saved-PID identity
+proof. Preserve partial001, journal and storage/recovery receipts. Its
+362429756-byte IR verifies standalone and matches retry recursive module8's
+hash/size, but is not an extra successful module or whole-input pass. Retain 22
+verified partial modules (14 linear / eight recursive) separately from unique
+1675 coverage. Attempts were hash-verified through tmpfs/disk relocations,
+logical/physical keys retained via symlinks; final disk TMPDIR recovery used
+the same v1 worker/plan1db3302a…ee3a08/checker/chunk/budgets/guard. No observer
+v2 or relaxed checks; all 62 remaining real opt module paths use disk TMPDIR.
+The first 65 completed same-stage records were rehashed
+on resume, not prior-stage LLVM cache. IR validity is not CPU semantics.
+
+Limited frozen Tigress smoke completed: six ELFs × two strategies × 24 inputs ×
+one product-O0 FunctionStart plan, 288 complete LLVM roots + 288 C matches;
+real megaInit and full 1 MiB memory (64 KiB heap), no heap snapshot. Each of six
+groups has outer rc0, independent 48-snapshot full-state/RootReturn/PC-SP/code
+audit, gate, archive member SHA and owned-raw cleanup. CFG wrong, unlifted,
+executed-undecoded and incomplete all zero. Ordinary goto/indirect and the
+six-plan matrix were not rerun; old 960 incomplete is not this stage's count.
+No deobfuscation-gain claim. Image-table
+content/alias/immutability certificates and Legacy whole-function unlifted
+rejection remain unimplemented; generic opaque snapshot prototype stays
+withdrawn. No new heap/deflat/VM/binary rewriting. Artifacts:
+`~/vmc-runs/x86-addressing-20261107/` and Mac
+`/Users/c/Desktop/deob/validation-artifacts/x86-addressing-20261107/`.
+Use only owned `~/dragon-tales-overlap`, one heavy VM worker; candidate-v1 and
+prior-stage artifacts are immutable; all stage execution/audit records retain
+their stated limits and resource history.
+
 x86 segmented-memory hardening (2026-11-06/07, baseline `b95c84b`): see
 `docs/x86-segmented-memory.md`. Production/tests/fixture `359df9a` are validated;
 final Git state is recorded in the external receipt. Hardened DSOs are

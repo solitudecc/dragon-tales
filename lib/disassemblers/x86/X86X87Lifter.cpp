@@ -261,7 +261,7 @@ struct X87IR {
 };
 } // namespace
 
-bool X86IGNILLifter::liftX87(const Instruction &instruction,ignil::Block &out,std::uint32_t &next) const {
+bool X86IGNILLifter::liftX87(const Instruction &instruction,const AddressContext &context,ignil::Block &out,std::uint32_t &next) const {
   const auto *mc=instruction.mcInst();
   if (!mc) return false;
   const std::string name=instrInfo_->getName(mc->getOpcode()).str();
@@ -301,12 +301,12 @@ bool X86IGNILLifter::liftX87(const Instruction &instruction,ignil::Block &out,st
     return true;
   }
   X87IR b{out,next,address};
-  const W pointerWidth=architecture_==Architecture::X86_64 ? (hasAddressSizePrefix(instruction) ? 32 : 64) : (hasAddressSizePrefix(instruction) ? 16 : 32);
+  const W pointerWidth=context.pointerWidth;
   auto memory=[&]() -> V {
-    const bool unknownBase=(mc->getOperand(0).getReg() && !toReg(mc->getOperand(0).getReg())) ||
-                           (mc->getOperand(2).getReg() && !toReg(mc->getOperand(2).getReg()));
+    const bool unknownBase=(!zeroAddressRegs_.contains(mc->getOperand(0).getReg()) && !toReg(mc->getOperand(0).getReg())) ||
+                           (!zeroAddressRegs_.contains(mc->getOperand(2).getReg()) && !toReg(mc->getOperand(2).getReg()));
     if (unknownSegment || unknownBase) { out.noteUnlifted(address);return b.emit(O::UNDEF,{},pointerWidth); }
-    return emitAddress(*mc,0,pointerWidth,address,out,next);
+    return emitAddress(*mc,0,context,address,out,next);
   };
   auto load=[&](W width) { return b.emit(O::LOAD,{memory()},width); };
   auto store=[&](V value) { out.append({O::STORE,std::nullopt,{memory(),value},address}); };

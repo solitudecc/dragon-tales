@@ -1,0 +1,282 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x64_addr32_sib_load",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "67488b0490c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688496,
+        "RDX": 4837147474772626436
+      }
+    },
+    {
+      "id": "x64_addr32_store_wrap",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "6748c7801030000078563412c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688496
+      }
+    },
+    {
+      "id": "x64_addr32_rmw_wrap",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "674883801030000001c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688496
+      }
+    },
+    {
+      "id": "x64_addr32_xadd_wrap",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "67480fc19010300000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688496
+      }
+    },
+    {
+      "id": "x64_addr32_sse_load",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "670f108010300000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688496
+      }
+    },
+    {
+      "id": "x64_addr32_sse_store",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "670f118010300000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688496
+      }
+    },
+    {
+      "id": "x64_addr32_lea_no_register",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "67488d0425f0ffffffc3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x64_addr32_eip_relative",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "67488d05f0ffffffc3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x64_addr32_moffs_load",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "6748a100300000c3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x64_addr32_moffs_store",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "6748a300300000c3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "x64_addr32_bt_word_wrap",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "670fa3080f92c283c000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688508,
+        "RCX": 32
+      }
+    },
+    {
+      "id": "x64_addr32_bts_word_wrap",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "67480fab080f92c283c000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "RAX": 1311768469162688504,
+        "RCX": 64
+      }
+    },
+    {
+      "id": "x64_addr32_pop_after_increment",
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "code_hex": "50678f442410c3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "i386_addr16_base_index_load",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "678b00c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ESI": 305410052
+      }
+    },
+    {
+      "id": "i386_addr16_base_index_store",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "678900c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ESI": 305410052
+      }
+    },
+    {
+      "id": "i386_addr16_base_index_xadd",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "670fc100c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ESI": 305410052
+      }
+    },
+    {
+      "id": "i386_addr16_sse_load",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "670f1000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ESI": 305410052
+      }
+    },
+    {
+      "id": "i386_addr16_sse_store",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "670f1100c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ESI": 305410052
+      }
+    },
+    {
+      "id": "i386_addr16_moffs_load",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "67a10030c3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "i386_addr16_moffs_store",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "67a30030c3",
+      "undefined_flags": [],
+      "stubs": []
+    },
+    {
+      "id": "i386_addr16_bt_word_wrap",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "670fa30f0f92c283c000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ECX": 32
+      }
+    },
+    {
+      "id": "i386_addr16_bts_wide_index",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "670fab0f0f92c283c000c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 305397760,
+        "ECX": 65536
+      }
+    },
+    {
+      "id": "i386_addr16_lea",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "678d00c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 2882404348,
+        "ESI": 305410052
+      }
+    },
+    {
+      "id": "i386_addr16_pop_after_increment",
+      "architecture": "x86_32",
+      "expectation": "complete",
+      "code_hex": "50678f4704c3",
+      "undefined_flags": [],
+      "stubs": [],
+      "set_gprs": {
+        "EBX": 305410048
+      }
+    },
+    {
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "undefined_flags": [],
+      "stubs": [],
+      "id": "x64_addr32_memory_jump",
+      "code_hex": "b8fcffffff6748c740084010000067ff6008ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb844332211c3"
+    },
+    {
+      "architecture": "x86_64",
+      "expectation": "complete",
+      "undefined_flags": [],
+      "stubs": [],
+      "id": "x64_addr32_memory_call",
+      "code_hex": "b8fcffffff6748c740080020000067ff5008c3",
+      "local_functions": [
+        {
+          "address": 8192,
+          "code_hex": "b878563412c3"
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ add_executable(dragon_tests
         disassemblers/TestCallEffectSafety.cpp
         disassemblers/TestX86IGNILLifter.cpp
         disassemblers/TestX86Segments.cpp
+        disassemblers/TestX86Addressing.cpp
         disassemblers/TestARMAnalysis.cpp
         disassemblers/TestARMIGNILLifter.cpp
         disassemblers/TestTraceLifter.cpp
@@ -42,7 +43,7 @@ if(DRAGON_USE_Z3)
 endif()
 
 if(DRAGON_USE_UNICORN AND DRAGON_USE_Z3)
-    target_sources(dragon_tests PRIVATE semantic/TestX86Strings.cpp semantic/TestIGNILOptimizer.cpp)
+    target_sources(dragon_tests PRIVATE semantic/TestX86Strings.cpp semantic/TestIGNILOptimizer.cpp semantic/TestX86Addressing.cpp)
 endif()
 
 if(DRAGON_USE_UNICORN)

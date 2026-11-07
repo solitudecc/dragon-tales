@@ -78,6 +78,14 @@ class X86IGNILLifter {
   liftTrace(std::span<const Instruction> trace) const;
 
   private:
+  // Effective offsets wrap before they are zero-extended to a linear Guest
+  // pointer. Data width and implicit stack width are independent of both.
+  struct AddressContext {
+    ignil::Width effectiveWidth;
+    ignil::Width pointerWidth;
+  };
+  [[nodiscard]] AddressContext addressContext(const Instruction &insn) const;
+
   // Integer instructions with a memory operand not covered by a dedicated
   // lifter, classified by opcode name in the constructor (see
   // liftMemOperandForm).
@@ -143,6 +151,8 @@ class X86IGNILLifter {
   // the original memory operand before scratch-register rewriting loses it.
   [[nodiscard]] bool hasUnmodelledMemorySegment(const llvm::MCInst &mc) const;
   std::unordered_set<unsigned> unmodelledSegmentRegs_;
+  [[nodiscard]] bool hasUnmodelledAddressRegisters(const llvm::MCInst &mc) const;
+  std::unordered_set<unsigned> zeroAddressRegs_{0}; // NoRegister / EIZ / RIZ
   void liftUnsupported(const llvm::MCInst &mc, std::uint64_t addr,
                        ignil::Block &out, std::uint32_t &tmp) const;
 
@@ -151,25 +161,25 @@ class X86IGNILLifter {
   /// memory INC/DEC, accumulator XCHG, MOV8ri_alt, LAHF/SAHF). Returns true if
   /// it handled the opcode. Separated from liftInstruction's main else-if
   /// chain so the chain stays under MSVC's block-nesting limit (C1061).
-  [[nodiscard]] bool liftExtendedForm(unsigned opc, const llvm::MCInst &mc,
+  [[nodiscard]] bool liftExtendedForm(unsigned opc, const llvm::MCInst &mc, const AddressContext &context,
                                       std::uint64_t addr, ignil::Block &out,
                                       std::uint32_t &tmp) const;
 
   // Per-opcode lifting helpers
   // Generic lifter for memOperandOps_: load the memory operand, apply the
   // operation with the same flag rules as the register forms, store back.
-  void liftMemOperandForm(const llvm::MCInst &mc, const MemOperandOp &op,
+  void liftMemOperandForm(const llvm::MCInst &mc, const AddressContext &context, const MemOperandOp &op,
                           std::uint64_t addr, ignil::Block &out,
                           std::uint32_t &tmp) const;
 
-  void liftSse(const llvm::MCInst &mc, const SseOp &op, std::uint64_t addr,
+  void liftSse(const llvm::MCInst &mc, const AddressContext &context, const SseOp &op, std::uint64_t addr,
                ignil::Block &out, std::uint32_t &tmp) const;
 
   void liftMov(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
-  void liftMovLoad(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftMovLoad(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                    ignil::Block &out, std::uint32_t &tmp) const;
-  void liftMovStore(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftMovStore(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                     ignil::Block &out, std::uint32_t &tmp) const;
   void liftAdd(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
@@ -179,24 +189,24 @@ class X86IGNILLifter {
   // op[5]=reg-or-imm(rhs). Loads the current value, computes the result,
   // writes it back to the same address, then sets flags exactly like the
   // register form.
-  void liftAddMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftAddMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                   ignil::Block &out, std::uint32_t &tmp) const;
-  void liftSubMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftSubMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                   ignil::Block &out, std::uint32_t &tmp) const;
   // reg += [mem] / reg -= [mem]: op[0]=dst(out), op[1]=src1(tied=dst),
   // op[2..6]=mem(rhs). Loads rhs, then the same ADD/SUB + flags as the rr
   // form. Found by scripts/audit_x86_lifter_coverage.py - the reg,mem
   // direction of the same gap class as liftAddMem/liftSubMem.
-  void liftAddRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftAddRegMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp) const;
-  void liftSubRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftSubRegMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp) const;
   // reg op= [mem] for an XOR, AND or OR `op`, with the rr forms' flags.
-  void liftLogicRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftLogicRegMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                        ignil::Block &out, std::uint32_t &tmp,
                        ignil::Opcode op) const;
   // [mem] op= reg-or-imm, as liftLogicRegMem.
-  void liftLogicMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftLogicMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                     ignil::Block &out, std::uint32_t &tmp,
                     ignil::Opcode op) const;
   void liftXor(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
@@ -208,12 +218,12 @@ class X86IGNILLifter {
   void liftPush(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
   // PUSH [mem]: load, then as liftPush.
-  void liftPushMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftPushMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                    ignil::Block &out, std::uint32_t &tmp) const;
   void liftPop(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   // POP [mem]: as liftPop, then the store.
-  void liftPopMem(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+  void liftPopMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr, ignil::Block &out,
                   std::uint32_t &tmp) const;
   // POPFQ/PUSHFQ: pop RFLAGS off / push RFLAGS onto the stack, spreading the
   // popped value across (or gathering) the individual modeled flag registers.
@@ -232,17 +242,17 @@ class X86IGNILLifter {
                    ignil::Block &out, std::uint32_t &tmp) const;
   void liftPopSeg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                   std::uint32_t &tmp) const;
-  void liftLea(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+  void liftLea(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   void liftCmp(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                std::uint32_t &tmp) const;
   // CMP reg,mem: op[0]=reg(lhs), op[1..5]=mem(rhs). Loads rhs, discards the
   // SUB result, keeps the flags - same as liftCmp but rhs comes from memory.
-  void liftCmpRegMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftCmpRegMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp) const;
   // CMP mem,reg / CMP mem,imm: op[0..4]=mem(lhs), op[5]=reg-or-imm(rhs).
   // Loads lhs, discards the SUB result, keeps the flags.
-  void liftCmpMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftCmpMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                   ignil::Block &out, std::uint32_t &tmp) const;
   void liftTest(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
@@ -259,18 +269,17 @@ class X86IGNILLifter {
                 std::uint8_t insnSize, bool addressSizePrefix,
                 ignil::Block &out, std::uint32_t &tmp) const;
   // Whether `insn` carries a 0x67 among its legacy prefixes.
-  static bool hasAddressSizePrefix(const Instruction &insn);
-  bool liftString(const Instruction &insn,ignil::Block &out,std::uint32_t &tmp) const;
-  bool liftX87(const Instruction &insn,ignil::Block &out,std::uint32_t &tmp) const;
+  bool liftString(const Instruction &insn,const AddressContext &context,ignil::Block &out,std::uint32_t &tmp) const;
+  bool liftX87(const Instruction &insn,const AddressContext &context,ignil::Block &out,std::uint32_t &tmp) const;
   std::unordered_map<unsigned,unsigned> x87StackIndex_;
   std::unordered_set<unsigned> mmxRegisters_;
   void liftJmp(const llvm::MCInst &mc, std::uint64_t addr,
                std::uint8_t insnSize, ignil::Block &out,
                std::uint32_t &tmp) const;
-  void liftJmpMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftJmpMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                   std::uint8_t insnSize, ignil::Block &out,
                   std::uint32_t &tmp) const;
-  void liftCallMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftCallMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                    std::uint8_t insnSize, ignil::Block &out,
                    std::uint32_t &tmp) const;
   void liftCall(const llvm::MCInst &mc, std::uint64_t addr,
@@ -298,7 +307,7 @@ class X86IGNILLifter {
   // program that divides by a non-power-of-two constant. The memory-source
   // forms matter for bytecode dispatchers, where `movzx r32, [vip]` feeding
   // a handler-table index is the canonical opcode fetch.
-  void liftMovExtend(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftMovExtend(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                      MovExtendForm form, bool signExtend, ignil::Block &out,
                      std::uint32_t &tmp) const;
   // SAR by immediate: op[0]=dst(out), op[1]=src(tied=dst), op[2]=imm shift
@@ -320,14 +329,9 @@ class X86IGNILLifter {
   // guessed, likely-wrong formula.
   void liftImulImm(const llvm::MCInst &mc, std::uint64_t addr,
                    ignil::Block &out, std::uint32_t &tmp) const;
-  // LEA computing a 64-bit address expression but writing only the 32-bit
-  // low half of the destination (e.g. `lea eax, [rdx+rcx*1]` - address
-  // registers are 64-bit, destination is 32-bit). Unlike liftLea, this
-  // needs an explicit TRUNC: LLVMLifter's Reg-destination COPY only
-  // widens (CreateZExt) when the source is narrower than the slot, and
-  // would build invalid IR (or assert) if asked to narrow a 64-bit value
-  // into a 32-bit slot directly.
-  void liftLeaTrunc32(const llvm::MCInst &mc, std::uint64_t addr,
+  // LEA whose destination width differs from its effective-address width
+  // (e.g. lea eax,[rdx+rcx]). Resize explicitly before the register COPY.
+  void liftLeaTrunc32(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                       ignil::Block &out, std::uint32_t &tmp) const;
   // INC/DEC: op[0]=dst(out), op[1]=src(tied=dst), no immediate - implicit
   // +-1. Real x86: CF is left completely untouched (no Op emitted for it
@@ -387,7 +391,7 @@ class X86IGNILLifter {
   // A zero count leaves every flag untouched, so CF/ZF/SF are merged with
   // their old value under an isZero mask; OF (count==1 only), PF and AF are
   // UNDEF. With memWidth the destination is memory (op[0..4]).
-  void liftShiftCL(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftShiftCL(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                    ignil::Block &out, std::uint32_t &tmp, ignil::Opcode shift,
                    std::optional<ignil::Width> memWidth = std::nullopt) const;
   // CBW/CWDE/CDQE sign-extend within RAX; CWD/CDQ/CQO sign-fill (R/E)DX
@@ -438,7 +442,7 @@ class X86IGNILLifter {
   // are not touched at all - a rotate does not disturb them. op[0]=dst(out),
   // op[1]=src(tied=dst), [op[2]=imm8] for the ri form. With memWidth the
   // destination is memory (op[0..4], [op[5]=imm8]).
-  void liftRotate(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
+  void liftRotate(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr, ignil::Block &out,
                   std::uint32_t &tmp, bool left, ShiftCount count,
                   std::optional<ignil::Width> memWidth = std::nullopt) const;
   // RCL/RCR by imm8 or by the implicit 1 (the CL forms stay unlifted: a
@@ -482,7 +486,7 @@ class X86IGNILLifter {
   // outcome). op[0]=dst(out), op[1]=src(tied=dst), op[2]=bit index(reg/imm8).
   // With memWidth the destination is memory (op[0..4], op[5]=imm8 only; a
   // register index would address a bit string).
-  void liftBitModify(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftBitModify(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp, BitOp op,
                      std::optional<ignil::Width> memWidth = std::nullopt) const;
   // CMOVcc r,r: dst = cond ? src : dst. IGNIL has no select, so the result is
@@ -498,7 +502,7 @@ class X86IGNILLifter {
                 std::uint32_t &tmp) const;
   // INC/DEC with a memory destination: load, +/- 1, store back, then the same
   // flags as the register INC/DEC (CF deliberately untouched). op[0..4]=mem.
-  void liftIncDecMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftIncDecMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                      ignil::Block &out, std::uint32_t &tmp, bool dec) const;
   // LAHF: AH = SF:ZF:0:AF:0:PF:1:CF (the low byte of RFLAGS). SAHF: set
   // SF/ZF/AF/PF/CF from the matching bits of AH. No other state changes.
@@ -523,7 +527,7 @@ class X86IGNILLifter {
   void liftXchg(const llvm::MCInst &mc, std::uint64_t addr, ignil::Block &out,
                 std::uint32_t &tmp) const;
   // XCHG [mem], r: swap a register with memory (no flags).
-  void liftXchgMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftXchgMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                    ignil::Block &out, std::uint32_t &tmp) const;
   // BSWAP r32/r64: reverse the byte order (no flags). Built from
   // shift/and/or since IGNIL has no byte-swap primitive.
@@ -567,7 +571,7 @@ class X86IGNILLifter {
   // liftAddRegMem's shape (e.g. `mulsd xmm0, [rip+K]`, multiplying by a
   // compile-time double literal - ordinary code, not obfuscation-specific,
   // same story as item 15's division-by-constant lowering).
-  void liftMulsdMem(const llvm::MCInst &mc, std::uint64_t addr,
+  void liftMulsdMem(const llvm::MCInst &mc, const AddressContext &context, std::uint64_t addr,
                     ignil::Block &out, std::uint32_t &tmp) const;
   // op[0]=dst(GPR), op[1]=src(xmm) - not a tied form (an integer
   // destination has no partial-register-merge concern here).
@@ -592,12 +596,22 @@ class X86IGNILLifter {
 
   // Decode the 5-operand x86 memory reference starting at
   // mc.getOperand(opStart) (base, scale, index, disp, seg) and emit the
-  // arithmetic ops that compute the effective address, returning the Temp that
-  // holds the result.
+  // arithmetic ops that wrap at effectiveWidth before zero-extending to the
+  // linear pointerWidth. Subsequent accesses within a value stay contiguous.
   [[nodiscard]] ignil::Temp emitAddress(const llvm::MCInst &mc,
-                                        unsigned opStart, ignil::Width ptrWidth,
+                                        unsigned opStart, const AddressContext &context,
                                         std::uint64_t addr, ignil::Block &out,
                                         std::uint32_t &tmp) const;
+
+  [[nodiscard]] ignil::Temp emitEffectiveOffset(const llvm::MCInst &mc,
+      unsigned opStart, const AddressContext &context, std::uint64_t addr,
+      ignil::Block &out, std::uint32_t &tmp) const;
+  [[nodiscard]] ignil::Temp linearizeOffset(ignil::Value offset,
+      const AddressContext &context, std::uint64_t addr, ignil::Block &out,
+      std::uint32_t &tmp) const;
+  [[nodiscard]] ignil::Temp resizeAddressValue(ignil::Value value,
+      ignil::Width width, std::uint64_t addr, ignil::Block &out,
+      std::uint32_t &tmp) const;
 
   // Emit ops that compute the 1-bit boolean condition for a Jcc from the
   // current flag registers. condCode is the LLVM x86 CondCode immediate
@@ -922,7 +936,7 @@ class X86IGNILLifter {
     bool scalar = false;
   };
   std::unordered_map<unsigned, VecOp> vecOps_;
-  void liftVec(const llvm::MCInst &mc, const VecOp &op, std::uint64_t addr,
+  void liftVec(const llvm::MCInst &mc, const AddressContext &context, const VecOp &op, std::uint64_t addr,
                ignil::Block &out, std::uint32_t &tmp) const;
   /// LLVM XMM/YMM/ZMM register -> index n of XMMn (for the high halves and
   /// for clobbering both halves when an unlifted instruction writes one).
@@ -950,7 +964,7 @@ class X86IGNILLifter {
   /// the prologue (address, save, load). nullopt (and nothing emitted) when
   /// no scratch register is free or the operands do not match.
   std::optional<llvm::MCInst>
-  rewriteThroughScratch(const llvm::MCInst &mc, const MemViaReg &form,
+  rewriteThroughScratch(const llvm::MCInst &mc, const AddressContext &context, const MemViaReg &form,
                         std::uint64_t addr, ignil::Block &out,
                         std::uint32_t &tmp, ScratchState &state) const;
   ignil::Reg regRBP_{}, regEBP_{}; // needed for leave decomposition
