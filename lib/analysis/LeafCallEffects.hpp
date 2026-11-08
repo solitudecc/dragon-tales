@@ -17,14 +17,23 @@ struct CallBinding {
   std::uint64_t value = 0;
   auto operator<=>(const CallBinding &) const = default;
 };
+struct CallMemoryBinding {
+  // Address relative to callee-entry SP, modulo the machine pointer width.
+  std::uint64_t offset = 0;
+  ignil::Width width = 0;
+  CallBinding::Kind kind = CallBinding::Constant;
+  std::uint64_t value = 0;
+  auto operator<=>(const CallMemoryBinding &) const = default;
+};
 struct CallContext {
   std::vector<CallBinding> bindings;
+  std::vector<CallMemoryBinding> memory;
   // Optional actual callee-entry SP, used only to recognize numeric addresses.
   // The symbolic value of SP itself remains EntrySPRelative(0).
   std::optional<std::uint64_t> entrySP;
   auto operator<=>(const CallContext &) const = default;
 };
-// One fact per binding descriptor plus its bytes, and one for a present entrySP.
+// One fact per register/memory descriptor plus its bytes, and one for entrySP.
 // Returns 8193 when the hard context cap is exceeded, without unbounded work.
 std::uint32_t contextFacts(const CallContext &);
 // Bounded, canonical owned contexts: only actual x86 register-file extents;
@@ -34,6 +43,9 @@ bool canonicalizeCallContext(CallContext &,Architecture);
 // of termination, fault freedom, ABI preservation or a callee result value.
 struct LeafCallProof {
   bool proven = false;
+  // Precision hint only: an entry-memory read could not be made concrete.
+  // It never weakens the effect/return proof or independently asserts a value.
+  bool needsMemoryContext = false;
   std::uint32_t operations = 0;
   std::vector<std::uint32_t> clobberedBytes;
   // Byte offsets relative to callee-entry SP, modulo the machine pointer width.

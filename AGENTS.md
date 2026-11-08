@@ -207,6 +207,76 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Caller-memory inputs and determinate CFG loops (2026-11-08, baseline `90da1f8`):
+see `docs/call-memory-loops.md`. Existing opt-in proved-call effects now pass
+proved memory byte constants/full SP-relative pointers, within the callee-SP
+1MiB window, to root/nested callees. Fresh machine-CALL return slots are never
+seeded. Missing bytes, different spaces and truncated pointers stay unknown;
+i386 high numeric memory must not wrap into low addresses. Both cache keys
+include complete canonical memory. Unknown LOAD precision can retry an already
+proved universal effect; failed specialization retains safe universal effects,
+with actual numeric decoded-code write footprints rechecked before applying.
+
+Exact CFG interpretation follows only completely known one-bit CJMP conditions
+whose machine targets and Graph successors match. Iterations do not merge;
+real RET/restored SP and all write checks are required. Unknown/failing exact
+paths discard their state and restart the original all-successor fixed point;
+both attempts share the4096 operation cap. No sampled prefix publication,
+runtime snapshots, API-name models, generic symbolic-count loops or REP support.
+Only actual written bytes can export final memory constants. All input/cache
+ownership and construction remain budgeted; default false/public ABI unchanged.
+
+Also fixes numeric SP restoration: old summaries installed callee entry SP into
+caller (c7fc/c7f8 instead of CPU c800). Actual machine-SP bytes normalize only
+after restoration proof; i386 upper parent effects remain. CALL cache growth
+now includes live SSA temps in the global fact check. Formal budget regression
+replaces existing IR in place and asserts25ops/CALL23; same exe old18assert/
+4fail vs new18pass. Old budget v1/v2 emplace-injection failures are withdrawn
+as product evidence, preserved with an incident record; do not count them.
+
+Old matching90da SDK compiles nine memory cases:5fail/4pass,5/142 assertions
+fail; fatal REQUIRE limits actual old variant coverage. Separate safety/UC
+three-case run:15/89 fail (12fixed-code gate,2wrong i386 direct SP,1nested
+Unknown fatal); all4 UC scalar SP/PC/code controls pass. x64 old wrong SP is
+also confirmed by independent old API/UC probes, not all old permanent variants.
+Before self-XOR completion, main/no-Z3 each pass27 related cases/2112 assertions
+(13new/1018), CTest742/742 and610/610. Those libraries and earlier mainv1/v2
+logs are pre-selfxor evidence, not final stage coverage. Same-snapshot XOR
+is proved only for matching register bytes or a defined equal-width Temp;
+different Unknown values must not compare as identities. Caller use of this
+rule is gated by prove_leaf_calls, preserving default finite-mode behavior.
+Final selfxor main/no-Z3 each pass29 related cases/2234 assertions (15new/1140),
+CTest744/744 and612/612. Old90da same public identity TU compiles:2cases,
+112assert/10fail (8caller/helper sameReg,2defined sameTemp capability gaps);
+different Unknown/missingTemp/mixedwidth/defaultoff controls pass. Two separate
+selfxor machine fixtures have16 full CPU boundary-input matches; their native
+default random-memory profile is different and recorded separately. Direct
+previous635ec961 product64 stays incomplete;4pilot separate, do not mix its
+baseline identity with the original22/90da704 matrix.
+Final native:24fixtures/two strategies/O0-O2/eight inputs, main V2/static/
+product2304 +no-Z3 product768 =3072 complete root matches; all52/76 modelled
+fields/64KiB/PC/SP/seven Exit fields, zero incomplete/differences/infra/
+exclusions/skips/normalizations. Result/memory/empty-singleton-edge native
+controls each detect48/48; edge control raw execution still matches. These
+144controls, old90da704/pre63564 incomplete and duplicate4+4pilots are separate.
+Final each configuration has44 loop+4selfxor exact read-only API targets,
+unchanged Graph fingerprints. Real conditional TG each gives24Finite/168Unknown:
+1004f24F/72U,1011b96U;4/16reports complete,12 hit unchanged1M operations cap.
+All report global-site counters are1proven/1rejected; pre635 was0/2 and all16
+complete/192Unknown. This is limited conditional-value gain plus significant
+resource cost, not default/full TG recovery. Real memset retained; no megaInit
+or injected heap snapshot. Cache-context relevance/caller-loop growth remain.
+Final22groups all sealed/cleaned separately under /tmp UID1000 usrquota guards
+(not df alone), with>=64MiB quota reserve. One pre-selfxor static-s1 EDQUOT
+partial and sidecar integration errors are preserved, never final successes.
+The22 i386/x64 machine fixtures have176 independent full CPU returns, all52/76
+modelled fields plus64KiB/PC/SP/exits; result/memory/DF/emptyedge controls each
+detect176/176 and wrong snapshot-overlap targets16. Old same prove=true product
+matrix704 remains explicit incomplete;4 zero-loop pilot measurements separate.
+No fresh69-input or single-instruction campaign, heap/deflat or whole-program
+semantic claim. Artifacts: `~/vmc-runs/call-memory-loops-20261108/` and matching
+Mac validation-artifacts directory; only owned `~/dragon-tales-overlap` used.
+
 Caller-context stack effects (2026-11-08, baseline `5a57164`): see
 `docs/caller-context-memory.md`. Existing opt-in `prove_leaf_calls` can retry a
 failed universal x86 E8/C3 proof using caller-proved register byte constants,

@@ -1,5 +1,6 @@
 #include <dragon/analysis/FiniteValues.hpp>
 #include "LeafCallEffects.hpp"
+#include "SnapshotIdentity.hpp"
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
 #include <dragon/disassembler/Graph.hpp>
@@ -455,15 +456,34 @@ class Engine {
       if(proofFacts>limits.maxFacts) {failed=true;return nullptr;}
       return &it->second;
     };
-    // Universal successes retain the old precision and cost. Failed universal
-    // proofs can be retried only with a separately keyed, proved caller state.
+    // A universal proof can be sound but lose values read from caller memory.
+    // Only such reads request a precision retry after a universal success.
+    // A failed specialization must not discard a sound universal fallback.
     const auto *proof=lookup({});
     if(!proof)return reject();
-    if(!proof->proven) {
+    if(!proof->proven || proof->needsMemoryContext) {
+      const auto *universal=proof;
       auto context=callerContext(t.state,sp,stack,slot);
-      if(!context || failed || (context->bindings.empty() && !context->entrySP))return reject();
-      proof=lookup(*context);
-      if(!proof || !proof->proven)return reject();
+      if(failed)return reject();
+      if(context && (!context->bindings.empty() || !context->memory.empty() || context->entrySP) &&
+         (!universal->proven || !context->memory.empty())) {
+        const auto *specialized=lookup(*context);
+        if(failed)return reject();
+        if(specialized && specialized->proven)proof=specialized;
+      }
+      if(!proof->proven)return reject();
+    }
+    // Recheck the chosen effect at the actual call address. A failed numeric
+    // specialization must not let a universal fallback write into stale code.
+    for(auto base:slot.finite)for(auto offset:proof->stackWriteBytes) {
+      if(!spend())return reject();
+      const auto byte=(base+offset)&mask(width);
+      auto instruction=graph.listing().upper_bound(byte);
+      while(instruction!=graph.listing().begin()) {
+        --instruction;
+        if(byte-instruction->first>=15)break;
+        if(byte-instruction->first<instruction->second.bytes().size())return reject();
+      }
     }
     store(t.state,slot,Value{width});
     for(auto offset:proof->stackWriteBytes) {
@@ -515,6 +535,46 @@ class Engine {
       if(value.pointers.empty() && value.finite.size()==1)
         context.bindings.push_back({at,8,detail::CallBinding::Constant,value.finite.front()});
     }
+    // Transfer only facts proved in the same address space as this call's SP.
+    // The new machine CALL overwrites its return slot before the callee runs.
+    // Omitted/partly known bytes remain unknown, never zero-initialized.
+    auto contextSize=detail::contextFacts(context);
+    if(contextSize>8192)return {};
+    if(slotAddress)for(const auto &[key,value]:state.memory) {
+      if(!spend())return {};
+      if(!sameSpace(key.address,*slotAddress))continue;
+      auto relative=[&](unsigned index)->std::optional<std::uint64_t> {
+        const auto at=advance(key.address,index);
+        // Concrete slots in the engine use a 64-bit address space even in
+        // i386. Do not wrap unrelated high-address facts into low memory.
+        if(at.base==0 && at.offset>mask(sp.width))return {};
+        const auto offset=(at.offset-slotAddress->offset)&mask(sp.width);
+        if(offset<bytes(sp.width) ||
+           (offset>1048576 && offset<mask(sp.width)-1048575))return {};
+        return offset;
+      };
+      bool pointer=value.width==sp.width && value.finite.empty() && value.pointers.size()==1 &&
+          value.pointers.front().width==sp.width && sameSpace(value.pointers.front(),*slotAddress);
+      for(unsigned i=0;pointer && i<bytes(sp.width);++i) {
+        if(!spend())return {};
+        pointer=relative(i).has_value();
+      }
+      if(pointer) {
+        context.memory.push_back({*relative(0),sp.width,detail::CallBinding::EntrySPRelative,
+            (value.pointers.front().offset-slotAddress->offset)&mask(sp.width)});
+        contextSize+=1+bytes(sp.width);
+      } else for(unsigned i=0;i<bytes(key.width);++i) {
+        if(!spend())return {};
+        const auto at=relative(i);
+        if(!at)continue;
+        const auto part=extract(value,i*8,8);
+        if(part.pointers.empty() && part.finite.size()==1) {
+          context.memory.push_back({*at,8,detail::CallBinding::Constant,part.finite.front()});
+          contextSize+=2;
+        }
+      }
+      if(contextSize>8192)return {};
+    }
     if(!detail::canonicalizeCallContext(context,graph.architecture()))return {};
     const auto cost=detail::contextFacts(context);
     if(state.regs.size()+state.memory.size()+proofFacts+cost>limits.maxFacts) {
@@ -539,6 +599,11 @@ class Engine {
       if(!spend())return t;
       if(op.opcode==O::CALL) {
         if(!call(t,op)) {t.state.regs.clear();t.state.memory.clear();}
+        // CALL can grow the owned proof cache while block-local SSA snapshots
+        // are still live. It bypasses the destination-write check below.
+        if(t.temps.size()+t.state.regs.size()+t.state.memory.size()+proofFacts>limits.maxFacts) {
+          failed=true;return t;
+        }
         continue;
       }
       if(op.opcode==O::STORE) {
@@ -549,7 +614,12 @@ class Engine {
       if(!op.dst)continue;
       const W width=ignil::widthOf(*op.dst);
       Value v{width};
-      if(auto selected=select(op,t,definitions))v=std::move(*selected);
+      if(limits.proveLeafCalls && op.opcode==O::XOR && op.srcs.size()==2 &&
+          detail::sameSnapshot(op.srcs[0],op.srcs[1],[&](auto id,auto sourceWidth) {
+            const auto it=t.temps.find(id);
+            return it!=t.temps.end() && it->second.width==sourceWidth;
+          }))v=constant(0,width);
+      else if(auto selected=select(op,t,definitions))v=std::move(*selected);
       else if(op.opcode==O::COPY && op.srcs.size()==1)v=resize(operand(t,op.srcs[0]),width);
       else if(op.opcode==O::LOAD && op.srcs.size()==1)v=load(t.state,operand(t,op.srcs[0]),width);
       else if(op.srcs.size()==1 && (op.opcode==O::NEG || op.opcode==O::NOT ||

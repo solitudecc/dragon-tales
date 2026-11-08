@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "scope": "Two real E8/C3 callees; no names, snapshots or CPU observations supplied to target recovery.",
+  "cases": [
+    {
+      "id": "x86_32_call_self_xor",
+      "architecture": "x86_32",
+      "code_hex": "83ec40c744241000110000c7442414000000008d7c2410e8e4010000ff642410cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83c440b8070000008903c3cccccccccccccccccccccccccccccccccccccccccc83c440b8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8b4f108b571831c9c7040f20110000c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4124,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8b4f108b571831c9c7040f20110000c3"
+        }
+      ],
+      "self_xor": {
+        "pointer_width": 4,
+        "frame_size": 64,
+        "slot_offset": 16,
+        "call_site": 4119,
+        "index_register_offset": 8,
+        "other_register_offset": 16,
+        "load_offsets": [
+          16,
+          24
+        ],
+        "self_xor_PC": 4614,
+        "store_PC": 4616,
+        "case_RET_offset": 10,
+        "initial_API_facts": false,
+        "scope": "Unknown stack loads precede same-register XOR. Only caller machine stores initialize the8-byte destination. Case ADD SP,0x40 overwrites XOR arithmetic flags before final observation."
+      }
+    },
+    {
+      "id": "x86_64_call_self_xor",
+      "architecture": "x86_64",
+      "code_hex": "4883ec4048c744241000110000488d7c2410e8e9010000ff642410cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc4883c440b8070000008903c3cccccccccccccccccccccccccccccccccccccccc4883c440b8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc448b4710448b4f184531c042c7040720110000c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4119,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "448b4710448b4f184531c042c7040720110000c3"
+        }
+      ],
+      "self_xor": {
+        "pointer_width": 8,
+        "frame_size": 64,
+        "slot_offset": 16,
+        "call_site": 4114,
+        "index_register_offset": 64,
+        "other_register_offset": 72,
+        "load_offsets": [
+          16,
+          24
+        ],
+        "self_xor_PC": 4616,
+        "store_PC": 4619,
+        "case_RET_offset": 11,
+        "initial_API_facts": false,
+        "scope": "Unknown stack loads precede same-register XOR. Only caller machine stores initialize the8-byte destination. Case ADD SP,0x40 overwrites XOR arithmetic flags before final observation."
+      }
+    }
+  ]
+}

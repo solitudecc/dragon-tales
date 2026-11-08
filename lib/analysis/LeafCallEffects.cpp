@@ -1,6 +1,8 @@
 #include "LeafCallEffects.hpp"
+#include "SnapshotIdentity.hpp"
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
+#include <llvm/ADT/APInt.h>
 #include <algorithm>
 #include <compare>
 #include <deque>
@@ -12,9 +14,14 @@
 
 namespace dragon::analysis::detail {
 std::uint32_t contextFacts(const CallContext &context) {
-  if(context.bindings.size()>8192)return 8193;
+  if(context.bindings.size()>8192 || context.memory.size()>8192 ||
+     context.bindings.size()+context.memory.size()>8192)return 8193;
   std::uint32_t facts=context.entrySP?1u:0u;
   for(const auto &binding:context.bindings) {
+    facts+=1+(unsigned(binding.width)+7)/8;
+    if(facts>8192)return 8193;
+  }
+  for(const auto &binding:context.memory) {
     facts+=1+(unsigned(binding.width)+7)/8;
     if(facts>8192)return 8193;
   }
@@ -45,6 +52,21 @@ bool canonicalizeCallContext(CallContext &context,Architecture architecture) {
     } else if(binding.kind==CallBinding::Constant) {
       if(binding.width<64 && binding.value>=(std::uint64_t{1}<<binding.width))return false;
     } else return false;
+  }
+  std::sort(context.memory.begin(),context.memory.end());
+  std::set<std::uint64_t> memoryBytes;
+  for(const auto &binding:context.memory) {
+    if(binding.width<8 || binding.width>64 || binding.width%8 || binding.offset>pointerMask)return false;
+    if(binding.kind==CallBinding::EntrySPRelative) {
+      if(binding.width!=pointerWidth || binding.value>pointerMask)return false;
+    } else if(binding.kind==CallBinding::Constant) {
+      if(binding.width<64 && binding.value>=(std::uint64_t{1}<<binding.width))return false;
+    } else return false;
+    for(unsigned n=0;n<binding.width/8;++n) {
+      const auto byte=(binding.offset+n)&pointerMask;
+      if(byte<pointerWidth/8 || (byte>1048576 && byte<pointerMask-1048575) ||
+         !memoryBytes.insert(byte).second)return false;
+    }
   }
   return true;
 }
@@ -91,15 +113,22 @@ LeafCallProof proveTree(const Graph &,std::uint64_t,std::uint32_t,std::uint32_t,
 class Prover {
  public:
   Prover(const Graph &g,std::uint32_t blocks,std::uint32_t operations,std::uint32_t facts,
-      std::set<std::uint64_t> path,CallContext input):
+      std::set<std::uint64_t> path,CallContext input,bool precise):
       graph(g),maxBlocks(blocks),maxOperations(operations),maxFacts(std::min(facts,8192u)),
       sp(g.architecture()==Architecture::X86_64?x86::RSP:x86::ESP),parents(x86::registerFile()),
-      context(std::move(input)),inputFacts(contextFacts(context)),active(std::move(path)) {
+      context(std::move(input)),inputFacts(contextFacts(context)),active(std::move(path)),precise(precise) {
     proof.operations=inputFacts;
     for(const auto &binding:context.bindings)for(unsigned n=0;n<bytes(binding.width);++n)
       inputs.emplace(binding.offset+n,binding.kind==CallBinding::Constant?
           Byte{Byte::Constant,(binding.value>>(8*n))&255u,0}:
           Byte{Byte::Stack,binding.value,n});
+  }
+  State entryState() const {
+    State state;state.reached=true;
+    for(const auto &binding:context.memory)for(unsigned n=0;n<bytes(binding.width);++n)
+      state.memory.emplace((binding.offset+n)&mask(sp.width),binding.kind==CallBinding::Constant?
+          Byte{Byte::Constant,(binding.value>>(8*n))&255u,0}:Byte{Byte::Stack,binding.value,n});
+    return state;
   }
   Byte initial(std::uint32_t at) const {
     if(sp.offset<=at && at<sp.offset+bytes(sp.width))return {Byte::Stack,0,at-sp.offset};
@@ -191,25 +220,80 @@ class Prover {
       else {auto it=temps.find(x.id);return it==temps.end()?unknown(x.width):resize(it->second,x.width);}
     },v);
   }
-  Value operation(O opcode,const Value &a,const Value &b,W width) const {
+  static std::optional<std::uint64_t> calculate(O opcode,std::uint64_t x,W xw,
+      std::uint64_t y,W yw,W width,bool unary) {
+    if(!xw || xw>64 || !width || width>64 || (!unary && (!yw || yw>64)))return {};
+    llvm::APInt a(xw,x);
+    if(unary) {
+      switch(opcode) {
+        case O::SEXT:return a.sextOrTrunc(width).getZExtValue();
+        case O::ZEXT:case O::TRUNC:case O::COPY:return a.zextOrTrunc(width).getZExtValue();
+        case O::NEG:a=a.zextOrTrunc(std::max(xw,width));a=-a;break;
+        case O::NOT:a=a.zextOrTrunc(std::max(xw,width));a=~a;break;
+        default:return {};
+      }
+      return a.zextOrTrunc(width).getZExtValue();
+    }
+    llvm::APInt b(yw,y);
+    if(opcode==O::SHL || opcode==O::SHR || opcode==O::SAR) {
+      const auto w=std::max(xw,yw);
+      a=opcode==O::SAR?a.sextOrTrunc(w):a.zextOrTrunc(w);
+      const auto shift=b.getLimitedValue(w);
+      if(shift==w)a=opcode==O::SAR && a.isNegative()?llvm::APInt::getAllOnes(w):llvm::APInt(w,0);
+      else if(opcode==O::SHL)a=a.shl(shift);
+      else if(opcode==O::SHR)a=a.lshr(shift);
+      else a=a.ashr(shift);
+      return a.zextOrTrunc(width).getZExtValue();
+    }
+    const bool compare=opcode>=O::EQ && opcode<=O::SGE;
+    const auto w=compare?std::max(xw,yw):std::max({xw,yw,width});
+    const bool sign=opcode==O::SDIV || opcode==O::SMOD ||
+        opcode==O::SLT || opcode==O::SLE || opcode==O::SGT || opcode==O::SGE;
+    a=sign?a.sextOrTrunc(w):a.zextOrTrunc(w);
+    b=sign?b.sextOrTrunc(w):b.zextOrTrunc(w);
+    switch(opcode) {
+      case O::ADD:a+=b;break;case O::SUB:a-=b;break;case O::MUL:a*=b;break;
+      case O::AND:a&=b;break;case O::OR:a|=b;break;case O::XOR:a^=b;break;
+      case O::UDIV:case O::UMOD:case O::SDIV:case O::SMOD:
+        if(b.isZero() || (sign && a.isMinSignedValue() && b.isAllOnes()))return {};
+        if(opcode==O::UDIV)a=a.udiv(b);else if(opcode==O::UMOD)a=a.urem(b);
+        else if(opcode==O::SDIV)a=a.sdiv(b);else a=a.srem(b);
+        break;
+      case O::EQ:return a==b;case O::NEQ:return a!=b;
+      case O::ULT:return a.ult(b);case O::ULE:return a.ule(b);
+      case O::UGT:return a.ugt(b);case O::UGE:return a.uge(b);
+      case O::SLT:return a.slt(b);case O::SLE:return a.sle(b);
+      case O::SGT:return a.sgt(b);case O::SGE:return a.sge(b);
+      default:return {};
+    }
+    return a.zextOrTrunc(width).getZExtValue();
+  }
+  Value operation(O opcode,const Value &a,const Value &b,W width,bool unary=false) const {
     auto x=number(a),y=number(b);
-    if(width==sp.width && (opcode==O::ADD || opcode==O::SUB)) {
+    if(!unary && width==sp.width && (opcode==O::ADD || opcode==O::SUB)) {
       // Numeric addresses are recognized only by memory operations. Treating
       // every full-width literal as a Stack value here would corrupt ordinary
       // size/value arithmetic when an absolute entry SP is available.
       if(auto p=stackOffset(a);p && y)return stack(opcode==O::ADD?*p+*y:*p-*y);
       if(opcode==O::ADD)if(auto p=stackOffset(b);p && x)return stack(*p+*x);
     }
-    if(x && y && width && width<=64) {
-      switch(opcode) {
-        case O::ADD:return constant(*x+*y,width);
-        case O::SUB:return constant(*x-*y,width);
-        case O::AND:return constant(*x&*y,width);
-        case O::OR:return constant(*x|*y,width);
-        case O::XOR:return constant(*x^*y,width);
-        default:break;
+    if(!unary) {
+      const auto p=stackOffset(a),q=stackOffset(b);
+      if(p && q) {
+        if(opcode==O::EQ || opcode==O::NEQ)
+          return constant(opcode==O::EQ?*p==*q:*p!=*q,width);
+        if(opcode==O::SUB && width<=sp.width)return constant(*p-*q,width);
+      }
+      // Ordering unknown-SP offsets is invalid across address wrap. Only an
+      // actual numeric anchor permits integer comparisons against addresses.
+      if(context.entrySP && opcode>=O::EQ && opcode<=O::SGE) {
+        if(p)x=(*context.entrySP+*p)&mask(sp.width);
+        if(q)y=(*context.entrySP+*q)&mask(sp.width);
       }
     }
+    if(x && (unary || y))
+      if(auto result=calculate(opcode,*x,a.width,unary?0:*y,b.width,width,unary))
+        return constant(*result,width);
     return unknown(width);
   }
   bool spend() {if(proof.operations>=maxOperations)return false;++proof.operations;return true;}
@@ -272,6 +356,32 @@ class Prover {
           child.bindings.push_back({extent.offset+n,8,CallBinding::Constant,b.value});
       }
     }
+    std::set<std::uint64_t> coveredMemory;
+    const auto relative=[&](std::uint64_t at) {return (at-calleeSP)&mask(sp.width);};
+    const auto admitted=[&](std::uint64_t at) {
+      const auto offset=relative(at);
+      return offset>=bytes(sp.width) && !(offset>1048576 && offset<mask(sp.width)-1048575);
+    };
+    for(const auto &[at,byte]:state.memory) {
+      if(!spend())return {};
+      if(coveredMemory.contains(at) || !admitted(at))continue;
+      if(byte.kind==Byte::Stack && byte.index==0) {
+        bool complete=true;
+        for(unsigned n=0;n<bytes(sp.width);++n) {
+          if(!spend())return {};
+          const auto address=(at+n)&mask(sp.width);
+          if(!admitted(address) || coveredMemory.contains(address) ||
+             memByte(state,address)!=Byte{Byte::Stack,byte.value,n})complete=false;
+        }
+        if(complete) {
+          child.memory.push_back({relative(at),sp.width,CallBinding::EntrySPRelative,
+              (byte.value-calleeSP)&mask(sp.width)});
+          for(unsigned n=0;n<bytes(sp.width);++n)coveredMemory.insert((at+n)&mask(sp.width));
+          continue;
+        }
+      }
+      if(byte.kind==Byte::Constant)child.memory.push_back({relative(at),8,CallBinding::Constant,byte.value});
+    }
     const auto cost=contextFacts(child);
     if(cost>maxOperations-proof.operations) {proof.operations=maxOperations;return {};}
     proof.operations+=cost;
@@ -295,15 +405,19 @@ class Prover {
       }
       return it->second;
     };
-    const auto *child=&cached({});
-    if(!child->proven) {
+    const auto *universal=&cached({});const auto *child=universal;
+    if(!universal->proven || universal->needsMemoryContext) {
       if(proof.operations>=maxOperations || !budget(state,{}))return false;
       auto input=childContext(state,calleeSP);
-      if(!input || !canonicalizeCallContext(*input,graph.architecture()) || *input==CallContext{} ||
-         contextFacts(*input)>maxFacts || !budget(state,{}))return false;
-      child=&cached(*input);
+      const auto valid=input && canonicalizeCallContext(*input,graph.architecture()) &&
+          *input!=CallContext{} && contextFacts(*input)<=maxFacts && budget(state,{});
+      if(valid && (!universal->proven || !input->memory.empty())) {
+        const auto *specialized=&cached(*input);
+        if(specialized->proven)child=specialized;
+      }
     }
     if(!child->proven || !budget(state,{}))return false;
+    proof.needsMemoryContext |= child->needsMemoryContext;
     // Include the nested CALL's own push. Child proofs protect their own
     // return slots; every translated write must also protect this outer one.
     if(!writeMemory(state,calleeSP,unknown(sp.width)))return false;
@@ -332,6 +446,7 @@ class Prover {
     if(to==result)return false;to=std::move(result);return true;
   }
   bool block(std::uint64_t at,State &state) {
+    chosenNext.reset();
     if(!spend() || !graph.isValidBlock(at))return false;
     BasicBlock block{&graph,at};const auto *ir=graph.getIGNILBlock(at);
     if(!block.isValid() || !ir || !ir->unlifted().empty() || ir->empty())return false;
@@ -387,6 +502,23 @@ class Prover {
         default:return false;
       }
       auto source=[&](unsigned n) {return operand(state,temps,op.srcs[n]);};
+      if(precise && op.opcode==O::CJMP) {
+        if(&op!=&end || !last->isJump() || !last->isConditional() || op.srcs.size()!=3 ||
+           ignil::widthOf(op.srcs[0])!=1)return false;
+        const auto *taken=std::get_if<ignil::Const>(&op.srcs[1]);
+        const auto *untaken=std::get_if<ignil::Const>(&op.srcs[2]);
+        const auto condition=number(source(0));
+        if(!taken || !untaken || taken->width!=64 || untaken->width!=64 ||
+           !condition || *condition>1 || last->branches()!=std::set<std::uint64_t>{taken->value} ||
+           untaken->value!=last->address()+last->size() ||
+           block.successors()!=std::set<std::uint64_t>{taken->value,untaken->value})return false;
+        chosenNext=*condition?taken->value:untaken->value;
+      } else if(precise && op.opcode==O::JMP) {
+        const auto *target=op.srcs.size()==1?std::get_if<ignil::Const>(&op.srcs[0]):nullptr;
+        if(&op!=&end || !target || target->width!=64 ||
+           block.successors()!=std::set<std::uint64_t>{target->value})return false;
+        chosenNext=target->value;
+      }
       if(op.opcode==O::CALL) {
         if(!call(state,op))return false;
       } else if(op.opcode==O::STORE) {
@@ -399,13 +531,23 @@ class Prover {
       } else if(op.dst) {
         const auto width=ignil::widthOf(*op.dst);if(!width || width>128)return false;
         auto value=unknown(width);
-        if((op.opcode==O::COPY || op.opcode==O::ZEXT || op.opcode==O::TRUNC) && op.srcs.size()==1)
+        if(op.opcode==O::XOR && op.srcs.size()==2 &&
+            sameSnapshot(op.srcs[0],op.srcs[1],[&](auto id,auto sourceWidth) {
+              const auto it=temps.find(id);
+              return it!=temps.end() && it->second.width==sourceWidth;
+            }))value=constant(0,width);
+        else if((op.opcode==O::COPY || op.opcode==O::ZEXT || op.opcode==O::TRUNC) && op.srcs.size()==1)
           value=resize(source(0),width);
         else if(op.opcode==O::LOAD && op.srcs.size()==1) {
           if(auto p=address(source(0)))for(unsigned n=0;n<value.data.size();++n)
             value.data[n]=memByte(state,(*p+n)&mask(sp.width));
+          else proof.needsMemoryContext=true;
           value=resize(std::move(value),width);
-        } else if(op.srcs.size()==2)value=operation(op.opcode,source(0),source(1),width);
+          if(std::ranges::any_of(value.data,[](const auto &byte){return byte.kind==Byte::Unknown;}))
+            proof.needsMemoryContext=true;
+        } else if(op.srcs.size()==1 && (op.opcode==O::NEG || op.opcode==O::NOT || op.opcode==O::SEXT))
+          value=operation(op.opcode,source(0),unknown(0),width,true);
+        else if(op.srcs.size()==2)value=operation(op.opcode,source(0),source(1),width);
         if(auto *reg=std::get_if<ignil::Reg>(&*op.dst)) {
           if(!writeRegister(state,*reg,std::move(value)))return false;
         } else if(auto *tmp=std::get_if<ignil::Temp>(&*op.dst))temps.insert_or_assign(tmp->id,std::move(value));
@@ -413,8 +555,20 @@ class Prover {
       }
       if(!budget(state,temps))return false;
     }
+    if(precise && !last->isReturn() && !chosenNext) {
+      // A normal/CALL-ending block may have a machine fallthrough without a
+      // synthesized IGNIL JMP. Its sole validated next-PC is still exact.
+      if(last->isJump() || block.successors()!=std::set<std::uint64_t>{last->address()+last->size()})return false;
+      chosenNext=last->address()+last->size();
+    }
     if(last->isReturn()) {
       if(address(readRegister(state,sp))!=std::optional<std::uint64_t>{0})return false;
+      // A numeric literal can denote exactly the entry stack pointer. Having
+      // proved restoration, normalize those machine-SP bytes to Stack(0):
+      // callers retain their pre-CALL SP, not this frame's numeric entry SP.
+      // In i386 only ESP's four actual bytes are normalized; any upper-parent
+      // effects of an explicit 32-bit write remain separately represented.
+      for(unsigned n=0;n<bytes(sp.width);++n)state.regs.erase(sp.offset+n);
       returns=true;
       for(auto at:touched)if(regByte(state,at)!=initial(at))clobbers.insert(at);
       merge(returnState,state);
@@ -423,14 +577,26 @@ class Prover {
     return true;
   }
   LeafCallProof run(std::uint64_t entry) {
-    states[entry].reached=true;std::deque<std::uint64_t> queue{entry};std::set<std::uint64_t> queued{entry};
-    while(!queue.empty()) {
-      const auto at=queue.front();queue.pop_front();queued.erase(at);auto state=states.at(at);
-      if(states.size()>maxBlocks || !block(at,state))return std::move(proof);
-      const BasicBlock control{&graph,at};
-      for(auto next:control.successors()) {
-        if(!states.contains(next) && states.size()>=maxBlocks)return std::move(proof);
-        if(merge(states[next],state) && queued.insert(next).second)queue.push_back(next);
+    if(precise) {
+      auto state=entryState();auto at=entry;
+      for(;;) {
+        if(!states.contains(at) && states.size()>=maxBlocks)return std::move(proof);
+        states[at].reached=true; // Count distinct blocks, never merge iterations.
+        if(!block(at,state))return std::move(proof);
+        if(returns)break;
+        if(!chosenNext)return std::move(proof);
+        at=*chosenNext;
+      }
+    } else {
+      states[entry]=entryState();std::deque<std::uint64_t> queue{entry};std::set<std::uint64_t> queued{entry};
+      while(!queue.empty()) {
+        const auto at=queue.front();queue.pop_front();queued.erase(at);auto state=states.at(at);
+        if(states.size()>maxBlocks || !block(at,state))return std::move(proof);
+        const BasicBlock control{&graph,at};
+        for(auto next:control.successors()) {
+          if(!states.contains(next) && states.size()>=maxBlocks)return std::move(proof);
+          if(merge(states[next],state) && queued.insert(next).second)queue.push_back(next);
+        }
       }
     }
     if(!returns)return std::move(proof);
@@ -445,7 +611,7 @@ class Prover {
       if(b.kind==Byte::Constant)proof.registerConstants.emplace_back(at,std::uint8_t(b.value));
     }
     for(const auto &[at,b]:returnState.memory)
-      if(b.kind==Byte::Constant)proof.memoryConstants.emplace_back(at,std::uint8_t(b.value));
+      if(writes.contains(at) && b.kind==Byte::Constant)proof.memoryConstants.emplace_back(at,std::uint8_t(b.value));
     return std::move(proof);
   }
   const Graph &graph;
@@ -463,6 +629,8 @@ class Prover {
   std::set<std::uint64_t> active;
   std::map<std::pair<std::uint64_t,CallContext>,LeafCallProof> callees;
   bool returns=false;
+  bool precise=false;
+  std::optional<std::uint64_t> chosenNext;
 };
 LeafCallProof proveTree(const Graph &graph,std::uint64_t entry,std::uint32_t maxBlocks,
     std::uint32_t maxOperations,std::uint32_t maxFacts,std::set<std::uint64_t> active,
@@ -473,7 +641,15 @@ LeafCallProof proveTree(const Graph &graph,std::uint64_t entry,std::uint32_t max
   if(cost>maxOperations) {LeafCallProof failed;failed.operations=maxOperations;return failed;}
   auto context=input;
   if(!canonicalizeCallContext(context,graph.architecture()))return {};
-  return Prover{graph,maxBlocks,maxOperations,maxFacts,std::move(active),std::move(context)}.run(entry);
+  auto exact=Prover{graph,maxBlocks,maxOperations,maxFacts,active,context,true}.run(entry);
+  if(exact.proven || exact.operations>=maxOperations)return exact;
+  // Restart from the same entry constraints. No partial path state, STORE
+  // footprint or result is reused, and both attempts consume the same budget.
+  if(cost>maxOperations-exact.operations) {LeafCallProof failed;failed.operations=maxOperations;return failed;}
+  auto fallback=Prover{graph,maxBlocks,maxOperations-exact.operations,maxFacts,
+      std::move(active),std::move(context),false}.run(entry);
+  fallback.operations+=exact.operations;
+  return fallback;
 }
 }
 LeafCallProof proveLeafCallee(const Graph &graph,std::uint64_t entry,

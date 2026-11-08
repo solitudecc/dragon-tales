@@ -1,0 +1,3791 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "scope": "Caller machine STOREs supply callee memory. Direct E8/C3, exact count guards and sequential overlapping copies. No API names, image facts, heap snapshots or CPU-fed CFG edges.",
+  "cases": [
+    {
+      "id": "x86_32_read_copy",
+      "architecture": "x86_32",
+      "code_hex": "c744242020110000c7442440001100008d7c24208d742440e8e3010000ff642440ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8b078906c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4125,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8b078906c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "read_copy",
+        "pointer_width": 4,
+        "iterations": null,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 64,
+        "dispatcher_slot_offset": 64,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 64,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4120
+        ],
+        "nested_call_sites": [],
+        "loop_body": null,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242020110000c7442440001100008d7c24208d742440e8e3010000ff642440",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242020110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744244000110000"
+              },
+              {
+                "address": 4112,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4116,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742440"
+              },
+              {
+                "address": 4120,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8e3010000"
+              },
+              {
+                "address": 4125,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642440"
+              }
+            ]
+          },
+          {
+            "address": 4608,
+            "code_hex": "8b078906c3",
+            "instructions": [
+              {
+                "address": 4608,
+                "size": 2,
+                "text": "LOAD through caller pointer",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4610,
+                "size": 2,
+                "text": "STORE through caller pointer",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4612,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_nested_read",
+      "architecture": "x86_32",
+      "code_hex": "c744242020110000c744244000110000c7442450001100008d7c24208d742440e81b020000ff642450ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8b078906c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce8bbffffff89f783c610e8b1ffffffc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4133,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8b078906c3"
+        },
+        {
+          "address": 4672,
+          "code_hex": "e8bbffffff89f783c610e8b1ffffffc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "nested_read",
+        "pointer_width": 4,
+        "iterations": null,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 64,
+        "dispatcher_slot_offset": 80,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 80,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 64,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 80,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4128
+        ],
+        "nested_call_sites": [
+          4672,
+          4682
+        ],
+        "loop_body": null,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242020110000c744244000110000c7442450001100008d7c24208d742440e81b020000ff642450",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242020110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744244000110000"
+              },
+              {
+                "address": 4112,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744245000110000"
+              },
+              {
+                "address": 4120,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4124,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742440"
+              },
+              {
+                "address": 4128,
+                "size": 5,
+                "text": "CALL",
+                "target": 4672,
+                "code_hex": "e81b020000"
+              },
+              {
+                "address": 4133,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642450"
+              }
+            ]
+          },
+          {
+            "address": 4608,
+            "code_hex": "8b078906c3",
+            "instructions": [
+              {
+                "address": 4608,
+                "size": 2,
+                "text": "LOAD through caller pointer",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4610,
+                "size": 2,
+                "text": "STORE through caller pointer",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4612,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          },
+          {
+            "address": 4672,
+            "code_hex": "e8bbffffff89f783c610e8b1ffffffc3",
+            "instructions": [
+              {
+                "address": 4672,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8bbffffff"
+              },
+              {
+                "address": 4677,
+                "size": 2,
+                "text": "MOV DI SI",
+                "code_hex": "89f7"
+              },
+              {
+                "address": 4679,
+                "size": 3,
+                "text": "ADD destination16",
+                "code_hex": "83c610"
+              },
+              {
+                "address": 4682,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8b1ffffff"
+              },
+              {
+                "address": 4687,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_two_reads",
+      "architecture": "x86_32",
+      "code_hex": "c744242020110000c7442440001100008d7c24208d742440b800000000e8de010000c744242000110000b800000000e8cc010000ff642440ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8b078906c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4148,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8b078906c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "two_reads",
+        "pointer_width": 4,
+        "iterations": null,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 64,
+        "dispatcher_slot_offset": 64,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4125,
+          4143
+        ],
+        "nested_call_sites": [],
+        "loop_body": null,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242020110000c7442440001100008d7c24208d742440b800000000e8de010000c744242000110000b800000000e8cc010000ff642440",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242020110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744244000110000"
+              },
+              {
+                "address": 4112,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4116,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742440"
+              },
+              {
+                "address": 4120,
+                "size": 5,
+                "text": "MOV same AX context",
+                "code_hex": "b800000000"
+              },
+              {
+                "address": 4125,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8de010000"
+              },
+              {
+                "address": 4130,
+                "size": 8,
+                "text": "change source memory only",
+                "code_hex": "c744242000110000"
+              },
+              {
+                "address": 4138,
+                "size": 5,
+                "text": "MOV same AX context",
+                "code_hex": "b800000000"
+              },
+              {
+                "address": 4143,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8cc010000"
+              },
+              {
+                "address": 4148,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642440"
+              }
+            ]
+          },
+          {
+            "address": 4608,
+            "code_hex": "8b078906c3",
+            "instructions": [
+              {
+                "address": 4608,
+                "size": 2,
+                "text": "LOAD through caller pointer",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4610,
+                "size": 2,
+                "text": "STORE through caller pointer",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4612,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_fill_n0",
+      "architecture": "x86_32",
+      "code_hex": "c7442460001100008d7c24208d742460b900000000ba20110000e861020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740a891683c60483e90175f6c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4127,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740a891683c60483e90175f6c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_fill",
+        "pointer_width": 4,
+        "iterations": 0,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4122
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c7442460001100008d7c24208d742460b900000000ba20110000e861020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246000110000"
+              },
+              {
+                "address": 4104,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4108,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742460"
+              },
+              {
+                "address": 4112,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b900000000"
+              },
+              {
+                "address": 4117,
+                "size": 5,
+                "text": "MOV fill value",
+                "code_hex": "ba20110000"
+              },
+              {
+                "address": 4122,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e861020000"
+              },
+              {
+                "address": 4127,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740a891683c60483e90175f6c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4751,
+                "code_hex": "740a"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8916"
+              },
+              {
+                "address": 4743,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4746,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4749,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f6"
+              },
+              {
+                "address": 4751,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_fill_n1",
+      "architecture": "x86_32",
+      "code_hex": "c7442460001100008d7c24208d742460b901000000ba20110000e861020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740a891683c60483e90175f6c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4127,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740a891683c60483e90175f6c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_fill",
+        "pointer_width": 4,
+        "iterations": 1,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4122
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c7442460001100008d7c24208d742460b901000000ba20110000e861020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246000110000"
+              },
+              {
+                "address": 4104,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4108,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742460"
+              },
+              {
+                "address": 4112,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b901000000"
+              },
+              {
+                "address": 4117,
+                "size": 5,
+                "text": "MOV fill value",
+                "code_hex": "ba20110000"
+              },
+              {
+                "address": 4122,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e861020000"
+              },
+              {
+                "address": 4127,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740a891683c60483e90175f6c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4751,
+                "code_hex": "740a"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8916"
+              },
+              {
+                "address": 4743,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4746,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4749,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f6"
+              },
+              {
+                "address": 4751,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_fill_n3",
+      "architecture": "x86_32",
+      "code_hex": "c744246000110000c744246400110000c7442468001100008d7c24208d742460b903000000ba20110000e851020000ff642468ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740a891683c60483e90175f6c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4143,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740a891683c60483e90175f6c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_fill",
+        "pointer_width": 4,
+        "iterations": 3,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 104,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 100,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 104,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 100,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 104,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4138
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744246000110000c744246400110000c7442468001100008d7c24208d742460b903000000ba20110000e851020000ff642468",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246000110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246400110000"
+              },
+              {
+                "address": 4112,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246800110000"
+              },
+              {
+                "address": 4120,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4124,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742460"
+              },
+              {
+                "address": 4128,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4133,
+                "size": 5,
+                "text": "MOV fill value",
+                "code_hex": "ba20110000"
+              },
+              {
+                "address": 4138,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e851020000"
+              },
+              {
+                "address": 4143,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642468"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740a891683c60483e90175f6c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4751,
+                "code_hex": "740a"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8916"
+              },
+              {
+                "address": 4743,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4746,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4749,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f6"
+              },
+              {
+                "address": 4751,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_copy_n0",
+      "architecture": "x86_32",
+      "code_hex": "c7442460001100008d7c24208d742460b900000000e866020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740f8b07890683c70483c60483e90175f1c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4122,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 4,
+        "iterations": 0,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4117
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c7442460001100008d7c24208d742460b900000000e866020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246000110000"
+              },
+              {
+                "address": 4104,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4108,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742460"
+              },
+              {
+                "address": 4112,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b900000000"
+              },
+              {
+                "address": 4117,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e866020000"
+              },
+              {
+                "address": 4122,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4756,
+                "code_hex": "740f"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential LOAD",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4743,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4745,
+                "size": 3,
+                "text": "ADD source",
+                "code_hex": "83c704"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4751,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4754,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f1"
+              },
+              {
+                "address": 4756,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_copy_n1",
+      "architecture": "x86_32",
+      "code_hex": "c744242020110000c7442460001100008d7c24208d742460b901000000e85e020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740f8b07890683c70483c60483e90175f1c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4130,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 4,
+        "iterations": 1,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 96,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4125
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242020110000c7442460001100008d7c24208d742460b901000000e85e020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242020110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246000110000"
+              },
+              {
+                "address": 4112,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4116,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742460"
+              },
+              {
+                "address": 4120,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b901000000"
+              },
+              {
+                "address": 4125,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e85e020000"
+              },
+              {
+                "address": 4130,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4756,
+                "code_hex": "740f"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential LOAD",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4743,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4745,
+                "size": 3,
+                "text": "ADD source",
+                "code_hex": "83c704"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4751,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4754,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f1"
+              },
+              {
+                "address": 4756,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_copy_n3",
+      "architecture": "x86_32",
+      "code_hex": "c744242000110000c744242420110000c744242820110000c744246000110000c744246400110000c7442468001100008d7c24208d742460b903000000e83e020000ff642468ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740f8b07890683c70483c60483e90175f1c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4162,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 4,
+        "iterations": 3,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 104,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 36,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 100,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 104,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 36,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 100,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 104,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4157
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242000110000c744242420110000c744242820110000c744246000110000c744246400110000c7442468001100008d7c24208d742460b903000000e83e020000ff642468",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242000110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242420110000"
+              },
+              {
+                "address": 4112,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242820110000"
+              },
+              {
+                "address": 4120,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246000110000"
+              },
+              {
+                "address": 4128,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246400110000"
+              },
+              {
+                "address": 4136,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744246800110000"
+              },
+              {
+                "address": 4144,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4148,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742460"
+              },
+              {
+                "address": 4152,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4157,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e83e020000"
+              },
+              {
+                "address": 4162,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642468"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4756,
+                "code_hex": "740f"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential LOAD",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4743,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4745,
+                "size": 3,
+                "text": "ADD source",
+                "code_hex": "83c704"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4751,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4754,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f1"
+              },
+              {
+                "address": 4756,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_copy_n3_forward",
+      "architecture": "x86_32",
+      "code_hex": "c744242000110000c744242420110000c744242820110000c744242c201100008d7c24208d742424b903000000e84e020000ff64242cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740f8b07890683c70483c60483e90175f1c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4146,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 4,
+        "iterations": 3,
+        "overlap": "forward",
+        "source_offset": 32,
+        "destination_offset": 36,
+        "dispatcher_slot_offset": 44,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 36,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 44,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 36,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 44,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4141
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242000110000c744242420110000c744242820110000c744242c201100008d7c24208d742424b903000000e84e020000ff64242c",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242000110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242420110000"
+              },
+              {
+                "address": 4112,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242820110000"
+              },
+              {
+                "address": 4120,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242c20110000"
+              },
+              {
+                "address": 4128,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2420"
+              },
+              {
+                "address": 4132,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742424"
+              },
+              {
+                "address": 4136,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4141,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e84e020000"
+              },
+              {
+                "address": 4146,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff64242c"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4756,
+                "code_hex": "740f"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential LOAD",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4743,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4745,
+                "size": 3,
+                "text": "ADD source",
+                "code_hex": "83c704"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4751,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4754,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f1"
+              },
+              {
+                "address": 4756,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_32_counted_copy_n3_backward",
+      "architecture": "x86_32",
+      "code_hex": "c744242020110000c744242400110000c744242820110000c744242c201100008d7c24248d742420b903000000e84e020000ff642428ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740f8b07890683c70483c60483e90175f1c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4146,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 4,
+        "iterations": 3,
+        "overlap": "backward",
+        "source_offset": 36,
+        "destination_offset": 32,
+        "dispatcher_slot_offset": 40,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 36,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 44,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 36,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          },
+          {
+            "offset": 44,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4141
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "c744242020110000c744242400110000c744242820110000c744242c201100008d7c24248d742420b903000000e84e020000ff642428",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242020110000"
+              },
+              {
+                "address": 4104,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242400110000"
+              },
+              {
+                "address": 4112,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242820110000"
+              },
+              {
+                "address": 4120,
+                "size": 8,
+                "text": "caller STORE",
+                "code_hex": "c744242c20110000"
+              },
+              {
+                "address": 4128,
+                "size": 4,
+                "text": "LEA source",
+                "code_hex": "8d7c2424"
+              },
+              {
+                "address": 4132,
+                "size": 4,
+                "text": "LEA destination",
+                "code_hex": "8d742420"
+              },
+              {
+                "address": 4136,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4141,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e84e020000"
+              },
+              {
+                "address": 4146,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642428"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740f8b07890683c70483c60483e90175f1c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4756,
+                "code_hex": "740f"
+              },
+              {
+                "address": 4741,
+                "size": 2,
+                "text": "sequential LOAD",
+                "code_hex": "8b07"
+              },
+              {
+                "address": 4743,
+                "size": 2,
+                "text": "sequential STORE",
+                "code_hex": "8906"
+              },
+              {
+                "address": 4745,
+                "size": 3,
+                "text": "ADD source",
+                "code_hex": "83c704"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "ADD destination",
+                "code_hex": "83c604"
+              },
+              {
+                "address": 4751,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4754,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f1"
+              },
+              {
+                "address": 4756,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_read_copy",
+      "architecture": "x86_64",
+      "code_hex": "48c74424202011000048c744244000110000488d7c2420488d742440e8df010000ff642440ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc488b07488906c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4129,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "488b07488906c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "read_copy",
+        "pointer_width": 8,
+        "iterations": null,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 64,
+        "dispatcher_slot_offset": 64,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 64,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4124
+        ],
+        "nested_call_sites": [],
+        "loop_body": null,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424202011000048c744244000110000488d7c2420488d742440e8df010000ff642440",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242020110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744244000110000"
+              },
+              {
+                "address": 4114,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4119,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742440"
+              },
+              {
+                "address": 4124,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8df010000"
+              },
+              {
+                "address": 4129,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642440"
+              }
+            ]
+          },
+          {
+            "address": 4608,
+            "code_hex": "488b07488906c3",
+            "instructions": [
+              {
+                "address": 4608,
+                "size": 3,
+                "text": "LOAD through caller pointer",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4611,
+                "size": 3,
+                "text": "STORE through caller pointer",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4614,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_nested_read",
+      "architecture": "x86_64",
+      "code_hex": "48c74424202011000048c74424400011000048c744245000110000488d7c2420488d742440e816020000ff642450ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc488b07488906c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce8bbffffff4889f74883c610e8afffffffc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4138,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "488b07488906c3"
+        },
+        {
+          "address": 4672,
+          "code_hex": "e8bbffffff4889f74883c610e8afffffffc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "nested_read",
+        "pointer_width": 8,
+        "iterations": null,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 64,
+        "dispatcher_slot_offset": 80,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 80,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 64,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 80,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4133
+        ],
+        "nested_call_sites": [
+          4672,
+          4684
+        ],
+        "loop_body": null,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424202011000048c74424400011000048c744245000110000488d7c2420488d742440e816020000ff642450",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242020110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744244000110000"
+              },
+              {
+                "address": 4114,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744245000110000"
+              },
+              {
+                "address": 4123,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4128,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742440"
+              },
+              {
+                "address": 4133,
+                "size": 5,
+                "text": "CALL",
+                "target": 4672,
+                "code_hex": "e816020000"
+              },
+              {
+                "address": 4138,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642450"
+              }
+            ]
+          },
+          {
+            "address": 4608,
+            "code_hex": "488b07488906c3",
+            "instructions": [
+              {
+                "address": 4608,
+                "size": 3,
+                "text": "LOAD through caller pointer",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4611,
+                "size": 3,
+                "text": "STORE through caller pointer",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4614,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          },
+          {
+            "address": 4672,
+            "code_hex": "e8bbffffff4889f74883c610e8afffffffc3",
+            "instructions": [
+              {
+                "address": 4672,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8bbffffff"
+              },
+              {
+                "address": 4677,
+                "size": 3,
+                "text": "MOV DI SI",
+                "code_hex": "4889f7"
+              },
+              {
+                "address": 4680,
+                "size": 4,
+                "text": "ADD destination16",
+                "code_hex": "4883c610"
+              },
+              {
+                "address": 4684,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8afffffff"
+              },
+              {
+                "address": 4689,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_two_reads",
+      "architecture": "x86_64",
+      "code_hex": "48c74424202011000048c744244000110000488d7c2420488d742440b800000000e8da01000048c744242000110000b800000000e8c7010000ff642440ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc488b07488906c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4153,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "488b07488906c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "two_reads",
+        "pointer_width": 8,
+        "iterations": null,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 64,
+        "dispatcher_slot_offset": 64,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 64,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4129,
+          4148
+        ],
+        "nested_call_sites": [],
+        "loop_body": null,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424202011000048c744244000110000488d7c2420488d742440b800000000e8da01000048c744242000110000b800000000e8c7010000ff642440",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242020110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744244000110000"
+              },
+              {
+                "address": 4114,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4119,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742440"
+              },
+              {
+                "address": 4124,
+                "size": 5,
+                "text": "MOV same AX context",
+                "code_hex": "b800000000"
+              },
+              {
+                "address": 4129,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8da010000"
+              },
+              {
+                "address": 4134,
+                "size": 9,
+                "text": "change source memory only",
+                "code_hex": "48c744242000110000"
+              },
+              {
+                "address": 4143,
+                "size": 5,
+                "text": "MOV same AX context",
+                "code_hex": "b800000000"
+              },
+              {
+                "address": 4148,
+                "size": 5,
+                "text": "CALL",
+                "target": 4608,
+                "code_hex": "e8c7010000"
+              },
+              {
+                "address": 4153,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642440"
+              }
+            ]
+          },
+          {
+            "address": 4608,
+            "code_hex": "488b07488906c3",
+            "instructions": [
+              {
+                "address": 4608,
+                "size": 3,
+                "text": "LOAD through caller pointer",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4611,
+                "size": 3,
+                "text": "STORE through caller pointer",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4614,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_fill_n0",
+      "architecture": "x86_64",
+      "code_hex": "48c744246000110000488d7c2420488d742460b900000000ba20110000e85e020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740c4889164883c60883e90175f4c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4130,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740c4889164883c60883e90175f4c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_fill",
+        "pointer_width": 8,
+        "iterations": 0,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4125
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c744246000110000488d7c2420488d742460b900000000ba20110000e85e020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246000110000"
+              },
+              {
+                "address": 4105,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4110,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742460"
+              },
+              {
+                "address": 4115,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b900000000"
+              },
+              {
+                "address": 4120,
+                "size": 5,
+                "text": "MOV fill value",
+                "code_hex": "ba20110000"
+              },
+              {
+                "address": 4125,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e85e020000"
+              },
+              {
+                "address": 4130,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740c4889164883c60883e90175f4c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4753,
+                "code_hex": "740c"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488916"
+              },
+              {
+                "address": 4744,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4751,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f4"
+              },
+              {
+                "address": 4753,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_fill_n1",
+      "architecture": "x86_64",
+      "code_hex": "48c744246000110000488d7c2420488d742460b901000000ba20110000e85e020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740c4889164883c60883e90175f4c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4130,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740c4889164883c60883e90175f4c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_fill",
+        "pointer_width": 8,
+        "iterations": 1,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4125
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c744246000110000488d7c2420488d742460b901000000ba20110000e85e020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246000110000"
+              },
+              {
+                "address": 4105,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4110,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742460"
+              },
+              {
+                "address": 4115,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b901000000"
+              },
+              {
+                "address": 4120,
+                "size": 5,
+                "text": "MOV fill value",
+                "code_hex": "ba20110000"
+              },
+              {
+                "address": 4125,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e85e020000"
+              },
+              {
+                "address": 4130,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740c4889164883c60883e90175f4c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4753,
+                "code_hex": "740c"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488916"
+              },
+              {
+                "address": 4744,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4751,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f4"
+              },
+              {
+                "address": 4753,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_fill_n3",
+      "architecture": "x86_64",
+      "code_hex": "48c74424600011000048c74424680011000048c744247000110000488d7c2420488d742460b903000000ba20110000e84c020000ff642470ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f900740c4889164883c60883e90175f4c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4148,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f900740c4889164883c60883e90175f4c3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_fill",
+        "pointer_width": 8,
+        "iterations": 3,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 112,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 104,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 112,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 104,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 112,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4143
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424600011000048c74424680011000048c744247000110000488d7c2420488d742460b903000000ba20110000e84c020000ff642470",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246000110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246800110000"
+              },
+              {
+                "address": 4114,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744247000110000"
+              },
+              {
+                "address": 4123,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4128,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742460"
+              },
+              {
+                "address": 4133,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4138,
+                "size": 5,
+                "text": "MOV fill value",
+                "code_hex": "ba20110000"
+              },
+              {
+                "address": 4143,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e84c020000"
+              },
+              {
+                "address": 4148,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642470"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f900740c4889164883c60883e90175f4c3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4753,
+                "code_hex": "740c"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488916"
+              },
+              {
+                "address": 4744,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4748,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4751,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75f4"
+              },
+              {
+                "address": 4753,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_copy_n0",
+      "architecture": "x86_64",
+      "code_hex": "48c744246000110000488d7c2420488d742460b900000000e863020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f9007413488b074889064883c7084883c60883e90175edc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4125,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 8,
+        "iterations": 0,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4120
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c744246000110000488d7c2420488d742460b900000000e863020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246000110000"
+              },
+              {
+                "address": 4105,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4110,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742460"
+              },
+              {
+                "address": 4115,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b900000000"
+              },
+              {
+                "address": 4120,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e863020000"
+              },
+              {
+                "address": 4125,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4760,
+                "code_hex": "7413"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential LOAD",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4744,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4747,
+                "size": 4,
+                "text": "ADD source",
+                "code_hex": "4883c708"
+              },
+              {
+                "address": 4751,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4755,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4758,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75ed"
+              },
+              {
+                "address": 4760,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_copy_n1",
+      "architecture": "x86_64",
+      "code_hex": "48c74424202011000048c744246000110000488d7c2420488d742460b901000000e85a020000ff642460ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f9007413488b074889064883c7084883c60883e90175edc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4134,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 8,
+        "iterations": 1,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 96,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 96,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4129
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424202011000048c744246000110000488d7c2420488d742460b901000000e85a020000ff642460",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242020110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246000110000"
+              },
+              {
+                "address": 4114,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4119,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742460"
+              },
+              {
+                "address": 4124,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b901000000"
+              },
+              {
+                "address": 4129,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e85a020000"
+              },
+              {
+                "address": 4134,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642460"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4760,
+                "code_hex": "7413"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential LOAD",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4744,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4747,
+                "size": 4,
+                "text": "ADD source",
+                "code_hex": "4883c708"
+              },
+              {
+                "address": 4751,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4755,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4758,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75ed"
+              },
+              {
+                "address": 4760,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_copy_n3",
+      "architecture": "x86_64",
+      "code_hex": "48c74424200011000048c74424282011000048c74424302011000048c74424600011000048c74424680011000048c744247000110000488d7c2420488d742460b903000000e836020000ff642470ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f9007413488b074889064883c7084883c60883e90175edc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4170,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 8,
+        "iterations": 3,
+        "overlap": null,
+        "source_offset": 32,
+        "destination_offset": 96,
+        "dispatcher_slot_offset": 112,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 48,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 104,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 112,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 48,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 96,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 104,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 112,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4165
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424200011000048c74424282011000048c74424302011000048c74424600011000048c74424680011000048c744247000110000488d7c2420488d742460b903000000e836020000ff642470",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242000110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242820110000"
+              },
+              {
+                "address": 4114,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744243020110000"
+              },
+              {
+                "address": 4123,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246000110000"
+              },
+              {
+                "address": 4132,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744246800110000"
+              },
+              {
+                "address": 4141,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744247000110000"
+              },
+              {
+                "address": 4150,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4155,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742460"
+              },
+              {
+                "address": 4160,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4165,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e836020000"
+              },
+              {
+                "address": 4170,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642470"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4760,
+                "code_hex": "7413"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential LOAD",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4744,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4747,
+                "size": 4,
+                "text": "ADD source",
+                "code_hex": "4883c708"
+              },
+              {
+                "address": 4751,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4755,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4758,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75ed"
+              },
+              {
+                "address": 4760,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_copy_n3_forward",
+      "architecture": "x86_64",
+      "code_hex": "48c74424200011000048c74424282011000048c74424302011000048c744243820110000488d7c2420488d742428b903000000e848020000ff642438ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f9007413488b074889064883c7084883c60883e90175edc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4152,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 8,
+        "iterations": 3,
+        "overlap": "forward",
+        "source_offset": 32,
+        "destination_offset": 40,
+        "dispatcher_slot_offset": 56,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 48,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 56,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 48,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 56,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4147
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424200011000048c74424282011000048c74424302011000048c744243820110000488d7c2420488d742428b903000000e848020000ff642438",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242000110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242820110000"
+              },
+              {
+                "address": 4114,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744243020110000"
+              },
+              {
+                "address": 4123,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744243820110000"
+              },
+              {
+                "address": 4132,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2420"
+              },
+              {
+                "address": 4137,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742428"
+              },
+              {
+                "address": 4142,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4147,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e848020000"
+              },
+              {
+                "address": 4152,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642438"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4760,
+                "code_hex": "7413"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential LOAD",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4744,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4747,
+                "size": 4,
+                "text": "ADD source",
+                "code_hex": "4883c708"
+              },
+              {
+                "address": 4751,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4755,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4758,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75ed"
+              },
+              {
+                "address": 4760,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    },
+    {
+      "id": "x86_64_counted_copy_n3_backward",
+      "architecture": "x86_64",
+      "code_hex": "48c74424202011000048c74424280011000048c74424302011000048c744243820110000488d7c2428488d742420b903000000e848020000ff642430ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc83f9007413488b074889064883c7084883c60883e90175edc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4152,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4736,
+          "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3"
+        }
+      ],
+      "call_memory_loop": {
+        "family": "counted_copy",
+        "pointer_width": 8,
+        "iterations": 3,
+        "overlap": "backward",
+        "source_offset": 40,
+        "destination_offset": 32,
+        "dispatcher_slot_offset": 48,
+        "initial_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 48,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 56,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "expected_final_stack_cells": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 48,
+            "value": 4384,
+            "width": 8
+          },
+          {
+            "offset": 56,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4147
+        ],
+        "nested_call_sites": [],
+        "loop_body": 4741,
+        "machine_regions": [
+          {
+            "address": 4096,
+            "code_hex": "48c74424202011000048c74424280011000048c74424302011000048c744243820110000488d7c2428488d742420b903000000e848020000ff642430",
+            "instructions": [
+              {
+                "address": 4096,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242020110000"
+              },
+              {
+                "address": 4105,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744242800110000"
+              },
+              {
+                "address": 4114,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744243020110000"
+              },
+              {
+                "address": 4123,
+                "size": 9,
+                "text": "caller STORE",
+                "code_hex": "48c744243820110000"
+              },
+              {
+                "address": 4132,
+                "size": 5,
+                "text": "LEA source",
+                "code_hex": "488d7c2428"
+              },
+              {
+                "address": 4137,
+                "size": 5,
+                "text": "LEA destination",
+                "code_hex": "488d742420"
+              },
+              {
+                "address": 4142,
+                "size": 5,
+                "text": "MOV count",
+                "code_hex": "b903000000"
+              },
+              {
+                "address": 4147,
+                "size": 5,
+                "text": "CALL",
+                "target": 4736,
+                "code_hex": "e848020000"
+              },
+              {
+                "address": 4152,
+                "size": 4,
+                "text": "indirect JMP",
+                "code_hex": "ff642430"
+              }
+            ]
+          },
+          {
+            "address": 4736,
+            "code_hex": "83f9007413488b074889064883c7084883c60883e90175edc3",
+            "instructions": [
+              {
+                "address": 4736,
+                "size": 3,
+                "text": "CMP ECX0",
+                "code_hex": "83f900"
+              },
+              {
+                "address": 4739,
+                "size": 2,
+                "text": "JE zero-count",
+                "target": 4760,
+                "code_hex": "7413"
+              },
+              {
+                "address": 4741,
+                "size": 3,
+                "text": "sequential LOAD",
+                "code_hex": "488b07"
+              },
+              {
+                "address": 4744,
+                "size": 3,
+                "text": "sequential STORE",
+                "code_hex": "488906"
+              },
+              {
+                "address": 4747,
+                "size": 4,
+                "text": "ADD source",
+                "code_hex": "4883c708"
+              },
+              {
+                "address": 4751,
+                "size": 4,
+                "text": "ADD destination",
+                "code_hex": "4883c608"
+              },
+              {
+                "address": 4755,
+                "size": 3,
+                "text": "SUB count1",
+                "code_hex": "83e901"
+              },
+              {
+                "address": 4758,
+                "size": 2,
+                "text": "JNE repeat",
+                "target": 4741,
+                "code_hex": "75ed"
+              },
+              {
+                "address": 4760,
+                "size": 1,
+                "text": "RET",
+                "code_hex": "c3"
+              }
+            ]
+          }
+        ],
+        "no_initial_API_facts": true
+      }
+    }
+  ]
+}
