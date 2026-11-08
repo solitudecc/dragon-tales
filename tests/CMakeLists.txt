@@ -231,6 +231,8 @@ if(Python3_Interpreter_FOUND)
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_static_corpus_summary.py)
         add_test(NAME "Validation - LLVM V2 C and Python mirror"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_v2.py)
+        set_tests_properties("Validation - LLVM V2 C and Python mirror" PROPERTIES
+            ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         add_test(NAME "Validation - LLVM static C and Python mirror"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_static.py)
         set_tests_properties("Validation - LLVM static C and Python mirror" PROPERTIES
