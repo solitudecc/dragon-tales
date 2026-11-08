@@ -108,7 +108,13 @@ def compile_case(fixture, entry, level, work, args, model_factory=None, architec
     runtime=Path(base.dragon._LIB).resolve()
     link=[] if static_analysis else [str(runtime),'-Wl,-rpath,'+str(runtime.parent)]
     subprocess.run([args.cc,'-O0','-I'+str(base.ROOT/'include'),'-I'+str(base.ROOT/'c_shim'),str(driver),str(obj)]+link+['-o',str(exe)],check=True,capture_output=True)
-    return exe, 'unreachable' in source.read_text(), call_sites
+    from ir_unreachable import audit_unreachable
+    raw_proof = audit_unreachable(ir)
+    selected_proof = raw_proof if source == raw else audit_unreachable(source.read_text())
+    (work/'unreachable-proof.json').write_text(json.dumps(dict(
+        raw=raw_proof, selected=selected_proof, selected_ir=source.name,
+        all_unreachable_must_be_proved_dead=True), indent=2) + '\n')
+    return exe, not (raw_proof['ok'] and selected_proof['ok']), call_sites
 
 DRIVER=r'''
 #include <stdio.h>

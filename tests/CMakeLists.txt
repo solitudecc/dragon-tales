@@ -229,6 +229,9 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - static corpus summary rejects incomplete results"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_static_corpus_summary.py)
+        add_test(NAME "Validation - unreachable switch defaults require exact domain proofs"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PROJECT_SOURCE_DIR}/scripts/validation/test_ir_unreachable.py)
         add_test(NAME "Validation - LLVM V2 C and Python mirror"
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/python/test_llvm_v2.py)
         set_tests_properties("Validation - LLVM V2 C and Python mirror" PROPERTIES

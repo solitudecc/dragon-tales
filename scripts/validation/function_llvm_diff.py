@@ -197,7 +197,13 @@ def compile_case(fixture, entry, level, work, args):
     subprocess.run([args.llc,'-O0','-filetype=obj','-mtriple='+triple,str(source),'-o',str(obj)],check=True,capture_output=True)
     subprocess.run([args.cc,'-O0',str(driver),str(obj),'-o',str(exe)],check=True,capture_output=True)
     call_sites={i.address for i in graph.instructions() if i.is_call}
-    return exe, 'unreachable' in selected_ir, call_sites
+    from ir_unreachable import audit_unreachable
+    raw_proof = audit_unreachable(ir)
+    selected_proof = raw_proof if level == 'O0' else audit_unreachable(selected_ir)
+    (work/'unreachable-proof.json').write_text(json.dumps(dict(
+        raw=raw_proof, selected=selected_proof,
+        all_unreachable_must_be_proved_dead=True), indent=2) + '\n')
+    return exe, not (raw_proof['ok'] and selected_proof['ok']), call_sites
 
 def no_core(): resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 
