@@ -19,6 +19,8 @@ add_executable(dragon_tests
         assemblers/TestAssembler.cpp
         analysis/TestBackwardSlicer.cpp
         analysis/TestFiniteValues.cpp
+        analysis/TestFiniteXorCost.cpp
+        analysis/TestFiniteXorSpan.cpp
         analysis/TestFiniteMemory.cpp
         analysis/TestFiniteInitialState.cpp
         analysis/TestCallerContext.cpp

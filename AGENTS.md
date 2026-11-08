@@ -207,6 +207,62 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Finite-analysis cost (2026-11-08/09, baseline `a9f916d`): exact XOR-set
+acceleration and unused report replay removal; see
+`docs/finite-analysis-cost.md`. Both proveLeafCalls settings use the cost changes.
+Literal direct-JMP reports avoid a full block replay only without ordinary
+end-state value queries; indirect targets and actual LOAD prefixes still execute.
+Complete bit cubes are proved from real sorted unique members. A second exact
+path projects/deduplicates to the destination width and builds a joint GF(2)
+span of dimension<=6. Strict |A|+|B|>|H| proves the full translated image;
+otherwise 64-bit membership/XOR-index permutation computes the actual image.
+No input holes are filled by assumption. Scans/elimination/enumeration cost
+operations, failed attempts keep their cost, and all global budget failures
+still discard every value. No new persistent cache, public API, opcode or ABI change.
+Default1M/value64/block4096/fact262144 limits remain. Default false can change
+budget outcomes, so old default operation-count identity is not a contract.
+
+Old matching a9 SDK:7cases/10183assertions,3fail; same new runtime7/10334pass.
+New span regression on intermediate old0ba:3/1089 with1fail, final same exe
+3/1098pass in both builds. Cost group10/11432 and old calls/memory29/2234 pass
+in both. Formal unique sets are main755/noZ3623, assembled from actual main754,
+NZ621passed+one repaired mirror retry, and one newly registered pure check
+each; never claim a fresh single full755/623 execution. Prior parser false
+positive and disk-guard partials remain historical failures.
+
+Tigress frozen-prefix queries, unchanged constraints/12queries/1M budget:
+each config16/16complete,0cap (old4complete/12cap),96Finite/96Unknown;
+operations699538..917103. All Graph fingerprints stay equal. These are
+conditional read-only reports, not complete Guest/kernel deobfuscation.
+Independent references:128full-state roots,3968scalar returns,30224additional
+scalar returns; scopes remain separate. Native-v2 normal2560root matches,
+163840fields/167772160memory bytes; result/memory controls256each and edge
+control4omissions with256semantic matches. Zero exclusions/skips/normalizations.
+
+Validation corrections are isolated fixes: V2 Python mirror now selects its
+configured shim (old missing ENV could mix main shim/no-Z3 backend). A blanket
+unreachable-text guard falsely rejected128 O2 returns; only rigorously proved
+dead switch defaults now clear that IR check. Raw and selected IR are checked,
+all execution comparisons remain. Helper22pure tests and independent152 Z3
+queries (18UNSAT/134SAT/0unknown) validate actual certificates/negative controls.
+See `docs/llvm-unreachable-validation.md`; original failed native group remains
+forensic evidence, never a success. Final snapshot01e2f1... has310 actual
+members/4SO/6exe/SDK37/445object metadata; all6 test exes were later precisely
+offloaded under separate receipts, not .o restoration or timestamp tricks.
+Only owned VM `~/dragon-tales-overlap`; stage `call-analysis-cost-20261108`.
+Fresh two-corpus replay:69 inputs/138 strategies, each old/new library205018
+valid-function checkpoints; all1671 new V2 raw modules verify, optimize0.
+Old LLVM was not rerun; no prior raw result was reused. All276 canonical
+streams are sealed; decode/branches/callees/blocks/functions/members/entry
+deltas are zero. Input/source/library SHA rechecks match. Unlifted records
+remain231798 on each side; existing6 missing-IGNIL/26 undecoded-edge/3 invalid
+function/146 linear-objdump warnings retain their exact details. Largest
+actual verified IR362429756B. Independent retained-metadata forward audit
+checks module coverage and seal chains without rescanning large raw archives.
+This is default structural/IR coverage, not whole-program CPU semantics.
+Actual test context is a9+frozen patches; final Git/Mac/VM code289 and SDK37
+map byte-for-byte. Docs/publication do not imply a fresh post-rebase build.
+
 Caller-memory inputs and determinate CFG loops (2026-11-08, baseline `90da1f8`):
 see `docs/call-memory-loops.md`. Existing opt-in proved-call effects now pass
 proved memory byte constants/full SP-relative pointers, within the callee-SP

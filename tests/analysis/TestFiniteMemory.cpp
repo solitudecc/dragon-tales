@@ -96,6 +96,32 @@ TEST_CASE("Finite memory composes partial stores without inventing unknown bytes
   equal(result.values[1],{0x88});
 }
 
+TEST_CASE("Finite memory prefixes do not replay an unused direct target state",
+          "[finite-values][finite-memory-query][finite-report-cost]") {
+  for(bool calls:{false,true}) {
+    CAPTURE(calls);
+    Graph graph{Architecture::X86_64,{}};ignil::Block block{0x1000};
+    store(block,cell,7,64);load(block,0,64);store(block,cell,9,64);load(block,1,64);jump(block,0x9000);
+    add(graph,std::move(block));
+    // Duplicate cells at the same LOAD must share the one prefix transfer.
+    const std::array queries{FiniteMemoryQuery{0x1000,1,cell,64},
+                            FiniteMemoryQuery{0x1000,1,cell,64},
+                            FiniteMemoryQuery{0x1000,3,cell,64}};
+    FiniteValueLimits limits;limits.proveLeafCalls=calls;limits.maxOperations=9;
+    const auto result=finiteMemoryValues(graph,{0x1000},queries,limits);
+    REQUIRE(result.complete);CHECK(result.operations==9);REQUIRE(result.values.size()==3);
+    equal(result.values[0],{7});equal(result.values[1],{7});equal(result.values[2],{9});
+    equal(result.jumpTargets.at(0x1000),{0x9000});
+    limits.maxOperations=8;
+    const auto exhausted=finiteMemoryValues(graph,{0x1000},queries,limits);
+    CHECK_FALSE(exhausted.complete);CHECK(exhausted.operations==8);
+    for(const auto &value:exhausted.values) {
+      CHECK(value.kind==ValueSetKind::Unknown);CHECK(value.values.empty());
+    }
+    CHECK(exhausted.jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+  }
+}
+
 TEST_CASE("Finite memory has no image facts and keeps alias call and opaque barriers",
           "[finite-values][finite-memory-query]") {
   bool known = false;

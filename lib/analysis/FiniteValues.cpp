@@ -12,6 +12,7 @@
 #include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <deque>
 #include <iterator>
@@ -245,6 +246,124 @@ class Engine {
       else {auto it=t.temps.find(x.id);return it==t.temps.end()?smallUnknown(x.width):resize(it->second,x.width);}
     },v);
   }
+  // Recognize a complete set of independent variable bits from the actual
+  // finite values. Cardinality alone is insufficient: values must be unique,
+  // sorted, fit their width, and lie in the cube defined by their AND/OR.
+  std::optional<std::pair<std::uint64_t,std::uint64_t>> bitCube(const Value &value) {
+    if(!value.width || value.width>64 || value.finite.empty() || !value.pointers.empty())return {};
+    auto fixed=mask(value.width);std::uint64_t possible=0,previous=0;
+    bool first=true;
+    for(auto member:value.finite) {
+      if(!spend())return {};
+      if((member&~mask(value.width)) || (!first && member<=previous))return {};
+      fixed &= member;possible |= member;previous=member;first=false;
+    }
+    const auto variable=possible^fixed;
+    const auto count=std::popcount(variable);
+    if(count>=64 || (std::uint64_t{1}<<count)!=value.finite.size())return {};
+    return std::pair{fixed,variable};
+  }
+  std::optional<Value> cubeXor(const Value &left,const Value &right,W width) {
+    // Small products are cheaper to calculate directly. This fast path owns
+    // no persistent cache or facts, and charges both scans and each result.
+    if(left.finite.size()<4 || right.finite.size()<4 ||
+       left.finite.size()*right.finite.size()<64)return {};
+    const auto a=bitCube(left);if(!a)return {};
+    const auto b=bitCube(right);if(!b)return {};
+    // XOR of independent complete cubes is another complete cube. This does
+    // not equate the operands or assume correlation between unknown values.
+    const auto variable=(a->second|b->second)&mask(width);
+    const auto fixed=(a->first^b->first)&~variable&mask(width);
+    const auto count=std::popcount(variable);
+    if(count>=64 || (std::uint64_t{1}<<count)>limits.maxValues)return Value{width};
+    Value result{width};
+    for(auto subset=variable;;subset=(subset-1)&variable) {
+      if(!spend())return Value{width};
+      result.finite.push_back(fixed|subset);
+      if(!subset)break;
+    }
+    return bounded(std::move(result));
+  }
+  std::optional<Value> smallSpanXor(const Value &left,const Value &right,W width) {
+    if(left.finite.size()<8 || right.finite.size()<8 ||
+       left.finite.size()*right.finite.size()<256)return {};
+    // Bitwise operations zero-extend their inputs, then truncate the result.
+    // Project and deduplicate before using cardinalities in the proof below.
+    for(const auto *input:{&left,&right})if(input->width!=width)
+      for(std::size_t i=0;i<input->finite.size();++i)if(!spend())return Value{width};
+    auto a=resize(left,width),b=resize(right,width);
+    if(a.finite.empty() || b.finite.empty() || !a.pointers.empty() || !b.pointers.empty())return {};
+    std::array<std::uint64_t,64> basis{};unsigned rank=0;
+    auto insert=[&](std::uint64_t value) {
+      while(value) {
+        if(!spend())return false;
+        const auto bit=63-std::countl_zero(value);
+        if(basis[bit])value ^= basis[bit];
+        else {basis[bit]=value;return ++rank<=6;}
+      }
+      return true;
+    };
+    for(const auto *input:{&a,&b})for(auto member:input->finite) {
+      if(!spend() || !insert(member^input->finite.front()))return {};
+    }
+    std::vector<std::pair<std::uint64_t,std::uint64_t>> directions;
+    for(int bit=63;bit>=0;--bit)if(basis[bit])directions.emplace_back(std::uint64_t{1}<<bit,basis[bit]);
+    const unsigned count=1u<<rank;
+    const auto all=count==64?~std::uint64_t{0}:(std::uint64_t{1}<<count)-1;
+    std::uint64_t image=0;
+    if(a.finite.size()+b.finite.size()>count) {
+      // Both translated sets lie in the same finite group H. For every h,
+      // A and h+B intersect when |A|+|B|>|H|, so A XOR B is exactly H.
+      image=all;
+    } else {
+      auto encode=[&](const Value &input)->std::optional<std::uint64_t> {
+        std::uint64_t bits=0;
+        for(auto member:input.finite) {
+          auto value=member^input.finite.front();unsigned code=0,index=0;
+          for(auto [pivot,direction]:directions) {
+            if(!spend())return {};
+            if(value&pivot) {value ^= direction;code |= 1u<<index;}
+            ++index;
+          }
+          if(value)return {}; // Never use an incomplete coordinate map.
+          bits |= std::uint64_t{1}<<code;
+        }
+        return bits;
+      };
+      const auto encodedA=encode(a);if(!encodedA)return {};
+      const auto encodedB=encode(b);if(!encodedB)return {};
+      constexpr std::array<std::uint64_t,6> masks{
+        0x5555555555555555ULL,0x3333333333333333ULL,0x0f0f0f0f0f0f0f0fULL,
+        0x00ff00ff00ff00ffULL,0x0000ffff0000ffffULL,0x00000000ffffffffULL};
+      for(auto remaining=*encodedA;remaining;remaining &= remaining-1) {
+        const auto code=std::countr_zero(remaining);auto permuted=*encodedB;
+        for(unsigned bit=0;bit<rank;++bit)if(code&(1u<<bit)) {
+          if(!spend())return Value{width};
+          const unsigned shift=1u<<bit;
+          permuted=((permuted&masks[bit])<<shift)|((permuted>>shift)&masks[bit]);
+        }
+        if(!spend())return Value{width};
+        image |= permuted;
+        if(std::popcount(image)>limits.maxValues)return Value{width};
+        if(image==all)break;
+      }
+    }
+    if(std::popcount(image)>limits.maxValues)return Value{width};
+    std::vector<std::uint64_t> span{0};
+    for(auto [pivot,direction]:directions) {
+      const auto size=span.size();
+      for(std::size_t i=0;i<size;++i) {
+        if(!spend())return Value{width};
+        span.push_back(span[i]^direction);
+      }
+    }
+    Value result{width};const auto offset=a.finite.front()^b.finite.front();
+    for(;image;image &= image-1) {
+      if(!spend())return Value{width};
+      result.finite.push_back(offset^span[std::countr_zero(image)]);
+    }
+    return bounded(std::move(result));
+  }
   Value operation(O op,const Value &left,const Value &right,W width,bool unary) {
     if(!width || width>64)return {width};
     if(!unary && (op==O::ADD || op==O::SUB)) {
@@ -296,6 +415,12 @@ class Engine {
          ((a.finite.size()==1 && a.finite[0]==0)||(b.finite.size()==1 && b.finite[0]==0))))return constant(0,width);
       if(op>=O::EQ && op<=O::SGE)return smallUnknown(1);
       return {width};
+    }
+    if(!unary && op==O::XOR) {
+      if(auto result=cubeXor(a,b,width))return std::move(*result);
+      if(failed)return {width};
+      if(auto result=smallSpanXor(a,b,width))return std::move(*result);
+      if(failed)return {width};
     }
     Value result{width};
     for(auto x:a.finite)for(auto y:unary?std::vector<std::uint64_t>{0}:b.finite) {
@@ -783,7 +908,13 @@ FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &gi
     const bool jump=ib && !ib->empty() && ib->ops().back().opcode==O::JMP && !ib->ops().back().srcs.empty();
     if(!jump && !requested.contains(at))continue;
     const auto it=states.find(at);const bool reached=it!=states.end() && it->second.reached;
-    Transfer out=reached && !e.failed && (jump || !memoryQueries)?e.transfer(at,it->second):Transfer{};
+    // A literal target does not depend on the block's output state. The work
+    // phase has already visited every reached block; replay only for an
+    // indirect target or requested end-of-block values. Memory queries below
+    // evaluate their own LOAD prefixes, never this unused full output state.
+    const bool indirect=jump && !std::holds_alternative<ignil::Const>(ib->ops().back().srcs[0]);
+    const bool needsOutput=indirect || (!memoryQueries && requested.contains(at));
+    Transfer out=reached && !e.failed && needsOutput?e.transfer(at,it->second):Transfer{};
     if(jump) {
       const auto &value=ib->ops().back().srcs[0];
       e.result.jumpTargets.emplace(at,e.report(reached?e.operand(out,value):Value{ignil::widthOf(value)},reached));

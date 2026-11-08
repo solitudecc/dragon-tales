@@ -206,6 +206,96 @@ TEST_CASE("Finite values distinguish unreachable and unknown and fail closed on 
   auto roots=finiteValues(cyclic,{},std::span{&input,1});
   REQUIRE(roots.complete);CHECK(roots.values[0].kind==ValueSetKind::Unknown);
 }
+TEST_CASE("Finite direct targets do not replay blocks without end-state queries",
+          "[finite-values][finite-report-cost]") {
+  for(auto arch:{Architecture::X86_32,Architecture::X86_64,Architecture::ARM64})
+    for(bool calls:{false,true}) {
+      CAPTURE(arch,calls);
+      const auto reg=arch==Architecture::ARM64?arm::X0:x86::RAX;
+      Graph graph{arch,{}};ignil::Block block{0x1000};
+      for(unsigned i=0;i<8;++i)
+        block.append({O::COPY,reg,{ignil::Const{i,64}},0x1000});
+      jump(block,0x9000);add(graph,std::move(block));
+      ignil::Block dead{0x2000};jump(dead,0x9000);add(graph,std::move(dead));
+      FiniteValueLimits limits;limits.proveLeafCalls=calls;limits.maxOperations=9;
+      const auto result=finiteValues(graph,{0x1000},{},limits);
+      REQUIRE(result.complete);CHECK(result.operations==9);CHECK(result.blockVisits==1);
+      equals(result.jumpTargets.at(0x1000),{0x9000});
+      CHECK(result.jumpTargets.at(0x2000).kind==ValueSetKind::Unreachable);
+      CHECK(result.jumpTargets.at(0x2000).values.empty());
+      // A failure in the work phase must still discard even literal targets.
+      limits.maxOperations=8;
+      const auto exhausted=finiteValues(graph,{0x1000},{},limits);
+      CHECK_FALSE(exhausted.complete);CHECK(exhausted.operations==8);
+      for(const auto &[at,value]:exhausted.jumpTargets) {
+        CHECK(value.kind==ValueSetKind::Unknown);CHECK(value.values.empty());
+      }
+    }
+}
+TEST_CASE("Finite direct target reports retain requested end-state transfers",
+          "[finite-values][finite-report-cost]") {
+  for(bool indirect:{false,true})for(bool calls:{false,true}) {
+    CAPTURE(indirect,calls);
+    Graph graph{Architecture::X86_64,{}};ignil::Block block{0x1000};
+    const ignil::Temp saved{0,64};
+    block.append({O::COPY,x86::RAX,{ignil::Const{7,64}},0x1000});
+    block.append({O::COPY,saved,{x86::RAX},0x1000});
+    block.append({O::COPY,x86::RAX,{ignil::Const{9,64}},0x1000});
+    block.append({O::JMP,{}, {indirect?ignil::Value{saved}:ignil::Value{ignil::Const{0x9000,64}}},0x1000});
+    add(graph,std::move(block));
+    const std::array queries{FiniteValueQuery{0x1000,x86::RAX},FiniteValueQuery{0x1000,saved}};
+    FiniteValueLimits limits;limits.proveLeafCalls=calls;limits.maxOperations=8;
+    const auto result=finiteValues(graph,{0x1000},queries,limits);
+    REQUIRE(result.complete);CHECK(result.operations==8);
+    REQUIRE(result.values.size()==queries.size());
+    equals(result.values[0],{9});equals(result.values[1],{7});
+    equals(result.jumpTargets.at(0x1000),{indirect?7ULL:0x9000ULL});
+    limits.maxOperations=4;
+    const auto exhausted=finiteValues(graph,{0x1000},queries,limits);
+    CHECK_FALSE(exhausted.complete);
+    for(const auto &value:exhausted.values) {
+      CHECK(value.kind==ValueSetKind::Unknown);CHECK(value.values.empty());
+    }
+    CHECK(exhausted.jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+    if(indirect) {
+      // An indirect target needs its defining operations even without queries.
+      const auto noQueries=finiteValues(graph,{0x1000},{},limits);
+      CHECK_FALSE(noQueries.complete);
+      CHECK(noQueries.jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+      limits.maxOperations=8;
+      const auto complete=finiteValues(graph,{0x1000},{},limits);
+      REQUIRE(complete.complete);CHECK(complete.operations==8);
+      equals(complete.jumpTargets.at(0x1000),{7});
+    }
+  }
+}
+TEST_CASE("Finite report shortcuts retain opaque block barriers",
+          "[finite-values][finite-report-cost]") {
+  for(bool local:{false,true})for(bool indirect:{false,true})for(bool calls:{false,true}) {
+    CAPTURE(local,indirect,calls);
+    Graph graph{Architecture::X86_64,{}};ignil::Block block{0x1000};
+    const ignil::Temp loaded{0,64};
+    block.append({O::COPY,x86::RAX,{ignil::Const{7,64}},0x1000});
+    block.append({O::STORE,{}, {ignil::Const{0x4000,64},ignil::Const{9,64}},0x1000});
+    block.append({O::LOAD,loaded,{ignil::Const{0x4000,64}},0x1000});
+    if(local)block.append({O::LABEL,{}, {},0x1000});
+    else block.noteUnlifted(0x1000);
+    block.append({O::JMP,{}, {indirect?ignil::Value{loaded}:ignil::Value{ignil::Const{0x9000,64}}},0x1000});
+    add(graph,std::move(block));
+    FiniteValueLimits limits;limits.proveLeafCalls=calls;
+    const std::array queries{FiniteValueQuery{0x1000,x86::RAX},FiniteValueQuery{0x1000,loaded}};
+    const auto values=finiteValues(graph,{0x1000},queries,limits);
+    REQUIRE(values.complete);
+    for(const auto &value:values.values)CHECK(value.kind==ValueSetKind::Unknown);
+    const FiniteMemoryQuery query{0x1000,2,0x4000,64};
+    const auto memory=finiteMemoryValues(graph,{0x1000},std::span{&query,1},limits);
+    REQUIRE(memory.complete);CHECK(memory.values[0].kind==ValueSetKind::Unknown);
+    for(const auto *result:{&values,&memory}) {
+      if(indirect)CHECK(result->jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+      else equals(result->jumpTargets.at(0x1000),{0x9000});
+    }
+  }
+}
 TEST_CASE("Finite values handle overwrites and wrapping concrete memory","[finite-values][finite-memory]") {
   Graph g{Architecture::X86_64,{}};ignil::Block b{0x1000};
   const ignil::Temp out{0,64};
