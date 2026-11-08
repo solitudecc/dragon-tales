@@ -8,10 +8,12 @@
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/StringExtras.h>
 #include <llvm/Support/JSON.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 #include <algorithm>
 #include <bit>
 #include <deque>
+#include <iterator>
 #include <optional>
 #include <tuple>
 #include <type_traits>
@@ -112,6 +114,7 @@ class Engine {
   }
   Value readRegister(const State &s,std::uint32_t offset,W width) {
     if(!width || width>64)return {width};
+    if(offset>UINT32_MAX-bytes(width))return {width};
     for(const auto &[key,v]:s.regs)
       if(key.first<=offset && offset+bytes(width)<=key.first+bytes(key.second))
         return extract(v,(offset-key.first)*8,width);
@@ -132,12 +135,21 @@ class Engine {
     return resize(std::move(r),width);
   }
   void writeRegister(State &s,const ignil::Reg &reg,Value value) {
+    // Register space has no modular addressing. Reject an invalid actual
+    // span before looking up a parent: a wrapped end can falsely fit a small
+    // architectural parent and preserve facts that this write overlaps.
+    if(!reg.width || reg.offset>UINT32_MAX-bytes(reg.width)) {s.regs.clear();return;}
     unsigned end=reg.offset+bytes(reg.width);
     if(reg.width==32) {
       bool found=false;
       for(const auto &p:parents)
         if(p.offset<=reg.offset && end<=p.offset+p.byteSize) {end=p.offset+p.byteSize;found=true;break;}
-      if(!found)end=reg.offset+8;
+      if(!found) {
+        // The existing generic 32-bit write model also clears four upper
+        // bytes. It cannot be applied when that implicit extent overflows.
+        if(reg.offset>UINT32_MAX-8) {s.regs.clear();return;}
+        end=reg.offset+8;
+      }
     }
     std::vector<std::pair<Register,Value>> preserved;
     for(auto it=s.regs.begin();it!=s.regs.end();) {
@@ -503,7 +515,7 @@ class Engine {
     if(merged==to)return false;
     to=std::move(merged);return true;
   }
-  State entry(std::uint64_t identity) {
+  State entry(std::uint64_t identity,const FiniteEntryState *initial=nullptr) {
     State s;s.reached=true;
     std::optional<ignil::Reg> sp;
     switch(graph.architecture()) {
@@ -514,6 +526,35 @@ class Engine {
       default:break;
     }
     if(sp)s.regs.emplace(Register{sp->offset,sp->width},Value{sp->width,{}, {Pointer{identity,0,sp->width}}});
+    if(initial) {
+      for(const auto &fact:initial->registers) {
+        // Constraints are not architectural writes. In particular a 32-bit
+        // constraint does not zero the parent's upper bytes. A partial SP
+        // constraint also cannot retain the unconstrained whole-SP identity.
+        const auto end=fact.offset+bytes(fact.width);
+        std::vector<std::pair<Register,Value>> preserved;
+        for(auto it=s.regs.begin();it!=s.regs.end();) {
+          const auto [start,width]=it->first;
+          const auto stop=start+bytes(width);
+          if(stop<=fact.offset || end<=start) {++it;continue;}
+          if(start<fact.offset)preserved.push_back({{start,W((fact.offset-start)*8)},extract(it->second,0,W((fact.offset-start)*8))});
+          if(end<stop)preserved.push_back({{end,W((stop-end)*8)},extract(it->second,(end-start)*8,W((stop-end)*8))});
+          it=s.regs.erase(it);
+        }
+        for(auto &[key,value]:preserved)if(known(value))s.regs.emplace(key,std::move(value));
+        s.regs.emplace(Register{fact.offset,fact.width},constant(fact.value,fact.width));
+      }
+      for(const auto &fact:initial->memory) {
+        for(std::size_t offset=0;offset<fact.bytes.size();) {
+          const auto count=std::min<std::size_t>(8,fact.bytes.size()-offset);
+          std::uint64_t value=0;
+          for(std::size_t i=0;i<count;++i)value|=std::uint64_t(fact.bytes[offset+i])<<(8*i);
+          const auto width=W(count*8);
+          s.memory.emplace(Slot{Pointer{0,fact.address+offset,64},width},constant(value,width));
+          offset+=count;
+        }
+      }
+    }
     return s;
   }
   FiniteValues report(const Value &v,bool reached) const {
@@ -533,35 +574,49 @@ class Engine {
   std::uint64_t proofFacts=0;
   bool failed=false;
 };
+std::set<std::uint64_t> admittedEntries(const Graph &graph,
+    const std::set<std::uint64_t> &given,const BackwardSlicer::Predecessors &predecessors) {
+  auto entries=given;
+  if(entries.empty())entries=graph.validFunctionAddresses();
+  if(entries.empty())for(const auto &[at,from]:predecessors)if(from.empty())entries.insert(at);
+  if(entries.empty())entries=graph.validBlockAddresses(); // Rootless cyclic IR still admits inputs.
+  for(const auto &[at,instruction]:graph.listing())for(auto callee:instruction.callees())entries.insert(callee);
+  return entries;
+}
 template<typename Query>
 FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &given,
-    std::span<const Query> queries,const FiniteValueLimits &limits) {
+    std::span<const Query> queries,const FiniteValueLimits &limits,
+    std::span<const FiniteEntryState> initialStates={},std::uint64_t initialCost=0) {
   constexpr bool memoryQueries=std::is_same_v<Query,FiniteMemoryQuery>;
   auto queryWidth=[](const Query &query) {
     if constexpr(memoryQueries)return query.width;
     else return ignil::widthOf(query.value);
   };
   Engine e{graph,limits};
+  e.result.operations=initialCost;
+  // Bounded owned assumptions remain resident during the analysis, alongside
+  // live abstract states and cached call proofs; charge all of them.
+  e.proofFacts=initialCost;
   std::map<std::uint64_t,State> states;
   std::map<std::uint64_t,std::vector<std::uint64_t>> successors;
   const auto predecessors=BackwardSlicer::predecessors(graph);
   for(const auto &[at,from]:predecessors)for(auto p:from)successors[p].push_back(at);
-  auto entries=given;
-  if(entries.empty())entries=graph.validFunctionAddresses();
-  if(entries.empty())for(const auto &[at,from]:predecessors)if(from.empty())entries.insert(at);
-  if(entries.empty())entries=graph.validBlockAddresses(); // Cyclic rootless IR: admit inputs everywhere.
+  const auto entries=admittedEntries(graph,given,predecessors);
   // Direct callees have independent input states; CALL itself stays a barrier.
-  for(const auto &[at,insn]:graph.listing())for(auto callee:insn.callees())entries.insert(callee);
+  std::map<std::uint64_t,const FiniteEntryState *> initial;
+  for(const auto &state:initialStates)initial.emplace(state.entry,&state);
   std::deque<std::uint64_t> queue;std::set<std::uint64_t> queued;
   std::uint64_t identity=1;
   for(auto at:entries)if(graph.isValidBlock(at)) {
-    auto in=e.entry(identity++);e.merge(states[at],in);queue.push_back(at);queued.insert(at);
+    const auto found=initial.find(at);
+    auto in=e.entry(identity++,found==initial.end()?nullptr:found->second);
+    e.merge(states[at],in);queue.push_back(at);queued.insert(at);
   }
   if(!limits.maxValues || limits.maxValues>256 || !limits.maxBlocks ||
      !limits.maxOperations || !limits.maxFacts) e.failed=true;
   std::uint64_t facts=0;
   for(const auto &[at,state]:states)facts+=state.regs.size()+state.memory.size();
-  if(states.size()>limits.maxBlocks || facts>limits.maxFacts)e.failed=true;
+  if(states.size()>limits.maxBlocks || facts+e.proofFacts>limits.maxFacts)e.failed=true;
   while(!queue.empty() && !e.failed) {
     auto at=queue.front();queue.pop_front();queued.erase(at);++e.result.blockVisits;
     auto out=e.transfer(at,states.at(at));
@@ -621,6 +676,96 @@ FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &gi
   }
   return std::move(e.result);
 }
+struct InitialValidation {
+  std::uint64_t cost=0;
+  std::string error;
+};
+InitialValidation validateInitial(const Graph &graph,const std::set<std::uint64_t> &given,
+    std::span<const FiniteEntryState> states,const FiniteValueLimits &limits) {
+  constexpr std::uint64_t hardCap=262144;
+  InitialValidation result;
+  auto charge=[&](std::uint64_t amount) {
+    const auto cap=std::min<std::uint64_t>({hardCap,limits.maxFacts,limits.maxOperations});
+    if(amount>cap-result.cost) {
+      result.error="finite initial-state initialization budget exhausted";
+      return false;
+    }
+    result.cost+=amount;
+    return true;
+  };
+  auto invalid=[&](const char *why) {
+    result.error=std::string("invalid finite initial-state assumptions: ")+why;
+    return result;
+  };
+  // Check each collection's size before walking or copying caller data.
+  if(!charge(states.size()))return result;
+  const auto entries=admittedEntries(graph,given,BackwardSlicer::predecessors(graph));
+  std::set<std::uint64_t> seen;
+  auto insertRange=[](std::map<std::uint64_t,std::uint64_t> &ranges,
+      std::uint64_t first,std::uint64_t last) {
+    const auto next=ranges.lower_bound(first);
+    if(next!=ranges.end() && next->first<=last)return false;
+    if(next!=ranges.begin() && std::prev(next)->second>=first)return false;
+    ranges.emplace_hint(next,first,last);
+    return true;
+  };
+  for(const auto &state:states) {
+    if(!seen.insert(state.entry).second)return invalid("duplicate entry");
+    if(!entries.contains(state.entry) || !graph.isValidBlock(state.entry))
+      return invalid("entry is not an admitted valid root");
+    if(!charge(state.registers.size()) || !charge(state.memory.size()))return result;
+    std::map<std::uint64_t,std::uint64_t> registers,memory;
+    for(const auto &fact:state.registers) {
+      if(fact.width<8 || fact.width>64 || fact.width%8)
+        return invalid("register width must be whole bytes in 8..64");
+      const auto count=bytes(fact.width);
+      if(!charge(count))return result;
+      if(fact.value>mask(fact.width))return invalid("register value does not fit its width");
+      // The engine uses uint32 exclusive register ends; reject an end that
+      // would wrap even when the fact's final byte itself fits uint32.
+      if(fact.offset>UINT32_MAX-count)return invalid("register range overflows");
+      if(!insertRange(registers,fact.offset,std::uint64_t(fact.offset)+count-1))
+        return invalid("overlapping register facts");
+    }
+    for(const auto &fact:state.memory) {
+      if(fact.bytes.empty())return invalid("empty memory range");
+      if(!charge(fact.bytes.size()))return result;
+      if(fact.bytes.size()-1>UINT64_MAX-fact.address)return invalid("memory range overflows");
+      if(!insertRange(memory,fact.address,fact.address+fact.bytes.size()-1))
+        return invalid("overlapping memory facts");
+    }
+  }
+  return result;
+}
+template<typename Query>
+FiniteInitialStateResult runInitial(const Graph &graph,const std::set<std::uint64_t> &given,
+    std::span<const Query> queries,std::span<const FiniteEntryState> states,
+    const FiniteValueLimits &limits) {
+  auto width=[](const Query &query) {
+    if constexpr(std::is_same_v<Query,FiniteMemoryQuery>)return query.width;
+    else return ignil::widthOf(query.value);
+  };
+  FiniteInitialStateResult result;
+  const auto validation=validateInitial(graph,given,states,limits);
+  if(!validation.error.empty()) {
+    result.analysis.complete=false;
+    result.analysis.message=validation.error;
+    result.analysis.operations=validation.cost;
+    result.analysis.values.reserve(queries.size());
+    for(const auto &query:queries)
+      result.analysis.values.push_back({ValueSetKind::Unknown,width(query),{}});
+    for(auto address:graph.validBlockAddresses()) {
+      const auto *block=graph.getIGNILBlock(address);
+      if(block && !block->empty() && block->ops().back().opcode==O::JMP && !block->ops().back().srcs.empty())
+        result.analysis.jumpTargets.emplace(address,FiniteValues{ValueSetKind::Unknown,ignil::widthOf(block->ops().back().srcs[0]),{}});
+    }
+    return result;
+  }
+  result.assumptions.assign(states.begin(),states.end());
+  result.assumptionsValid=true;
+  result.analysis=runFinite(graph,given,queries,limits,result.assumptions,validation.cost);
+  return result;
+}
 } // namespace
 
 FiniteValueResult finiteValues(const Graph &graph,const std::set<std::uint64_t> &given,
@@ -631,6 +776,17 @@ FiniteValueResult finiteValues(const Graph &graph,const std::set<std::uint64_t> 
 FiniteValueResult finiteMemoryValues(const Graph &graph,const std::set<std::uint64_t> &given,
     std::span<const FiniteMemoryQuery> queries,const FiniteValueLimits &limits) {
   return runFinite(graph,given,queries,limits);
+}
+
+FiniteInitialStateResult finiteValuesWithInitialState(const Graph &graph,
+    const std::set<std::uint64_t> &entries,std::span<const FiniteValueQuery> queries,
+    std::span<const FiniteEntryState> states,const FiniteValueLimits &limits) {
+  return runInitial(graph,entries,queries,states,limits);
+}
+FiniteInitialStateResult finiteMemoryValuesWithInitialState(const Graph &graph,
+    const std::set<std::uint64_t> &entries,std::span<const FiniteMemoryQuery> queries,
+    std::span<const FiniteEntryState> states,const FiniteValueLimits &limits) {
+  return runInitial(graph,entries,queries,states,limits);
 }
 
 std::string FiniteValueResult::toJSON() const {
@@ -651,6 +807,32 @@ std::string FiniteValueResult::toJSON() const {
     {"block_visits",blockVisits},{"operations",operations},
     {"proven_calls",provenCalls},{"rejected_calls",rejectedCalls},
     {"jump_targets",std::move(targets)},{"values",std::move(queried)}});
+  return text;
+}
+
+std::string FiniteInitialStateResult::toJSON() const {
+  auto json=llvm::cantFail(llvm::json::parse(analysis.toJSON()));
+  auto &object=*json.getAsObject();
+  object["conditional"]=true;
+  object["assumptions_valid"]=assumptionsValid;
+  llvm::json::Array entries;
+  for(const auto &state:assumptions) {
+    llvm::json::Array registers,memory;
+    for(const auto &fact:state.registers)
+      registers.push_back(llvm::json::Object{{"offset","0x"+llvm::utohexstr(fact.offset)},
+          {"width",unsigned(fact.width)},{"value","0x"+llvm::utohexstr(fact.value)}});
+    for(const auto &fact:state.memory) {
+      constexpr char digits[]="0123456789abcdef";
+      std::string bytes;bytes.reserve(fact.bytes.size()*2);
+      for(auto byte:fact.bytes) {bytes.push_back(digits[byte>>4]);bytes.push_back(digits[byte&15]);}
+      memory.push_back(llvm::json::Object{{"address","0x"+llvm::utohexstr(fact.address)},
+          {"bytes",std::move(bytes)}});
+    }
+    entries.push_back(llvm::json::Object{{"entry","0x"+llvm::utohexstr(state.entry)},
+        {"registers",std::move(registers)},{"memory",std::move(memory)}});
+  }
+  object["entry_states"]=std::move(entries);
+  std::string text;llvm::raw_string_ostream out(text);out<<json;
   return text;
 }
 } // namespace dragon::analysis

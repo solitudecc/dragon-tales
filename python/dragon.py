@@ -354,6 +354,134 @@ class ValueSetKind:
     UNKNOWN = 2
 
 
+class FiniteEntryState:
+    """Owned entry constraints for read-only conditional finite analysis.
+
+    registers contains (byte_offset, width_bits, value); memory contains
+    (guest_address, bytes_like). Register facts constrain bytes, so EAX does
+    not imply zero RAX upper bits. Initial bytes are not a promise about later
+    LOADs. No image reader, Graph edge, or LLVM assumption is installed.
+    """
+    def __init__(self, entry, *, registers=(), memory=()):
+        self._entry = _initial_uint(entry, 64, 'entry')
+        cost = 1
+        regs, cells = [], []
+        for item in registers:
+            if len(regs) >= 262144:
+                raise ValueError('too many initial register facts')
+            row = tuple(item)
+            if len(row) != 3:
+                raise ValueError('register facts require (offset, width, value)')
+            offset = _initial_uint(row[0], 32, 'register offset')
+            width = row[1]
+            if type(width) is not int or not 8 <= width <= 64 or width % 8:
+                raise ValueError('initial register width must be whole bytes in 8..64')
+            value = _initial_uint(row[2], width, 'register value')
+            if offset > 0xffffffff - width // 8:
+                raise ValueError('initial register range overflows')
+            cost += 1 + width // 8
+            if cost > 262144:
+                raise ValueError('initial-state input exceeds 262144 facts/bytes')
+            regs.append((offset, width, value))
+        for item in memory:
+            row = tuple(item)
+            if len(row) != 2:
+                raise ValueError('memory facts require (address, bytes_like)')
+            address = _initial_uint(row[0], 64, 'memory address')
+            view = memoryview(row[1])
+            if not view.nbytes or view.nbytes > 262144 - cost - 1:
+                raise ValueError('initial memory must be nonempty and fit the input limit')
+            if view.nbytes - 1 > 0xffffffffffffffff - address:
+                raise ValueError('initial memory range overflows')
+            payload = view.tobytes()
+            cost += 1 + len(payload)
+            cells.append((address, payload))
+        self._registers = tuple(regs)
+        self._memory = tuple(cells)
+
+    @property
+    def entry(self): return self._entry
+
+    @property
+    def registers(self): return self._registers
+
+    @property
+    def memory(self): return self._memory
+
+
+def _initial_uint(value, bits, name):
+    if type(value) is not int or not 0 <= value < (1 << bits):
+        raise ValueError(f'{name} must be a uint{bits} integer')
+    return value
+
+
+def _finite_initial_arguments(graph, entry_points, initial_states, limits, prove_leaf_calls):
+    if not graph._ptr:
+        raise ReferenceError('Graph has been closed')
+    if type(prove_leaf_calls) is not bool:
+        raise ValueError('prove_leaf_calls must be bool')
+    if any(type(x) is not int or not 0 <= x <= 0xffffffff for x in limits):
+        raise ValueError('finite-value limits must be uint32 integers')
+    entries = []
+    for entry in entry_points:
+        if len(entries) >= 262144:
+            raise ValueError('too many entry points')
+        entries.append(_initial_uint(entry, 64, 'entry point'))
+    states, cost = [], 0
+    for state in initial_states:
+        if not isinstance(state, FiniteEntryState):
+            raise TypeError('initial_states must contain FiniteEntryState objects')
+        # Revalidate and copy, including objects whose private attributes a
+        # caller changed after construction. No borrowed Python buffers escape.
+        copied = FiniteEntryState(state.entry, registers=state.registers, memory=state.memory)
+        cost += 1 + sum(1 + w // 8 for _, w, _ in copied.registers)
+        cost += sum(1 + len(data) for _, data in copied.memory)
+        if cost > 262144:
+            raise ValueError('initial-state input exceeds 262144 facts/bytes')
+        states.append(copied)
+    roots = ffi.new('uint64_t[]', entries) if entries else ffi.NULL
+    native = ffi.new('dragon_finite_entry_state_t[]', len(states)) if states else ffi.NULL
+    keep = [roots, native]
+    for index, state in enumerate(states):
+        row = native[index]
+        row.entry = state.entry
+        regs = ffi.new('dragon_finite_register_fact_t[]', len(state.registers)) if state.registers else ffi.NULL
+        cells = ffi.new('dragon_finite_memory_fact_t[]', len(state.memory)) if state.memory else ffi.NULL
+        keep.extend((regs, cells))
+        row.registers, row.register_count = regs, len(state.registers)
+        row.memory, row.memory_count = cells, len(state.memory)
+        for i, (offset, width, value) in enumerate(state.registers):
+            regs[i].offset, regs[i].width, regs[i].value = offset, width, value
+        for i, (address, payload) in enumerate(state.memory):
+            data = ffi.new('uint8_t[]', payload)
+            keep.append(data)
+            cells[i].address, cells[i].bytes, cells[i].size = address, data, len(payload)
+    return roots, len(entries), native, len(states), keep
+
+
+def _finite_initial_result(raw):
+    import json
+    if raw == ffi.NULL:
+        raise RuntimeError('conditional finite analysis rejected its C input or failed')
+    try:
+        result = json.loads(ffi.string(raw).decode())
+    finally:
+        lib.dragon_cstr_free(raw)
+    if result.get('conditional') is not True:
+        raise RuntimeError('conditional finite analysis returned an unlabelled result')
+    for value in [*result['jump_targets'], *result['values']]:
+        value['values'] = [int(x, 16) for x in value['values']]
+    result['jump_targets'] = {int(v.pop('block'), 16): v for v in result['jump_targets']}
+    for state in result['entry_states']:
+        state['entry'] = int(state['entry'], 16)
+        for reg in state['registers']:
+            reg['offset'], reg['value'] = int(reg['offset'], 16), int(reg['value'], 16)
+        for cell in state['memory']:
+            cell['address'] = int(cell['address'], 16)
+            # Keep the exact byte-string hex encoding JSON-serializable.
+    return result
+
+
 class Graph:
     """Owns the instruction listing and address queues."""
 
@@ -458,6 +586,66 @@ class Graph:
             value['values']=[int(x,16) for x in value['values']]
         result['jump_targets']={int(v.pop('block'),16):v for v in result['jump_targets']}
         return result
+
+    def finite_values_with_initial_state(self, initial_states, *, entry_points=(),
+                                        query_register=None, max_values=64,
+                                        max_blocks=4096, max_operations=1000000,
+                                        max_facts=262144, prove_leaf_calls=False):
+        """Read-only facts conditional on owned FiniteEntryState constraints.
+
+        assumptions_valid means structurally valid, not independently true.
+        Results must not be used as unconditional Graph/LLVM proofs. Initial
+        state facts are admitted once and join backedges normally; unknown
+        calls/writes and undeclared independent entries retain their barriers.
+        """
+        limits = (max_values, max_blocks, max_operations, max_facts)
+        roots, count, states, state_count, keep = _finite_initial_arguments(
+            self, entry_points, initial_states, limits, prove_leaf_calls)
+        query = (0, 0, 0) if query_register is None else tuple(query_register)
+        if len(query) != 3:
+            raise ValueError('query_register must be (block, offset, width)')
+        _initial_uint(query[0], 64, 'query block')
+        _initial_uint(query[1], 32, 'query offset')
+        if type(query[2]) is not int or not 0 <= query[2] <= 64:
+            raise ValueError('query width must be an integer in 0..64')
+        raw = lib.dragon_graph_finite_values_with_initial_state(
+            self._ptr, roots, count, *query, *limits, int(prove_leaf_calls), states, state_count)
+        return _finite_initial_result(raw)
+
+    def finite_memory_values_with_initial_state(self, queries, initial_states, *,
+                                               entry_points=(), max_values=64,
+                                               max_blocks=4096, max_operations=1000000,
+                                               max_facts=262144, prove_leaf_calls=False):
+        """Query (block, before_op_index, address, width_bits) at actual LOADs.
+
+        Fixed cells can differ from a LOAD's dynamic index. Invalid LOAD sites
+        produce Unknown. No runtime snapshot or image memory is inferred.
+        This conditional result never installs branches or mutates the Graph.
+        """
+        limits = (max_values, max_blocks, max_operations, max_facts)
+        roots, count, states, state_count, keep = _finite_initial_arguments(
+            self, entry_points, initial_states, limits, prove_leaf_calls)
+        items = []
+        for item in queries:
+            if len(items) >= 262144:
+                raise ValueError('too many memory queries')
+            row = tuple(item)
+            if len(row) != 4:
+                raise ValueError('memory queries require (block, before_op_index, address, width)')
+            _initial_uint(row[0], 64, 'query block')
+            _initial_uint(row[1], ffi.sizeof('size_t') * 8, 'operation index')
+            _initial_uint(row[2], 64, 'query address')
+            if type(row[3]) is not int or not 0 <= row[3] <= 64:
+                raise ValueError('query width must be an integer in 0..64')
+            items.append(row)
+        native = ffi.new('dragon_finite_memory_query_t[]', len(items)) if items else ffi.NULL
+        keep.append(native)
+        for i, row in enumerate(items):
+            native[i].block, native[i].before_op_index, native[i].address, native[i].width = row
+        raw = lib.dragon_graph_finite_memory_values_with_initial_state(
+            self._ptr, roots, count, native, len(items), *limits,
+            int(prove_leaf_calls), states, state_count)
+        return _finite_initial_result(raw)
 
     def __repr__(self):
         return f'<Graph instructions={len(self)}>'

@@ -813,6 +813,86 @@ static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Unreachable)==DRA
 static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Finite)==DRAGON_VALUE_FINITE);
 static_assert(static_cast<int>(dragon::analysis::ValueSetKind::Unknown)==DRAGON_VALUE_UNKNOWN);
 
+namespace {
+// Bound allocation before dereferencing caller arrays. The native analyser
+// independently charges/validates all constraints against its own budgets.
+constexpr size_t initialInputCap = 262144;
+bool copyInitialStates(const dragon_finite_entry_state_t *states,size_t count,
+                       std::vector<dragon::analysis::FiniteEntryState> &out) {
+  if ((count && !states) || count > initialInputCap) return false;
+  size_t used=count;
+  auto charge=[&](size_t n) {
+    if(n>initialInputCap-used)return false;
+    used+=n;return true;
+  };
+  out.reserve(count);
+  for(size_t i=0;i<count;++i) {
+    const auto &s=states[i];
+    if((s.register_count && !s.registers) || (s.memory_count && !s.memory) ||
+       !charge(s.register_count) || !charge(s.memory_count))return false;
+    dragon::analysis::FiniteEntryState entry{s.entry,{},{}};
+    entry.registers.reserve(s.register_count);
+    for(size_t j=0;j<s.register_count;++j) {
+      const auto &r=s.registers[j];
+      if(!charge((size_t(r.width)+7)/8))return false;
+      entry.registers.push_back({r.offset,r.width,r.value});
+    }
+    entry.memory.reserve(s.memory_count);
+    for(size_t j=0;j<s.memory_count;++j) {
+      const auto &m=s.memory[j];
+      if((m.size && !m.bytes) || !charge(m.size))return false;
+      dragon::analysis::FiniteMemoryFact memory{m.address,{}};
+      if(m.size)memory.bytes.assign(m.bytes,m.bytes+m.size);
+      entry.memory.push_back(std::move(memory));
+    }
+    out.push_back(std::move(entry));
+  }
+  return true;
+}
+}
+
+char *dragon_graph_finite_values_with_initial_state(const dragon_graph_t *g,
+    const uint64_t *entries,size_t count,uint64_t query_block,
+    uint32_t query_offset,uint8_t query_width,uint32_t max_values,
+    uint32_t max_blocks,uint32_t max_operations,uint32_t max_facts,
+    uint8_t prove_leaf_calls,const dragon_finite_entry_state_t *states,size_t state_count) {
+  if(!g || (count && !entries) || count>initialInputCap ||
+     query_width>64 || prove_leaf_calls>1)return nullptr;
+  try {
+    std::vector<dragon::analysis::FiniteEntryState> initial;
+    if(!copyInitialStates(states,state_count,initial))return nullptr;
+    std::set<std::uint64_t> roots;
+    if(count)roots.insert(entries,entries+count);
+    std::vector<dragon::analysis::FiniteValueQuery> queries;
+    if(query_width)queries.push_back({query_block,dragon::ignil::Reg{query_offset,query_width,{}}});
+    return dup_string(dragon::analysis::finiteValuesWithInitialState(*as_graph(g),roots,
+      queries,initial,{max_values,max_blocks,max_operations,max_facts,prove_leaf_calls!=0}).toJSON());
+  } catch(...) {return nullptr;}
+}
+
+char *dragon_graph_finite_memory_values_with_initial_state(const dragon_graph_t *g,
+    const uint64_t *entries,size_t count,const dragon_finite_memory_query_t *queries,
+    size_t query_count,uint32_t max_values,uint32_t max_blocks,uint32_t max_operations,
+    uint32_t max_facts,uint8_t prove_leaf_calls,
+    const dragon_finite_entry_state_t *states,size_t state_count) {
+  if(!g || (count && !entries) || count>initialInputCap ||
+     (query_count && !queries) || query_count>initialInputCap || prove_leaf_calls>1)return nullptr;
+  try {
+    std::vector<dragon::analysis::FiniteEntryState> initial;
+    if(!copyInitialStates(states,state_count,initial))return nullptr;
+    std::set<std::uint64_t> roots;
+    if(count)roots.insert(entries,entries+count);
+    std::vector<dragon::analysis::FiniteMemoryQuery> native;
+    native.reserve(query_count);
+    for(size_t i=0;i<query_count;++i) {
+      const auto &q=queries[i];
+      native.push_back({q.block,q.before_op_index,q.address,q.width});
+    }
+    return dup_string(dragon::analysis::finiteMemoryValuesWithInitialState(*as_graph(g),roots,
+      native,initial,{max_values,max_blocks,max_operations,max_facts,prove_leaf_calls!=0}).toJSON());
+  } catch(...) {return nullptr;}
+}
+
 void dragon_u64_array_free(uint64_t *arr) { delete[] arr; }
 
 // Never returns nullptr, even for an empty vector - callers rely on getting

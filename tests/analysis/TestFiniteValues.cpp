@@ -100,6 +100,88 @@ TEST_CASE("Finite values honor subregister snapshots and zero upper bits","[fini
   b.append({O::COPY,x86::AH,{ignil::Const{0x42,8}},0x1000});add(g,std::move(b));
   equals(query(g,0x1000,x86::RAX),{0x123456789abc42f0ULL});
 }
+TEST_CASE("Finite values reject wrapped register query ranges before reading unrelated facts",
+          "[finite-values][finite-register-range]") {
+  constexpr std::uint32_t high=0x1ffffff8U;
+  constexpr std::uint32_t boundary=UINT32_MAX-8;
+  Graph graph{Architecture::X86_64,{}};
+  ignil::Block block{0x1000};
+  block.append({O::COPY,ignil::Reg{high,64,{}},{ignil::Const{0x1122334455667788ULL,64}},0x1000});
+  block.append({O::COPY,ignil::Reg{boundary,64,{}},{ignil::Const{0x8877665544332211ULL,64}},0x1000});
+  // A low-offset symbolic SP would incidentally return Unknown first and
+  // mask the erroneous match against the later high-offset concrete fact.
+  block.append({O::UNDEF,x86::RSP,{},0x1000});
+  block.append({O::JMP,{}, {ignil::Reg{UINT32_MAX-6,64,{}}},0x1000});
+  add(graph,std::move(block));
+  const std::array queries{
+    FiniteValueQuery{0x1000,ignil::Reg{high,64,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{boundary,64,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{UINT32_MAX-1,8,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{UINT32_MAX-16,64,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{UINT32_MAX,8,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{UINT32_MAX,16,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{UINT32_MAX-2,32,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{UINT32_MAX-6,64,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{0,0,{}}},
+    FiniteValueQuery{0x1000,ignil::Reg{0,128,{}}}};
+  const auto result=finiteValues(graph,{0x1000},queries);
+  REQUIRE(result.complete);REQUIRE(result.values.size()==queries.size());
+  equals(result.values[0],{0x1122334455667788ULL});
+  equals(result.values[1],{0x8877665544332211ULL});
+  equals(result.values[2],{0x88});
+  for(std::size_t i=3;i<queries.size();++i) {
+    CAPTURE(i);CHECK(result.values[i].kind==ValueSetKind::Unknown);CHECK(result.values[i].values.empty());
+  }
+  REQUIRE(result.jumpTargets.contains(0x1000));
+  CHECK(result.jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+}
+TEST_CASE("Finite values invalidate overflowing register writes without losing valid parent effects",
+          "[finite-values][finite-register-write-range]") {
+  enum Scenario {Fallback32,Span32,Span64,WideOverflow,ZeroWidthInvalidIR,
+                 Last64,LastFallback32,HighPartial32,FixedParentUpper32,ValidWideUndef};
+  for(auto scenario:{Fallback32,Span32,Span64,WideOverflow,ZeroWidthInvalidIR,
+                    Last64,LastFallback32,HighPartial32,FixedParentUpper32,ValidWideUndef}) {
+    CAPTURE(scenario);
+    const std::uint32_t at=scenario==HighPartial32?UINT32_MAX-16:
+        scenario==FixedParentUpper32?0:scenario==ValidWideUndef?0x1000:UINT32_MAX-8;
+    constexpr std::uint64_t before=0x1122334455667788ULL;
+    constexpr std::uint64_t unrelated=0xcafef00d98765432ULL;
+    Graph graph{Architecture::X86_64,{}};ignil::Block block{0x1000};
+    block.append({O::COPY,ignil::Reg{at,64,{}},{ignil::Const{before,64}},0x1000});
+    block.append({O::COPY,x86::RCX,{ignil::Const{unrelated,64}},0x1000});
+    if(scenario==Fallback32)block.append({O::COPY,ignil::Reg{UINT32_MAX-4,32,{}},{ignil::Const{0xaabbccdd,32}},0x1000});
+    if(scenario==Span32)block.append({O::COPY,ignil::Reg{UINT32_MAX-2,32,{}},{ignil::Const{0xaabbccdd,32}},0x1000});
+    if(scenario==Span64)block.append({O::COPY,ignil::Reg{UINT32_MAX-6,64,{}},{ignil::Const{0xaabbccddeeff0011ULL,64}},0x1000});
+    if(scenario==WideOverflow)block.append({O::UNDEF,ignil::Reg{at,128,{}},{},0x1000});
+    // Width zero is deliberately invalid IGNIL, not a CPU instruction claim.
+    if(scenario==ZeroWidthInvalidIR)block.append({O::UNDEF,ignil::Reg{at,0,{}},{},0x1000});
+    if(scenario==Last64)block.append({O::COPY,ignil::Reg{at,64,{}},{ignil::Const{0xaabbccdd01020304ULL,64}},0x1000});
+    if(scenario==LastFallback32)block.append({O::COPY,ignil::Reg{at,32,{}},{ignil::Const{0xaabbccdd,32}},0x1000});
+    if(scenario==HighPartial32 || scenario==FixedParentUpper32)
+      block.append({O::COPY,ignil::Reg{at+4,32,{}},{ignil::Const{0xaabbccdd,32}},0x1000});
+    if(scenario==ValidWideUndef)block.append({O::UNDEF,ignil::Reg{at,128,{}},{},0x1000});
+    block.append({O::JMP,{}, {ignil::Reg{at,64,{}}},0x1000});add(graph,std::move(block));
+    const std::array queries{FiniteValueQuery{0x1000,ignil::Reg{at,64,{}}},
+      FiniteValueQuery{0x1000,ignil::Reg{at+4,32,{}}},FiniteValueQuery{0x1000,x86::RCX}};
+    const auto result=finiteValues(graph,{0x1000},queries);
+    REQUIRE(result.complete);REQUIRE(result.values.size()==queries.size());
+    if(scenario<=ZeroWidthInvalidIR) {
+      for(const auto &value:result.values) {CHECK(value.kind==ValueSetKind::Unknown);CHECK(value.values.empty());}
+      CHECK(result.jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+    } else {
+      equals(result.values[2],{unrelated});
+      if(scenario==ValidWideUndef) {
+        CHECK(result.values[0].kind==ValueSetKind::Unknown);CHECK(result.values[1].kind==ValueSetKind::Unknown);
+        CHECK(result.jumpTargets.at(0x1000).kind==ValueSetKind::Unknown);
+      } else {
+        const auto expected=scenario==Last64?0xaabbccdd01020304ULL:
+            scenario==LastFallback32?0x00000000aabbccddULL:0xaabbccdd55667788ULL;
+        equals(result.values[0],{expected});equals(result.values[1],{expected>>32});
+        equals(result.jumpTargets.at(0x1000),{expected});
+      }
+    }
+  }
+}
 TEST_CASE("Finite values distinguish unreachable and unknown and fail closed on budgets","[finite-values]") {
   Graph g{Architecture::X86_64,{}};ignil::Block entry{0x1000};
   entry.append({O::COPY,x86::EAX,{ignil::Const{7,32}},0x1000});add(g,std::move(entry));

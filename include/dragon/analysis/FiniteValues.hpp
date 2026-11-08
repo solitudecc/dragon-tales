@@ -3,7 +3,6 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <cstddef>
 #include <cstdint>
-#include <cstddef>
 #include <map>
 #include <set>
 #include <span>
@@ -56,6 +55,33 @@ struct FiniteValueResult {
   std::string toJSON() const; ///< Unsigned addresses/values are hexadecimal strings.
 };
 
+/// Initial byte constraints, not machine register writes: a 32-bit fact does
+/// not constrain or zero the upper half of a 64-bit register. Facts must have
+/// a whole-byte width in 8..64, fit that width and not overlap other facts.
+struct FiniteRegisterFact {
+  std::uint32_t offset;
+  ignil::Width width;
+  std::uint64_t value;
+};
+struct FiniteMemoryFact {
+  std::uint64_t address;
+  std::vector<std::uint8_t> bytes;
+};
+struct FiniteEntryState {
+  std::uint64_t entry;
+  std::vector<FiniteRegisterFact> registers;
+  std::vector<FiniteMemoryFact> memory;
+};
+struct FiniteInitialStateResult {
+  FiniteValueResult analysis;
+  /// Owned, bounded caller assumptions; never independently proved true.
+  std::vector<FiniteEntryState> assumptions;
+  bool assumptionsValid = false; ///< Structural validity, not truth of assumptions.
+  /// Original analysis fields plus conditional:true, assumptions_valid and
+  /// entry_states. Entries/offsets/values are hex strings, bytes are hex pairs.
+  std::string toJSON() const;
+};
+
 /// Forward finite-set analysis of IGNIL, independent of the constant-only slicer.
 /// Every supplied entry admits arbitrary registers/memory. Empty entries use
 /// valid function starts, then predecessor-free blocks, or all blocks in a
@@ -85,6 +111,26 @@ FiniteValueResult finiteValues(
 FiniteValueResult finiteMemoryValues(
     const Graph &graph, const std::set<std::uint64_t> &entries,
     std::span<const FiniteMemoryQuery> queries,
+    const FiniteValueLimits &limits = {});
+
+/// Conditional read-only analyses. Initial facts constrain only already
+/// admitted valid roots; they never add roots or constrain undeclared entries
+/// or independent callees. Backedges merge with, rather than reset, entry facts.
+/// Unknown CALL/unlifted/local-control effects retain the ordinary barriers.
+/// No image bytes are read and no Graph or target publication is changed.
+/// Invalid assumptions or initialization budget exhaustion make the entire
+/// analysis incomplete/Unknown; at most 262144 initialization bytes/facts are
+/// admitted, additionally bounded by maxFacts/maxOperations. Owned assumptions
+/// are retained only after bounded structural validation succeeds.
+FiniteInitialStateResult finiteValuesWithInitialState(
+    const Graph &graph, const std::set<std::uint64_t> &entries,
+    std::span<const FiniteValueQuery> queries,
+    std::span<const FiniteEntryState> initialStates,
+    const FiniteValueLimits &limits = {});
+FiniteInitialStateResult finiteMemoryValuesWithInitialState(
+    const Graph &graph, const std::set<std::uint64_t> &entries,
+    std::span<const FiniteMemoryQuery> queries,
+    std::span<const FiniteEntryState> initialStates,
     const FiniteValueLimits &limits = {});
 
 } // namespace analysis

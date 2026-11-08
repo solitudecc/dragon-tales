@@ -20,6 +20,7 @@ add_executable(dragon_tests
         analysis/TestBackwardSlicer.cpp
         analysis/TestFiniteValues.cpp
         analysis/TestFiniteMemory.cpp
+        analysis/TestFiniteInitialState.cpp
         analysis/TestSwitchDetector.cpp
         analysis/TestConstantValue.cpp
         analysis/TestIGNILSimplify.cpp
@@ -167,7 +168,7 @@ include(Catch)
 catch_discover_tests(dragon_tests)
 # Keep C-shim tests separate: the main suite links LLVM static components
 # directly, while libdragon_c already carries its own LLVM dependencies.
-add_executable(dragon_c_tests TestCAnalysisHints.cpp)
+add_executable(dragon_c_tests TestCAnalysisHints.cpp TestCInitialState.cpp)
 target_link_libraries(dragon_c_tests PRIVATE libdragon_c Catch2::Catch2WithMain)
 catch_discover_tests(dragon_c_tests)
 # Python API tests. Optional like Unicorn: they need a Python 3 with cffi,
@@ -191,6 +192,11 @@ if(Python3_Interpreter_FOUND)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_analysis_hints.py)
         set_tests_properties("Python API - analysis hints and calling convention"
+                PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Python API - conditional initial state analysis"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_finite_initial_state.py)
+        set_tests_properties("Python API - conditional initial state analysis"
                 PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         add_test(NAME "Validation - Legacy unlifted C and Python"
                  COMMAND ${Python3_EXECUTABLE}

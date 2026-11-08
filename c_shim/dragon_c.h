@@ -153,6 +153,51 @@
       uint32_t max_blocks, uint32_t max_operations, uint32_t max_facts,
       uint8_t prove_leaf_calls);
 
+  // Read-only conditional analysis. These are entry constraints, not writes:
+  // a 32-bit initial register fact does NOT zero its parent's upper bytes.
+  // All arrays/bytes are borrowed synchronously and copied into the result's
+  // bounded owned assumptions. No Graph edges or LLVM assumptions are added.
+  typedef struct dragon_finite_register_fact {
+    uint32_t offset;
+    uint8_t width; // whole bytes: 8..64, divisible by 8
+    uint64_t value;
+  } dragon_finite_register_fact_t;
+  typedef struct dragon_finite_memory_fact {
+    uint64_t address;
+    const uint8_t* bytes;
+    size_t size;
+  } dragon_finite_memory_fact_t;
+  typedef struct dragon_finite_entry_state {
+    uint64_t entry;
+    const dragon_finite_register_fact_t* registers;
+    size_t register_count;
+    const dragon_finite_memory_fact_t* memory;
+    size_t memory_count;
+  } dragon_finite_entry_state_t;
+  typedef struct dragon_finite_memory_query {
+    uint64_t block;
+    size_t before_op_index;
+    uint64_t address;
+    uint8_t width;
+  } dragon_finite_memory_query_t;
+  // Owned JSON, freed by dragon_cstr_free. conditional=true always identifies
+  // this API. assumptions_valid validates structure only, not their truth.
+  // Invalid constraints/budget exhaustion give complete=false and Unknown.
+  // Bad pointers/counts or overlarge C input arrays return NULL. Nothing reads
+  // image bytes implicitly. Independent entries without facts remain unknown.
+  char* dragon_graph_finite_values_with_initial_state(const dragon_graph_t* g,
+      const uint64_t* entries, size_t count, uint64_t query_block,
+      uint32_t query_offset, uint8_t query_width, uint32_t max_values,
+      uint32_t max_blocks, uint32_t max_operations, uint32_t max_facts,
+      uint8_t prove_leaf_calls, const dragon_finite_entry_state_t* states,
+      size_t state_count);
+  char* dragon_graph_finite_memory_values_with_initial_state(const dragon_graph_t* g,
+      const uint64_t* entries, size_t count,
+      const dragon_finite_memory_query_t* queries, size_t query_count,
+      uint32_t max_values, uint32_t max_blocks, uint32_t max_operations,
+      uint32_t max_facts, uint8_t prove_leaf_calls,
+      const dragon_finite_entry_state_t* states, size_t state_count);
+
   // -- Disassembler --------------------------------------------------------------
 
   dragon_disasm_t* dragon_disasm_create(dragon_architecture_t arch,

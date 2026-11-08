@@ -207,6 +207,57 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Conditional entry-state finite queries (2026-11-08, baseline `9993d04`): see
+`docs/finite-initial-state.md`. New C++/C/Python read-only APIs accept owned
+register/memory facts at already-admitted roots. They constrain initial bytes,
+not machine writes: EAX facts never invent zero RAX upper bits. Backedges merge
+with entry states; undeclared roots/callees stay arbitrary. Existing alias,
+CALL/unlifted/local-flow barriers and opt-in proved-call effects remain.
+Results carry conditional=true, bounded owned entry_states and
+assumptions_valid (structural/initialization-budget validity, not truth).
+No Graph targets, LLVM assumptions or pipeline caches receive these facts;
+default analyses and old result layouts/JSON have no new assumption fields.
+Initialization descriptors/bytes are charged to operations/facts and capped at
+262144. Later analysis exhaustion can retain valid owned assumptions while
+making the entire analysis incomplete/Unknown.
+
+Also fixes existing finite register read/write range wrap: after clobbering the
+default symbolic SP, Reg{0xfffffff9,64} could read a shifted constant from
+offset 0x1ffffff8. A uint32 exclusive-end check now rejects it as Unknown.
+The permanent old-API regression compiles/runs with matching 9993 SDK/DSO:
+1 case/24 assertions, 9 failures; legal high-offset controls pass. Writer guards
+reject overflowing actual/implicit-parent extents and invalidate registers;
+legal partial/wide writes retain their effects. Its old-API case gives 35/92
+failed assertions (28 range controls +7 separately labelled zero-width invalid
+IR controls), not 35 hardware field differences. New-API 19-case tests cannot
+compile old SDK, and compile with the new header.
+Main CTest 715/715, no-Z3 583/583; each build 21 related C++ cases/896 assertions,
+plus 3 C cases/66 assertions and Python API checks.
+
+Final main default Graph campaign: 69 inputs/138 fresh independent processes,
+205018 Graph-valid checkpoints of 205021 function candidates. All 23659048
+canonical rows/6722719390 uncompressed bytes exactly match retained 9993;
+17160761 instruction and 3146633 block queries, including unchanged old alerts.
+28 driver controls and full forward audit pass. No new objdump or whole-corpus
+LLVM generation/execution; prior 1671 raw modules are not new coverage.
+This is Graph/IGNIL structural compatibility, not whole-program semantic proof.
+
+Each final configuration freshly runs 86 API calls/166 cell results:
+24 Finite/142 Unknown, zero observed-value omissions and unchanged before/after
+Graph/IGNIL/edge fingerprints. Both reference the same 47 CPU root returns
+(45 small fixtures +2 CALL-slot cases) and 8 Tigress LOAD prefixes, not duplicate
+CPU executions. Only the 2 CALL-slot references check all 46 architecture fields
+and 64 KiB; these are CPU references, not new LLVM full-function comparisons.
+Old 9993 independently gives 30 unseeded Unknown queries, not errors. All 96 TG
+cell results remain Unknown; no default recovery gain. The 8 TG prefixes start
+at kernel, do not execute wrapper/megaInit, leave SBOX at ELF.bss zero, stop
+before reading it, and keep the actual kernel memset. No heap snapshot injected.
+The reference uses writable flat 1 MiB Guest memory, not Linux segment protection.
+V1 oracle path-expectation failure, pre-guard libraries and separate 22/56
+partial corpus records stay separate from final evidence. Artifacts: VM
+`~/vmc-runs/entry-state-memory-20261108/` and matching Mac validation-artifacts
+directory. Use only owned `~/dragon-tales-overlap`; original dirty tree preserved.
+
 Table contents at the actual LOAD (2026-11-07, baseline `777712f`): see
 `docs/table-content-proof.md`. x86/A64 table publication needs the existing
 bound/shape proof AND complete current contents from admitted Guest STOREs or
