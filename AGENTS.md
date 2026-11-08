@@ -207,6 +207,44 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Caller-context stack effects (2026-11-08, baseline `5a57164`): see
+`docs/caller-context-memory.md`. Existing opt-in `prove_leaf_calls` can retry a
+failed universal x86 E8/C3 proof using caller-proved register byte constants,
+full-width SP-relative pointers and an optional numeric entry-SP anchor.
+Root/nested caches key target plus complete canonical context, not call site
+alone; independent callee roots stay arbitrary. No callee-entry memory facts,
+branch pruning, parameter ABI/name whitelist, public API or Guest ABI changes.
+Numeric recognition must not relabel scalar arithmetic as stack identity.
+Context construction/cache ownership obey global budgets; each proof attempt's
+call tree has its own <=4096 operation cap, with universal and contextual work
+both charged globally. Existing four-level/32-block/8192-fact/1MiB limits remain.
+Return slots and known decoded-code overlap (including overlapping x86 paths)
+reject proofs; this is a fixed-code safety gate, not SMC support.
+
+Matching old5a SDK/DSO compiles/runs all 14 C++ cases: 8 fail / 6 pass,
+27/563 assertions fail; seven positive capability gaps and one known-CALL-push
+code-overwrite safety case, not 27 CPU output mismatches. New main and no-Z3
+each pass 14 cases/1094 assertions; CTest 729/729 and 597/597 respectively.
+Same six permanent i386/x64 caller fixtures, two strategies, O0/O2 and eight
+inputs: main V2/static/product 576 complete root matches, no-Z3 product 192.
+All modelled fields (52/76), 64KiB, PC/SP and exits, zero exclusions/skips/
+normalizations/differences/incomplete. Old same prove=true product192 stays
+explicit incomplete, never whole-function semantic success or CPU wrong.
+Native result/memory/empty-singleton-edge controls each detect12/12; edge
+control execution still matches. Separate frozen UC48 roots and8 TG prefixes
+are reference inputs, not additional unique LLVM sample counts.
+Main/no-Z3 API each gives12 exact Finite (old12 Unknown), unchanged Graph
+fingerprints and9 rejected bad-report controls. Old/main/no-Z3 real TG each
+gives192 Unknown cells with prove=true; real memset remains, no megaInit or
+heap snapshot. No full Tigress recovery gain, generic memset-loop effects,
+entry-memory transport, heap predicates or deflat claims. Default false path
+unchanged; no fresh69-input corpus or single-instruction campaign claimed.
+Cache-field threat audit is source reasoning, not injected bad variants;
+pointer-only/entrySP-only cache-key omissions lack isolated collision tests.
+Artifacts: `~/vmc-runs/caller-context-memory-20261108/` and matching Mac
+validation-artifacts directory. Only owned `~/dragon-tales-overlap` is used;
+original dirty checkout preserved.
+
 Conditional entry-state finite queries (2026-11-08, baseline `9993d04`): see
 `docs/finite-initial-state.md`. New C++/C/Python read-only APIs accept owned
 register/memory facts at already-admitted roots. They constrain initial bytes,

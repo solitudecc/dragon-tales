@@ -1,0 +1,265 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "scope": "Pure machine callers construct argument-derived stack addresses and target constants. No API names, calling-convention summaries, image/heap facts or conditional Graph assumptions.",
+  "cases": [
+    {
+      "id": "x86_32_context_single",
+      "architecture": "x86_32",
+      "code_hex": "8d7c2420be00110000e8f2010000ff642420ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8937c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4110,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8937c3"
+        }
+      ],
+      "expected_proven_calls": 1,
+      "caller_context": {
+        "shape": "single",
+        "pointer_register": "EDI",
+        "value_register": "ESI",
+        "pointer_width": 4,
+        "dispatcher_slot_offset": 32,
+        "expected_final_stack_slots": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4105
+        ],
+        "nested_call_sites": [],
+        "initial_register_or_memory_facts": false
+      }
+    },
+    {
+      "id": "x86_32_context_two_calls",
+      "architecture": "x86_32",
+      "code_hex": "8d7c2420be00110000e8f20100008d7c2428be20110000e8e4010000ff642428ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8937c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4124,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8937c3"
+        }
+      ],
+      "expected_proven_calls": 2,
+      "caller_context": {
+        "shape": "two_calls",
+        "pointer_register": "EDI",
+        "value_register": "ESI",
+        "pointer_width": 4,
+        "dispatcher_slot_offset": 40,
+        "expected_final_stack_slots": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4105,
+          4119
+        ],
+        "nested_call_sites": [],
+        "initial_register_or_memory_facts": false
+      }
+    },
+    {
+      "id": "x86_32_context_nested",
+      "architecture": "x86_32",
+      "code_hex": "8d7c2420be00110000e832020000ff642428ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc8937c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce8bbffffff83c708be20110000e8aeffffffc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4110,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "8937c3"
+        },
+        {
+          "address": 4672,
+          "code_hex": "e8bbffffff83c708be20110000e8aeffffffc3"
+        }
+      ],
+      "expected_proven_calls": 1,
+      "caller_context": {
+        "shape": "nested",
+        "pointer_register": "EDI",
+        "value_register": "ESI",
+        "pointer_width": 4,
+        "dispatcher_slot_offset": 40,
+        "expected_final_stack_slots": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 4
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 4
+          }
+        ],
+        "top_level_call_sites": [
+          4105
+        ],
+        "nested_call_sites": [
+          4672,
+          4685
+        ],
+        "initial_register_or_memory_facts": false
+      }
+    },
+    {
+      "id": "x86_64_context_single",
+      "architecture": "x86_64",
+      "code_hex": "488d7c2420be00110000e8f1010000ff642420ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc488937c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4111,
+      "expected_targets": [
+        4352
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "488937c3"
+        }
+      ],
+      "expected_proven_calls": 1,
+      "caller_context": {
+        "shape": "single",
+        "pointer_register": "RDI",
+        "value_register": "RSI",
+        "pointer_width": 8,
+        "dispatcher_slot_offset": 32,
+        "expected_final_stack_slots": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4106
+        ],
+        "nested_call_sites": [],
+        "initial_register_or_memory_facts": false
+      }
+    },
+    {
+      "id": "x86_64_context_two_calls",
+      "architecture": "x86_64",
+      "code_hex": "488d7c2420be00110000e8f1010000488d7c2428be20110000e8e2010000ff642428ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc488937c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4126,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "488937c3"
+        }
+      ],
+      "expected_proven_calls": 2,
+      "caller_context": {
+        "shape": "two_calls",
+        "pointer_register": "RDI",
+        "value_register": "RSI",
+        "pointer_width": 8,
+        "dispatcher_slot_offset": 40,
+        "expected_final_stack_slots": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4106,
+          4121
+        ],
+        "nested_call_sites": [],
+        "initial_register_or_memory_facts": false
+      }
+    },
+    {
+      "id": "x86_64_context_nested",
+      "architecture": "x86_64",
+      "code_hex": "488d7c2420be00110000e831020000ff642428ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccb8070000008903c3ccccccccccccccccccccccccccccccccccccccccccccccccb8090000008903c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc488937c3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccce8bbffffff4883c708be20110000e8adffffffc3cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "undefined_flags": [],
+      "stubs": [],
+      "indirect_site": 4111,
+      "expected_targets": [
+        4384
+      ],
+      "local_functions": [
+        {
+          "address": 4608,
+          "code_hex": "488937c3"
+        },
+        {
+          "address": 4672,
+          "code_hex": "e8bbffffff4883c708be20110000e8adffffffc3"
+        }
+      ],
+      "expected_proven_calls": 1,
+      "caller_context": {
+        "shape": "nested",
+        "pointer_register": "RDI",
+        "value_register": "RSI",
+        "pointer_width": 8,
+        "dispatcher_slot_offset": 40,
+        "expected_final_stack_slots": [
+          {
+            "offset": 32,
+            "value": 4352,
+            "width": 8
+          },
+          {
+            "offset": 40,
+            "value": 4384,
+            "width": 8
+          }
+        ],
+        "top_level_call_sites": [
+          4106
+        ],
+        "nested_call_sites": [
+          4672,
+          4686
+        ],
+        "initial_register_or_memory_facts": false
+      }
+    }
+  ]
+}

@@ -21,6 +21,7 @@ add_executable(dragon_tests
         analysis/TestFiniteValues.cpp
         analysis/TestFiniteMemory.cpp
         analysis/TestFiniteInitialState.cpp
+        analysis/TestCallerContext.cpp
         analysis/TestSwitchDetector.cpp
         analysis/TestConstantValue.cpp
         analysis/TestIGNILSimplify.cpp
@@ -57,6 +58,8 @@ endif()
 
 if(DRAGON_USE_UNICORN)
     set_property(SOURCE disassemblers/TestX86DecodeClosure.cpp APPEND
+            PROPERTY COMPILE_DEFINITIONS DRAGON_WITH_UNICORN)
+    set_property(SOURCE analysis/TestCallerContext.cpp APPEND
             PROPERTY COMPILE_DEFINITIONS DRAGON_WITH_UNICORN)
     target_sources(dragon_tests PRIVATE
         semantic/TestX86SemanticRoundTrip.cpp

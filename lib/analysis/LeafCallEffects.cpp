@@ -4,12 +4,50 @@
 #include <algorithm>
 #include <compare>
 #include <deque>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
 #include <type_traits>
 
 namespace dragon::analysis::detail {
+std::uint32_t contextFacts(const CallContext &context) {
+  if(context.bindings.size()>8192)return 8193;
+  std::uint32_t facts=context.entrySP?1u:0u;
+  for(const auto &binding:context.bindings) {
+    facts+=1+(unsigned(binding.width)+7)/8;
+    if(facts>8192)return 8193;
+  }
+  return facts;
+}
+bool canonicalizeCallContext(CallContext &context,Architecture architecture) {
+  if((architecture!=Architecture::X86_32 && architecture!=Architecture::X86_64) ||
+     contextFacts(context)>8192)return false;
+  const auto pointerWidth=architecture==Architecture::X86_64?64u:32u;
+  const auto pointerMask=pointerWidth==64?UINT64_MAX:std::uint64_t{UINT32_MAX};
+  if(context.entrySP && *context.entrySP>pointerMask)return false;
+  const auto file=x86::registerFile();
+  std::sort(context.bindings.begin(),context.bindings.end());
+  std::uint32_t previousEnd=0;
+  for(const auto &binding:context.bindings) {
+    if(binding.width<8 || binding.width>64 || binding.width%8 ||
+       binding.offset>UINT32_MAX-binding.width/8)return false;
+    const auto end=binding.offset+binding.width/8;
+    if(binding.offset<previousEnd)return false;
+    previousEnd=end;
+    if((binding.offset<x86::RSP.offset+8 && x86::RSP.offset<end) ||
+       (binding.offset<x86::RIP.offset+8 && x86::RIP.offset<end))return false;
+    if(std::ranges::none_of(file,[&](const auto &extent) {
+      return extent.offset<=binding.offset && end<=extent.offset+extent.byteSize;
+    }))return false;
+    if(binding.kind==CallBinding::EntrySPRelative) {
+      if(binding.width!=pointerWidth || binding.value>pointerMask)return false;
+    } else if(binding.kind==CallBinding::Constant) {
+      if(binding.width<64 && binding.value>=(std::uint64_t{1}<<binding.width))return false;
+    } else return false;
+  }
+  return true;
+}
 namespace {
 using W=ignil::Width;
 using O=ignil::Opcode;
@@ -49,15 +87,23 @@ struct State {
   bool operator==(const State &) const = default;
 };
 LeafCallProof proveTree(const Graph &,std::uint64_t,std::uint32_t,std::uint32_t,
-                       std::uint32_t,std::set<std::uint64_t>);
+                       std::uint32_t,std::set<std::uint64_t>,const CallContext &);
 class Prover {
  public:
   Prover(const Graph &g,std::uint32_t blocks,std::uint32_t operations,std::uint32_t facts,
-      std::set<std::uint64_t> path):
+      std::set<std::uint64_t> path,CallContext input):
       graph(g),maxBlocks(blocks),maxOperations(operations),maxFacts(std::min(facts,8192u)),
-      sp(g.architecture()==Architecture::X86_64?x86::RSP:x86::ESP),parents(x86::registerFile()),active(std::move(path)) {}
+      sp(g.architecture()==Architecture::X86_64?x86::RSP:x86::ESP),parents(x86::registerFile()),
+      context(std::move(input)),inputFacts(contextFacts(context)),active(std::move(path)) {
+    proof.operations=inputFacts;
+    for(const auto &binding:context.bindings)for(unsigned n=0;n<bytes(binding.width);++n)
+      inputs.emplace(binding.offset+n,binding.kind==CallBinding::Constant?
+          Byte{Byte::Constant,(binding.value>>(8*n))&255u,0}:
+          Byte{Byte::Stack,binding.value,n});
+  }
   Byte initial(std::uint32_t at) const {
     if(sp.offset<=at && at<sp.offset+bytes(sp.width))return {Byte::Stack,0,at-sp.offset};
+    if(auto it=inputs.find(at);it!=inputs.end())return it->second;
     return {Byte::Input,at,0};
   }
   Byte regByte(const State &s,std::uint32_t at) const {
@@ -100,12 +146,18 @@ class Prover {
     }
     return n&mask(v.width);
   }
-  std::optional<std::uint64_t> address(const Value &v) const {
+  std::optional<std::uint64_t> stackOffset(const Value &v) const {
     if(v.width!=sp.width || v.data.size()!=bytes(sp.width))return {};
     const auto offset=v.data[0].value;
     for(unsigned n=0;n<v.data.size();++n)
       if(v.data[n]!=Byte{Byte::Stack,offset,n})return {};
     return offset;
+  }
+  std::optional<std::uint64_t> address(const Value &v) const {
+    if(auto offset=stackOffset(v))return offset;
+    if(context.entrySP && v.width==sp.width)
+      if(auto n=number(v))return (*n-*context.entrySP)&mask(sp.width);
+    return {};
   }
   Value readRegister(const State &s,const ignil::Reg &r) const {
     if(!r.width || r.width>128 || r.offset>UINT32_MAX-bytes(r.width))return unknown(r.width);
@@ -142,8 +194,11 @@ class Prover {
   Value operation(O opcode,const Value &a,const Value &b,W width) const {
     auto x=number(a),y=number(b);
     if(width==sp.width && (opcode==O::ADD || opcode==O::SUB)) {
-      if(auto p=address(a);p && y)return stack(opcode==O::ADD?*p+*y:*p-*y);
-      if(opcode==O::ADD)if(auto p=address(b);p && x)return stack(*p+*x);
+      // Numeric addresses are recognized only by memory operations. Treating
+      // every full-width literal as a Stack value here would corrupt ordinary
+      // size/value arithmetic when an absolute entry SP is available.
+      if(auto p=stackOffset(a);p && y)return stack(opcode==O::ADD?*p+*y:*p-*y);
+      if(opcode==O::ADD)if(auto p=stackOffset(b);p && x)return stack(*p+*x);
     }
     if(x && y && width && width<=64) {
       switch(opcode) {
@@ -159,23 +214,68 @@ class Prover {
   }
   bool spend() {if(proof.operations>=maxOperations)return false;++proof.operations;return true;}
   bool budget(const State &current,const std::map<std::uint32_t,Value> &temps) const {
-    std::uint64_t facts=current.regs.size()+current.memory.size()+writes.size()+touched.size()+
+    std::uint64_t facts=inputFacts+current.regs.size()+current.memory.size()+writes.size()+touched.size()+
         returnState.regs.size()+returnState.memory.size();
     for(const auto &[at,s]:states)facts+=s.regs.size()+s.memory.size()+1;
     for(const auto &[id,v]:temps)facts+=v.data.size()+1;
-    for(const auto &[entry,p]:callees)facts+=1+p.clobberedBytes.size()+p.stackWriteBytes.size()+
-        p.registerConstants.size()+p.memoryConstants.size();
+    for(const auto &[key,p]:callees)facts+=1+contextFacts(key.second)+p.clobberedBytes.size()+
+        p.stackWriteBytes.size()+p.registerConstants.size()+p.memoryConstants.size();
     return facts<=maxFacts;
   }
   bool writeMemory(State &state,std::uint64_t at,const Value &value) {
     for(unsigned n=0;n<bytes(value.width);++n) {
       const auto offset=(at+n)&mask(sp.width);
       if(offset<bytes(sp.width) || (offset>1048576 && offset<mask(sp.width)-1048575))return false;
+      if(context.entrySP) {
+        // A numeric stack anchor must not turn writes to decoded code into a
+        // proof over the stale CFG. No section permissions or image contents
+        // are used; unknown absolute addresses retain the fixed-code contract.
+        if(!spend())return false;
+        const auto absolute=(*context.entrySP+offset)&mask(sp.width);
+        auto next=graph.listing().upper_bound(absolute);
+        // x86 permits overlapping instruction starts. The immediately previous
+        // short instruction need not be the one whose bytes cover this write.
+        while(next!=graph.listing().begin()) {
+          const auto &instruction=*--next;
+          const auto distance=absolute-instruction.first;
+          if(distance>=15)break; // Architectural maximum decoded x86 length.
+          if(distance<instruction.second.size())return false;
+        }
+      }
       writes.insert(offset);
       if(value.data[n].kind==Byte::Unknown)state.memory.erase(offset);
       else state.memory.insert_or_assign(offset,value.data[n]);
     }
     return true;
+  }
+  std::optional<CallContext> childContext(const State &state,std::uint64_t calleeSP) {
+    CallContext child;
+    if(context.entrySP)child.entrySP=(*context.entrySP+calleeSP)&mask(sp.width);
+    for(const auto &extent:parents) {
+      if(!spend())return {};
+      const auto end=extent.offset+extent.byteSize;
+      if((extent.offset<x86::RSP.offset+8 && x86::RSP.offset<end) ||
+         (extent.offset<x86::RIP.offset+8 && x86::RIP.offset<end))continue;
+      unsigned consumed=0;
+      if(extent.byteSize>=bytes(sp.width)) {
+        auto value=readRegister(state,ignil::Reg{extent.offset,sp.width,{}});
+        if(auto p=stackOffset(value)) {
+          child.bindings.push_back({extent.offset,sp.width,CallBinding::EntrySPRelative,
+              (*p-calleeSP)&mask(sp.width)});
+          consumed=bytes(sp.width);
+        }
+      }
+      for(unsigned n=consumed;n<extent.byteSize;++n) {
+        if(!spend())return {};
+        const auto b=regByte(state,extent.offset+n);
+        if(b.kind==Byte::Constant)
+          child.bindings.push_back({extent.offset+n,8,CallBinding::Constant,b.value});
+      }
+    }
+    const auto cost=contextFacts(child);
+    if(cost>maxOperations-proof.operations) {proof.operations=maxOperations;return {};}
+    proof.operations+=cost;
+    return child;
   }
   bool call(State &state,const ignil::Op &op) {
     const auto *instruction=graph.get(op.address);
@@ -184,25 +284,37 @@ class Prover {
        instruction->bytes().size()!=5 || instruction->bytes()[0]!=0xe8 || !target || target->width!=64 ||
        instruction->callees()!=std::set<std::uint64_t>{target->value})return false;
     auto currentSP=address(readRegister(state,sp));if(!currentSP)return false;
-    auto it=callees.find(target->value);
-    if(it==callees.end()) {
-      auto child=proveTree(graph,target->value,maxBlocks,maxOperations-proof.operations,maxFacts,active);
-      proof.operations+=child.operations;
-      it=callees.emplace(target->value,std::move(child)).first;
-    }
-    if(!it->second.proven)return false;
     const auto calleeSP=(*currentSP-bytes(sp.width))&mask(sp.width);
+    auto cached=[&](const CallContext &input)->const LeafCallProof & {
+      const auto key=std::pair{target->value,input};
+      auto it=callees.find(key);
+      if(it==callees.end()) {
+        auto child=proveTree(graph,target->value,maxBlocks,maxOperations-proof.operations,maxFacts,active,input);
+        proof.operations+=child.operations;
+        it=callees.emplace(key,std::move(child)).first;
+      }
+      return it->second;
+    };
+    const auto *child=&cached({});
+    if(!child->proven) {
+      if(proof.operations>=maxOperations || !budget(state,{}))return false;
+      auto input=childContext(state,calleeSP);
+      if(!input || !canonicalizeCallContext(*input,graph.architecture()) || *input==CallContext{} ||
+         contextFacts(*input)>maxFacts || !budget(state,{}))return false;
+      child=&cached(*input);
+    }
+    if(!child->proven || !budget(state,{}))return false;
     // Include the nested CALL's own push. Child proofs protect their own
     // return slots; every translated write must also protect this outer one.
     if(!writeMemory(state,calleeSP,unknown(sp.width)))return false;
-    for(auto offset:it->second.stackWriteBytes)
+    for(auto offset:child->stackWriteBytes)
       if(!writeMemory(state,(calleeSP+offset)&mask(sp.width),unknown(8)))return false;
-    for(auto byte:it->second.clobberedBytes) {
+    for(auto byte:child->clobberedBytes) {
       touched.insert(byte);state.regs.insert_or_assign(byte,Byte{});
     }
-    for(auto [byte,value]:it->second.registerConstants)
+    for(auto [byte,value]:child->registerConstants)
       state.regs.insert_or_assign(byte,Byte{Byte::Constant,value,0});
-    for(auto [offset,value]:it->second.memoryConstants)
+    for(auto [offset,value]:child->memoryConstants)
       if(!writeMemory(state,(calleeSP+offset)&mask(sp.width),constant(value,8)))return false;
     return true;
   }
@@ -340,24 +452,33 @@ class Prover {
   std::uint32_t maxBlocks,maxOperations,maxFacts;
   ignil::Reg sp;
   std::vector<ignil::RegExtent> parents;
+  CallContext context;
+  std::uint32_t inputFacts;
+  std::map<std::uint32_t,Byte> inputs;
   LeafCallProof proof;
   State returnState;
   std::map<std::uint64_t,State> states;
   std::set<std::uint32_t> touched,clobbers;
   std::set<std::uint64_t> writes;
   std::set<std::uint64_t> active;
-  std::map<std::uint64_t,LeafCallProof> callees;
+  std::map<std::pair<std::uint64_t,CallContext>,LeafCallProof> callees;
   bool returns=false;
 };
 LeafCallProof proveTree(const Graph &graph,std::uint64_t entry,std::uint32_t maxBlocks,
-    std::uint32_t maxOperations,std::uint32_t maxFacts,std::set<std::uint64_t> active) {
+    std::uint32_t maxOperations,std::uint32_t maxFacts,std::set<std::uint64_t> active,
+    const CallContext &input) {
   if(active.size()>=4 || !active.insert(entry).second)return {};
-  return Prover{graph,maxBlocks,maxOperations,maxFacts,std::move(active)}.run(entry);
+  const auto cost=contextFacts(input);
+  if(cost>std::min(maxFacts,8192u))return {};
+  if(cost>maxOperations) {LeafCallProof failed;failed.operations=maxOperations;return failed;}
+  auto context=input;
+  if(!canonicalizeCallContext(context,graph.architecture()))return {};
+  return Prover{graph,maxBlocks,maxOperations,maxFacts,std::move(active),std::move(context)}.run(entry);
 }
 }
 LeafCallProof proveLeafCallee(const Graph &graph,std::uint64_t entry,
-    std::uint32_t maxBlocks,std::uint32_t maxOperations,std::uint32_t maxFacts) {
+    std::uint32_t maxBlocks,std::uint32_t maxOperations,std::uint32_t maxFacts,const CallContext &context) {
   if(graph.architecture()!=Architecture::X86_32 && graph.architecture()!=Architecture::X86_64)return {};
-  return proveTree(graph,entry,maxBlocks,maxOperations,maxFacts,{});
+  return proveTree(graph,entry,maxBlocks,maxOperations,maxFacts,{},context);
 }
 }

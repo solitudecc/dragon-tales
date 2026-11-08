@@ -420,36 +420,109 @@ class Engine {
     // The x86 lifter represents direct code addresses as 64-bit constants in
     // both modes; the near CALL's stack/address width still follows the mode.
     if(target->width!=64)return reject();
-    auto it=callProofs.find(target->value);
-    if(it==callProofs.end()) {
-      auto proof=detail::proveLeafCallee(graph,target->value,std::min(limits.maxBlocks,32u),
-          std::min<std::uint64_t>(4096,limits.maxOperations-result.operations),limits.maxFacts);
-      result.operations+=proof.operations;
-      proofFacts+=1+proof.clobberedBytes.size()+proof.stackWriteBytes.size()+
-          proof.registerConstants.size()+proof.memoryConstants.size();
-      it=callProofs.emplace(target->value,std::move(proof)).first;
-      if(proofFacts>limits.maxFacts) {failed=true;return reject();}
-    }
-    if(!it->second.proven)return reject();
     const auto sp=arch==Architecture::X86_64?x86::RSP:x86::ESP;
     // IGNIL abstracts away this write, but a proof used for machine control-flow
     // recovery must not preserve stale data in the near CALL's return slot.
     auto stack=readRegister(t.state,sp.offset,sp.width);
     auto slot=operation(O::SUB,stack,constant(width/8,width),width,false);
+    // The proof model executes fixed code. A known CALL push into decoded
+    // instruction bytes cannot reuse even an otherwise universal callee proof.
+    for(auto at:slot.finite)for(unsigned i=0;i<bytes(width);++i) {
+      const auto byte=(at+i)&mask(width);
+      auto instruction=graph.listing().upper_bound(byte);
+      // Different x86 decode paths can overlap. A later short instruction
+      // must not hide an earlier (at most 15-byte) instruction's suffix.
+      while(instruction!=graph.listing().begin()) {
+        --instruction;
+        if(byte-instruction->first>=15)break;
+        if(byte-instruction->first<instruction->second.bytes().size())return reject();
+      }
+    }
+    auto lookup=[&](const detail::CallContext &context)->const detail::LeafCallProof * {
+      const auto key=std::pair{target->value,context};
+      auto it=callProofs.find(key);
+      if(it!=callProofs.end())return &it->second;
+      const auto contextCost=detail::contextFacts(context);
+      if(failed || contextCost>8192 || proofFacts+contextCost+1>limits.maxFacts) {
+        failed=true;return nullptr;
+      }
+      auto proof=detail::proveLeafCallee(graph,target->value,std::min(limits.maxBlocks,32u),
+          std::min<std::uint64_t>(4096,limits.maxOperations-result.operations),limits.maxFacts,context);
+      result.operations+=proof.operations;
+      proofFacts+=contextCost+1+proof.clobberedBytes.size()+proof.stackWriteBytes.size()+
+          proof.registerConstants.size()+proof.memoryConstants.size();
+      it=callProofs.emplace(key,std::move(proof)).first;
+      if(proofFacts>limits.maxFacts) {failed=true;return nullptr;}
+      return &it->second;
+    };
+    // Universal successes retain the old precision and cost. Failed universal
+    // proofs can be retried only with a separately keyed, proved caller state.
+    const auto *proof=lookup({});
+    if(!proof)return reject();
+    if(!proof->proven) {
+      auto context=callerContext(t.state,sp,stack,slot);
+      if(!context || failed || (context->bindings.empty() && !context->entrySP))return reject();
+      proof=lookup(*context);
+      if(!proof || !proof->proven)return reject();
+    }
     store(t.state,slot,Value{width});
-    for(auto offset:it->second.stackWriteBytes) {
+    for(auto offset:proof->stackWriteBytes) {
       auto address=operation(O::ADD,slot,constant(offset,width),width,false);
       store(t.state,address,Value{8});
     }
-    for(auto byte:it->second.clobberedBytes)writeRegister(t.state,ignil::Reg{byte,8,{}},Value{8});
-    for(auto [byte,value]:it->second.registerConstants)
+    for(auto byte:proof->clobberedBytes)writeRegister(t.state,ignil::Reg{byte,8,{}},Value{8});
+    for(auto [byte,value]:proof->registerConstants)
       writeRegister(t.state,ignil::Reg{byte,8,{}},constant(value,8));
-    for(auto [offset,value]:it->second.memoryConstants) {
+    for(auto [offset,value]:proof->memoryConstants) {
       auto address=operation(O::ADD,slot,constant(offset,width),width,false);
       store(t.state,address,constant(value,8));
     }
+    if(t.state.regs.size()+t.state.memory.size()+proofFacts>limits.maxFacts) {
+      failed=true;return reject();
+    }
     provenSites.insert(op.address);result.provenCalls=provenSites.size();
     return true;
+  }
+  std::optional<detail::CallContext> callerContext(const State &state,const ignil::Reg &sp,
+      const Value &stack,const Value &slot) {
+    detail::CallContext context;
+    if(slot.finite.size()==1 && slot.pointers.empty())context.entrySP=slot.finite.front();
+    const auto stackAddress=address(stack),slotAddress=address(slot);
+    std::set<std::uint32_t> covered,domain;
+    auto excluded=[&](std::uint32_t at) {
+      return (sp.offset<=at && at<sp.offset+8) ||
+          (x86::RIP.offset<=at && at<x86::RIP.offset+8);
+    };
+    for(const auto &parent:parents) {
+      if(!spend())return {};
+      for(unsigned i=0;i<parent.byteSize;++i)if(!excluded(parent.offset+i))domain.insert(parent.offset+i);
+      if(parent.byteSize<bytes(sp.width) || excluded(parent.offset))continue;
+      auto value=readRegister(state,parent.offset,sp.width);
+      if(!value.finite.empty() || value.pointers.size()!=1 || !stackAddress || !slotAddress)continue;
+      const auto &pointer=value.pointers.front();
+      if(pointer.width!=sp.width || !sameSpace(pointer,*stackAddress) || !sameSpace(pointer,*slotAddress))continue;
+      bool allowed=true;
+      for(unsigned i=0;i<bytes(sp.width);++i)allowed &= !excluded(parent.offset+i) && !covered.contains(parent.offset+i);
+      if(!allowed)continue;
+      context.bindings.push_back({parent.offset,sp.width,detail::CallBinding::EntrySPRelative,
+          (pointer.offset-slotAddress->offset)&mask(sp.width)});
+      for(unsigned i=0;i<bytes(sp.width);++i)covered.insert(parent.offset+i);
+    }
+    for(auto at:domain) {
+      if(!spend())return {};
+      if(covered.contains(at))continue;
+      const auto value=readRegister(state,at,8);
+      if(value.pointers.empty() && value.finite.size()==1)
+        context.bindings.push_back({at,8,detail::CallBinding::Constant,value.finite.front()});
+    }
+    if(!detail::canonicalizeCallContext(context,graph.architecture()))return {};
+    const auto cost=detail::contextFacts(context);
+    if(state.regs.size()+state.memory.size()+proofFacts+cost>limits.maxFacts) {
+      failed=true;return {};
+    }
+    if(cost>limits.maxOperations-result.operations) {failed=true;return {};}
+    result.operations+=cost;
+    return context;
   }
   Transfer transfer(std::uint64_t block,const State &in,
                     std::optional<std::size_t> beforeOp = std::nullopt) {
@@ -569,7 +642,7 @@ class Engine {
   const FiniteValueLimits &limits;
   std::vector<ignil::RegExtent> parents;
   FiniteValueResult result;
-  std::map<std::uint64_t,detail::LeafCallProof> callProofs;
+  std::map<std::pair<std::uint64_t,detail::CallContext>,detail::LeafCallProof> callProofs;
   std::set<std::uint64_t> provenSites,rejectedSites;
   std::uint64_t proofFacts=0;
   bool failed=false;
