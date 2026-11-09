@@ -211,6 +211,29 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Deobfuscation S1b provenance (2026-11-09/10, baseline `9ff29d8`): internal
+RegionLowering captures original op indices, actual Guest accesses/guards and
+post-access points, CALL/RET auxiliary stack roles, real switch/defaults, call
+request/normal/propagate/invalid edges, seven-field Exits and non-op boundaries.
+Views expire after synchronous read-only consumption, including exceptions;
+borrowed pointers must not escape. Consumer errors do not roll back the completed
+module; discard failed targets. Seal is trusted-producer structural checking,
+not value/alias proof or arbitrary external certificate validation. Max 1048576
+records; failed/budgeted lowering skips consumption and restores declarations.
+No lifter instance fields, Guest/C ABI, default pipeline or value rewrites.
+Eight new cases/3725 assertions, main/no-Z3 group22/4828; CTest813/813 and681/681.
+Native main/no-Z3 each240 (96 roots/48 Transfer/96 reject); specified result and
+memory controls240 each. Frozen two-ELF main/no-Z3 eachC16/LLVM32 full roots.
+Ordinary old/new eachC16/LLVM32incomplete, all seven Exit fields equal; not roots.
+78 IR/Graph comparisons:72 byte-identical,6 exact ModuleID-path first-line-only.
+Public raw probe old/new140 attempts each:122 accepted/18 rejected/0 errors,
+140 output bytes equal,0 CPU/native/opt/verify; not semantic evidence. Old final
+tests cannot compile absent internal header (saved). Orchestrator Transfer enum
+mistake corrected against Execution.h (2 vs3); adopted seven raw groups and only
+ran the eighth, without checker/input/field changes. No new exclusions/skips or
+deobfuscation gain. Build9ff29d8+patch, artifact `~/vmc-runs/llvm-lift-provenance-20261109/`.
+Details: docs/deobfuscation-progress-20261109.md. S2 forwarding remains next.
+
 Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
 LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and
 rebuild region paths lower the same frozen view; strict keeps custom IGNIL and

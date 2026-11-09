@@ -33,6 +33,7 @@ class PreparedRegion {
   Function root() const { return Function{graph_.get(), entry_}; }
   const std::map<std::uint64_t, BasicBlock> &blocks() const { return blocks_; }
   bool rebuilt() const { return rebuilt_; }
+  std::shared_ptr<const RegionInstance> instance() const { return instance_; }
   std::optional<OpOrigin> origin(std::uint64_t block, std::size_t opIndex) const;
   bool owns(const OpOrigin &) const;
 

@@ -18,6 +18,13 @@
 
 namespace dragon::llvmlifter {
 
+namespace detail {
+class LiftCapture;
+struct RegionLowering;
+struct MemoryCheck;
+struct ExitValues;
+}
+
 enum class ExecutionMode { Legacy = 0, StatefulV2 = 1, StaticAnalysis = 2 };
 
 /// External entry contract for static functions. Internal branches, loops and
@@ -176,6 +183,7 @@ class LLVMLifter {
                                                      const Graph &graph) const;
 
   private:
+  friend struct detail::RegionLowering;
   // All allocas for a lifted function.
   // In this way we keep the registers that have been
   // used, and we only generate those that are used by
@@ -188,7 +196,8 @@ class LLVMLifter {
   using TempMap = std::map<std::uint32_t, llvm::Value *>;
 
   bool liftFunction(const Function &fn, const Graph &graph,
-      const std::map<std::uint64_t, BasicBlock> &blocks, bool staticRegion);
+      const std::map<std::uint64_t, BasicBlock> &blocks, bool staticRegion,
+      detail::LiftCapture *capture = nullptr);
 
   // First pass: scan every IGNIL op in every block of the function,
   // collect all (offset, width) pairs, emit one alloca per pair
@@ -231,18 +240,21 @@ class LLVMLifter {
   // Translate one IGNIL block into its llvm::BasicBlock.
   bool liftBlock(const ignil::Block *ib, llvm::Function *llfn, RegFile *regs,
                  TempMap *temps, llvm::Value *memPtr, llvm::Value *regsPtr,
-                 const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap);
+                 const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap,
+                 detail::LiftCapture *capture = nullptr);
 
   // Translate one IGNIL Op; records the result in temps if the op has a
   // Temp destination
   void liftOp(const ignil::Op &op, RegFile &regs, TempMap &temps,
               llvm::Value *memPtr, llvm::Value *regsPtr,
               llvm::IRBuilder<> &builder,
-              const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap);
+              const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap,
+              detail::LiftCapture *capture = nullptr);
 
-  bool liftOps(const std::vector<ignil::Op> &ops, RegFile &regs, TempMap &temps,
+  bool liftOps(std::span<const ignil::Op> ops, RegFile &regs, TempMap &temps,
                llvm::Value *memPtr, llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
-               const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap, bool trace);
+               const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap, bool trace,
+               detail::LiftCapture *capture = nullptr, std::uint64_t blockAddress = 0);
 
   // Resolve an ignil::Value to a llvm::Value (load from alloca or
   // look up the temp SSA value).
@@ -273,23 +285,27 @@ class LLVMLifter {
   void initializeRegistersFromParam(llvm::Function *llfn, RegFile &regFile,
                                     llvm::Value *regsPtr);
   void reloadRegisters(RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
-  void writeExitAtValue(std::uint64_t reason, std::uint64_t kind, llvm::Value *sourcePC,
+  detail::ExitValues writeExitAtValue(std::uint64_t reason, std::uint64_t kind, llvm::Value *sourcePC,
                 llvm::Value *target, RegFile &regs, llvm::IRBuilder<> &builder,
                 std::uint64_t detail, std::uint64_t returnPC);
   void emitStaticCall(const ignil::Op &op, llvm::Value *target, std::uint64_t next,
                 RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
-                const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap);
+                const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap,
+                detail::LiftCapture *capture = nullptr);
 
   void emitExit(std::uint64_t reason, std::uint64_t kind, std::uint64_t sourcePC,
                 llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
-                llvm::IRBuilder<> &builder, std::uint64_t detail = 0, std::uint64_t returnPC = 0);
+                llvm::IRBuilder<> &builder, std::uint64_t detail = 0, std::uint64_t returnPC = 0,
+                detail::LiftCapture *capture = nullptr);
   void emitExitAtValue(std::uint64_t reason, std::uint64_t kind, llvm::Value *sourcePC,
                 llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
-                llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC);
+                llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC,
+                detail::LiftCapture *capture = nullptr);
   void writeBackRegisters(RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
   void emitBudgetCheck(std::uint64_t pc, RegFile &regs, llvm::Value *regsPtr, llvm::IRBuilder<> &builder);
   llvm::Value *memoryAddress(llvm::Value *address, std::uint64_t bytes, std::uint64_t pc,
-                             RegFile &regs, llvm::Value *regsPtr, llvm::Value *memPtr, llvm::IRBuilder<> &builder);
+                             RegFile &regs, llvm::Value *regsPtr, llvm::Value *memPtr, llvm::IRBuilder<> &builder,
+                             detail::MemoryCheck *check = nullptr, detail::LiftCapture *capture = nullptr);
   bool stateful() const { return mode_ != ExecutionMode::Legacy && graph_; }
   [[nodiscard]] std::string staticFunctionName(std::uint64_t address) const;
   ExecutionMode mode_ = ExecutionMode::Legacy;

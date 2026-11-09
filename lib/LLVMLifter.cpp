@@ -14,6 +14,7 @@
 #include "LLVMPredicateFolding.hpp"
 #include "LLVMMBASimplification.hpp"
 #include "LLVMPreparedRegion.hpp"
+#include "LLVMLiftProvenance.hpp"
 #include <llvm/IR/Intrinsics.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -88,14 +89,12 @@ bool dragon::llvmlifter::LLVMLifter::liftStaticRegion(const Function &fn,
   // Preparation owns the exact immutable view used by lowering. Future
   // analyses must consume this view, never pre-rebuild indices in the source.
   auto region=detail::PreparedRegion::prepare(fn,graph,additionalBlockStarts,options);
-  if(!region || !liftFunction(region->root(),region->graph(),region->blocks(),true))return false;
-  if(region->rebuilt())
-    module_->getFunction(staticFunctionName(fn.startAddress()))->addFnAttr("dragon.coverage-source","decoded-machine");
-  return true;
+  return region && detail::RegionLowering::run(*this,*region);
 }
 
 bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,
-    const Graph &graph,const std::map<std::uint64_t,BasicBlock> &blocks,bool staticRegion) {
+    const Graph &graph,const std::map<std::uint64_t,BasicBlock> &blocks,bool staticRegion,
+    detail::LiftCapture *capture) {
   // Refuse an invalid Function view rather than crash on it. Function's
   // constructor already defines what that means - not a known valid
   // function, no blocks, or an invalid block inside it - lift() simply
@@ -265,16 +264,19 @@ bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,
     if (!ib)
       continue;
     TempMap temps{}; // fresh per block - Temp ids don't cross block boundaries
-    if (!liftBlock(ib, llfn, &regFile, &temps, memPtr, regsPtr, bbMap.value())) {
+    if (!liftBlock(ib, llfn, &regFile, &temps, memPtr, regsPtr, bbMap.value(),capture) ||
+        (capture && !capture->ok())) {
       return failedLift();
     }
   }
   if (stateful()) {
+    if(capture)capture->boundary(detail::SourceKind::Entry);
     entryBB->getTerminator()->eraseFromParent();
     llvm::IRBuilder<> builder(entryBB);
     auto *pc=builder.CreateLoad(builder.getInt64Ty(),regFile.at(arch_ == Architecture::ARM64 ? 264 : 128).at(64));
     auto *unknown=llvm::BasicBlock::Create(*ctx_,"entry.unsupported",llfn);
     auto *dispatch=builder.CreateSwitch(pc,unknown,resumeEntries_.size());
+    if(capture)capture->edge(detail::EdgeRole::Entry,dispatch);
     std::string entries;
     for (const auto &[address,block] : resumeEntries_) {
       if (mode_ == ExecutionMode::StaticAnalysis &&
@@ -289,8 +291,9 @@ bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,
         staticEntryPolicy_ == StaticEntryPolicy::FunctionStart)
       llfn->addFnAttr("dragon.static-entry-policy","function-start");
     llvm::IRBuilder<> out(unknown);
-    emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regFile,regsPtr,out,DRAGON_DETAIL_ENTRY,0);
+    emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regFile,regsPtr,out,DRAGON_DETAIL_ENTRY,0,capture);
   }
+  if(capture && !capture->seal(llfn,*bbMap))return failedLift();
   if (stateful()) ::dragon::detail::recordLLVMImports(*module_,*llfn,fn,graph);
   return true;
 }
@@ -454,7 +457,7 @@ dragon::llvmlifter::LLVMLifter::buildBlockMap(llvm::Function *llfn,
 bool dragon::llvmlifter::LLVMLifter::liftBlock(
         const ignil::Block *ib, llvm::Function *llfn, RegFile *regs,
         TempMap *temps, llvm::Value *memPtr, llvm::Value *regsPtr,
-        const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap) {
+        const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap, detail::LiftCapture *capture) {
   llvm::IRBuilder<> builder(bbMap.at(ib->startAddress()));
 
   std::optional<std::uint64_t> unsupportedPC;
@@ -489,12 +492,12 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(
     for (const auto &op : ib->ops()) if (op.opcode == ignil::Opcode::OPAQUE)
       unsupportedPC=unsupportedPC ? std::min(*unsupportedPC,op.address) : op.address;
   }
-  std::vector<ignil::Op> prefix;
-  if (unsupportedPC) for (const auto &op : ib->ops()) {
-    if (op.address >= *unsupportedPC) break;
-    prefix.push_back(op);
+  auto ops=std::span<const ignil::Op>{ib->ops()};
+  if (unsupportedPC) {
+    const auto stop=std::find_if(ops.begin(),ops.end(),[&](const auto &op) {return op.address>=*unsupportedPC;});
+    ops=ops.first(static_cast<std::size_t>(stop-ops.begin()));
   }
-  if (!liftOps(unsupportedPC ? prefix : ib->ops(),*regs,*temps,memPtr,regsPtr,builder,bbMap,false))
+  if (!liftOps(ops,*regs,*temps,memPtr,regsPtr,builder,bbMap,false,capture,ib->startAddress()))
     return false;
   // A block that ends in a trap (ud2, hlt, brk) or an instruction without
   // semantics has no IGNIL terminator and no successor; LLVM still needs
@@ -503,15 +506,18 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(
     if (stateful()) {
       const auto *last=BasicBlock(graph_,ib->startAddress()).terminator();
       const auto stop=unsupportedPC.value_or(last ? last->address()+last->size() : ib->startAddress());
-      emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,stop,nullptr,*regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);
+      if(capture)capture->boundary(unsupportedPC ? detail::SourceKind::UnsupportedInstruction : detail::SourceKind::StreamEnd,
+                                  ib->startAddress(),stop);
+      emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,stop,nullptr,*regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);
     } else builder.CreateUnreachable();
   }
   return true;
 }
 bool dragon::llvmlifter::LLVMLifter::liftOps(
-        const std::vector<ignil::Op> &ops, RegFile &regs, TempMap &temps,
+        std::span<const ignil::Op> ops, RegFile &regs, TempMap &temps,
         llvm::Value *memPtr, llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
-        const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap,bool trace) {
+        const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap,bool trace,
+        detail::LiftCapture *capture,std::uint64_t blockAddress) {
   using O=ignil::Opcode;
   std::map<std::uint32_t,llvm::BasicBlock *> labels;
   auto *function=builder.GetInsertBlock()->getParent();
@@ -524,25 +530,43 @@ bool dragon::llvmlifter::LLVMLifter::liftOps(
         (op.dst || !labels.contains(op.aux) ||
          op.srcs.size() != (op.opcode == O::LOCALCJMP ? 1u : 0u) ||
          (op.opcode == O::LOCALCJMP && ignil::widthOf(op.srcs[0]) != 1))) return false;
-  for (const auto &op : ops) {
+  for (std::size_t opIndex=0;opIndex<ops.size();++opIndex) {
+    const auto &op=ops[opIndex];
+    if (op.opcode!=O::LABEL && builder.GetInsertBlock()->getTerminator()) continue;
+    if(capture)capture->begin(blockAddress,opIndex,builder.GetInsertBlock());
     if (op.opcode == O::LABEL) {
       auto *target=labels.at(op.aux);
-      if (!builder.GetInsertBlock()->getTerminator()) builder.CreateBr(target);
+      if (!builder.GetInsertBlock()->getTerminator()) {
+        auto *branch=builder.CreateBr(target);
+        if(capture)capture->edge(detail::EdgeRole::LabelFallthrough,branch);
+      }
       builder.SetInsertPoint(target);
       if (stateful()) emitBudgetCheck(op.address,regs,regsPtr,builder);
+      if(capture)capture->finish(builder.GetInsertBlock());
       continue;
     }
-    if (builder.GetInsertBlock()->getTerminator()) continue;
-    if (op.opcode == O::LOCALJMP) { builder.CreateBr(labels.at(op.aux)); continue; }
+    if (op.opcode == O::LOCALJMP) {
+      auto *branch=builder.CreateBr(labels.at(op.aux));
+      if(capture) {capture->edge(detail::EdgeRole::LocalJump,branch);capture->finish(builder.GetInsertBlock());}
+      continue;
+    }
     if (op.opcode == O::LOCALCJMP) {
       auto *fallthrough=llvm::BasicBlock::Create(*ctx_,"local_next",function);
-      builder.CreateCondBr(resolve(op.srcs[0],regs,temps,builder),labels.at(op.aux),fallthrough);
+      auto *condition=resolve(op.srcs[0],regs,temps,builder);
+      if(capture)capture->operand(0,condition);
+      auto *branch=builder.CreateCondBr(condition,labels.at(op.aux),fallthrough);
+      if(capture)capture->edge(detail::EdgeRole::LocalConditional,branch);
       builder.SetInsertPoint(fallthrough);
+      if(capture)capture->finish(builder.GetInsertBlock());
       continue;
     }
     if (stateful()) {
       const bool unsupported = op.opcode == O::OPAQUE || unsupportedAddresses_.contains(op.address);
-      if (unsupported) { emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION); continue; }
+      if (unsupported) {
+        emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);
+        if(capture)capture->finish(builder.GetInsertBlock());
+        continue;
+      }
     }
     if (stateful()) for (const auto &source : op.srcs)
       if (const auto *temporary=std::get_if<ignil::Temp>(&source);temporary && !temps.contains(temporary->id))
@@ -550,7 +574,7 @@ bool dragon::llvmlifter::LLVMLifter::liftOps(
     // A resolved machine trace drops its external branches, while preserving
     // the internal loop belonging to each individual machine instruction.
     if (trace && (op.opcode == O::JMP || op.opcode == O::CJMP)) continue;
-    liftOp(op,regs,temps,memPtr,regsPtr,builder,bbMap);
+    liftOp(op,regs,temps,memPtr,regsPtr,builder,bbMap,capture);
     if (stateful() && op.opcode == O::CALL) {
       // Every Guest call returns to the dispatcher. A later invocation enters
       // the exact Guest continuation with fresh register loads, never old SSA.
@@ -564,6 +588,7 @@ bool dragon::llvmlifter::LLVMLifter::liftOps(
       }
       temps.clear();
     }
+    if(capture)capture->finish(builder.GetInsertBlock());
   }
   return true;
 }
@@ -571,7 +596,7 @@ bool dragon::llvmlifter::LLVMLifter::liftOps(
 void dragon::llvmlifter::LLVMLifter::liftOp(
         const ignil::Op &op, RegFile &regs, TempMap &temps, llvm::Value *memPtr,
         llvm::Value *regsPtr, llvm::IRBuilder<> &builder,
-        const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap) {
+        const std::map<std::uint64_t, llvm::BasicBlock *> &bbMap, detail::LiftCapture *capture) {
 
   // Store a result into dst: Temp → SSA table, Reg → alloca + sub-reg merge.
   auto emit = [&](llvm::Value *val) {
@@ -585,6 +610,7 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
                            val->getType()->getPrimitiveSizeInBits().getFixedValue()));
     auto *resultType = llvm::IntegerType::get(*ctx_,ignil::widthOf(*op.dst));
     if (val->getType() != resultType) val = builder.CreateZExtOrTrunc(val,resultType);
+    if(capture)capture->result(val);
     if (const auto *t = std::get_if<ignil::Temp>(&*op.dst)) {
       // If it is a temporal value, it will be used
       // for SSA
@@ -597,9 +623,14 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
   };
 
   // Lambda functions to quickly manage the common operands of the operations
-  auto r0 = [&] { return resolve(op.srcs[0], regs, temps, builder); };
-  auto r1 = [&] { return resolve(op.srcs[1], regs, temps, builder); };
-  auto r2 = [&] { return resolve(op.srcs[2], regs, temps, builder); };
+  auto operand = [&](unsigned index) {
+    auto *value=resolve(op.srcs[index],regs,temps,builder);
+    if(capture)capture->operand(index,value);
+    return value;
+  };
+  auto r0 = [&] { return operand(0); };
+  auto r1 = [&] { return operand(1); };
+  auto r2 = [&] { return operand(2); };
   // Lambda to quickly retrieve the integer type of the destination
   auto dstTy = [&] {
     return llvm::IntegerType::get(*ctx_, ignil::widthOf(*op.dst));
@@ -619,10 +650,11 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     return rhs;
   };
   // A 32-bit address is unsigned, but a GEP sign-extends its index.
+  detail::MemoryCheck checked;
   auto memAddress = [&](llvm::Value *addr) {
     if (stateful()) {
       auto bytes = op.opcode == ignil::Opcode::STORE ? (ignil::widthOf(op.srcs[1])+7)/8 : (ignil::widthOf(*op.dst)+7)/8;
-      return memoryAddress(addr,bytes,op.address,regs,regsPtr,memPtr,builder);
+      return memoryAddress(addr,bytes,op.address,regs,regsPtr,memPtr,builder,&checked,capture);
     }
     auto *indexTy = module_->getDataLayout().getIndexType(memPtr->getType());
     return builder.CreateGEP(builder.getInt8Ty(), memPtr,
@@ -680,12 +712,17 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       emit(r0());
       break;
 
-    case ignil::Opcode::LOAD:
-      emit(builder.CreateAlignedLoad(dstTy(), memAddress(r0()), llvm::Align(1)));
+    case ignil::Opcode::LOAD: {
+      auto *load=builder.CreateAlignedLoad(dstTy(), memAddress(r0()), llvm::Align(1));
+      if(capture)capture->access(detail::AccessRole::Load,checked,load);
+      emit(load);
       break;
-    case ignil::Opcode::STORE:
-      builder.CreateAlignedStore(r1(), memAddress(r0()), llvm::Align(1));
+    }
+    case ignil::Opcode::STORE: {
+      auto *store=builder.CreateAlignedStore(r1(), memAddress(r0()), llvm::Align(1));
+      if(capture)capture->access(detail::AccessRole::Store,checked,store);
       break;
+    }
 
     // --- Arithmetic ---
     case ignil::Opcode::ADD:
@@ -789,12 +826,13 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
     case ignil::Opcode::JMP: {
       auto *target = r0();
       if (stateful() && (llvm::isa<llvm::UndefValue>(target) || llvm::isa<llvm::PoisonValue>(target))) {
-        emitExit(DRAGON_EXIT_UNKNOWN_TARGET,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,builder);break;
+        emitExit(DRAGON_EXIT_UNKNOWN_TARGET,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,builder,0,0,capture);break;
       }
       if (const auto *ci = llvm::dyn_cast<llvm::ConstantInt>(target)) {
         auto it = bbMap.find(ci->getZExtValue());
         if (it != bbMap.end()) {
-          builder.CreateBr(it->second);
+          auto *branch=builder.CreateBr(it->second);
+          if(capture)capture->edge(detail::EdgeRole::Jump,branch);
           break;
         }
       }
@@ -822,15 +860,16 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
           auto *other = llvm::BasicBlock::Create(*ctx_, "jmp.unresolved", fn);
           if (stateful()) {
             llvm::IRBuilder<> exitBuilder(other);
-            emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,exitBuilder);
+            emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,exitBuilder,0,0,capture);
           } else llvm::IRBuilder<>(other).CreateUnreachable();
           auto *sw = builder.CreateSwitch(target, other, cases.size());
           for (const auto &[t, bb]: cases)
             sw->addCase(llvm::ConstantInt::get(intTy, t), bb);
+          if(capture)capture->edge(detail::EdgeRole::Jump,sw);
           break;
         }
       }
-      if (stateful()) emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,builder);
+      if (stateful()) emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,builder,0,0,capture);
       else builder.CreateUnreachable(); // rejected by Legacy preflight
       break;
     }
@@ -845,13 +884,14 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
         if (constant) if (auto it=bbMap.find(constant->getZExtValue());it!=bbMap.end()) return it->second;
         auto *other=llvm::BasicBlock::Create(*ctx_,"branch.exit",builder.GetInsertBlock()->getParent());
         llvm::IRBuilder<> out(other);
-        if (stateful()) emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,out);
+        if (stateful()) emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_BRANCH,op.address,target,regs,regsPtr,out,0,0,capture);
         else out.CreateUnreachable();
         return other;
       };
       auto *takenBB=destination(taken,takenCI), *fallBB=destination(fall,fallCI);
       if (!cond->getType()->isIntegerTy(1)) cond=builder.CreateTrunc(cond,builder.getInt1Ty());
-      builder.CreateCondBr(cond,takenBB,fallBB);
+      auto *branch=builder.CreateCondBr(cond,takenBB,fallBB);
+      if(capture)capture->edge(detail::EdgeRole::Conditional,branch);
       break;
     }
 
@@ -859,32 +899,34 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       if (stateful()) {
         const auto *instruction=graph_->get(op.address);
         if (!instruction || op.srcs.size()!=1) {
-          emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
+          emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);break;
         }
         auto *target=r0(); // snapshot target before SP/LR changes (CALL SP / BLR X30)
         const auto next=instruction->address()+instruction->size();
         if (arch_ == Architecture::ARM64) {
           const auto word=a64Word(instruction);
           if ((word&0xfc000000)!=0x94000000 && (word&0xfffffc1f)!=0xd63f0000) {
-            emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
+            emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);break;
           }
           auto *link=builder.getInt64(next);builder.CreateStore(link,regs.at(240).at(64));
           mergeIntoParent(240,64,link,regs,builder);syncOverlapping(240,64,link,regs,builder);
         } else {
           const auto word=x86ControlWord(instruction,arch_,true);
-          if (!word) {emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;}
+          if (!word) {emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_CALL,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);break;}
           const auto width=arch_ == Architecture::X86_64 ? 64u : 32u;
           auto *type=builder.getIntNTy(width);
           target=builder.CreateZExtOrTrunc(target,builder.getIntNTy(*word*8));
           auto *sp=builder.CreateLoad(type,regs.at(32).at(width));
           auto *newSP=builder.CreateSub(sp,llvm::ConstantInt::get(type,*word));
-          auto *slot=memoryAddress(newSP,*word,op.address,regs,regsPtr,memPtr,builder);
-          builder.CreateAlignedStore(llvm::ConstantInt::get(builder.getIntNTy(*word*8),next),slot,llvm::Align(1));
+          detail::MemoryCheck check;
+          auto *slot=memoryAddress(newSP,*word,op.address,regs,regsPtr,memPtr,builder,&check,capture);
+          auto *store=builder.CreateAlignedStore(llvm::ConstantInt::get(builder.getIntNTy(*word*8),next),slot,llvm::Align(1));
+          if(capture)capture->access(detail::AccessRole::CallReturnSlot,check,store);
           builder.CreateStore(newSP,regs.at(32).at(width));
           mergeIntoParent(32,width,newSP,regs,builder);syncOverlapping(32,width,newSP,regs,builder);
         }
         if (mode_ == ExecutionMode::StaticAnalysis)
-          emitStaticCall(op,target,next,regs,regsPtr,builder,bbMap);
+          emitStaticCall(op,target,next,regs,regsPtr,builder,bbMap,capture);
         else emitExit(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_CALL,op.address,target,regs,regsPtr,builder,0,next);
         break;
       }
@@ -912,21 +954,23 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
       if (arch_ == Architecture::ARM64) {
         const auto word=a64Word(instruction);const auto n=op.aux ? op.aux-1 : 30;
         if ((word&0xfffffc1f)!=0xd65f0000 || op.aux>32 || ((word>>5)&31)!=n) {
-          emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;
+          emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);break;
         }
         target=n==31 ? static_cast<llvm::Value*>(builder.getInt64(0)) : builder.CreateLoad(builder.getInt64Ty(),regs.at(n*8).at(64));
       } else {
         const auto word=x86ControlWord(instruction,arch_,false);
-        if (!word || op.aux>0xffff) {emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION);break;}
+        if (!word || op.aux>0xffff) {emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_RETURN,op.address,nullptr,regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);break;}
         const auto width=arch_ == Architecture::X86_64 ? 64u : 32u;auto *type=builder.getIntNTy(width);
         auto *sp=builder.CreateLoad(type,regs.at(32).at(width));
-        auto *slot=memoryAddress(sp,*word,op.address,regs,regsPtr,memPtr,builder);
+        detail::MemoryCheck check;
+        auto *slot=memoryAddress(sp,*word,op.address,regs,regsPtr,memPtr,builder,&check,capture);
         target=builder.CreateAlignedLoad(builder.getIntNTy(*word*8),slot,llvm::Align(1));
+        if(capture)capture->access(detail::AccessRole::ReturnTarget,check,llvm::cast<llvm::Instruction>(target));
         auto *newSP=builder.CreateAdd(sp,llvm::ConstantInt::get(type,*word+op.aux));
         builder.CreateStore(newSP,regs.at(32).at(width));
         mergeIntoParent(32,width,newSP,regs,builder);syncOverlapping(32,width,newSP,regs,builder);
       }
-      emitExit(DRAGON_EXIT_RETURN,DRAGON_TRANSFER_RETURN,op.address,target,regs,regsPtr,builder);
+      emitExit(DRAGON_EXIT_RETURN,DRAGON_TRANSFER_RETURN,op.address,target,regs,regsPtr,builder,0,0,capture);
       break;
     }
 
@@ -1311,16 +1355,17 @@ std::string dragon::llvmlifter::LLVMLifter::staticFunctionName(std::uint64_t add
 
 void dragon::llvmlifter::LLVMLifter::emitExit(std::uint64_t reason, std::uint64_t kind,
     std::uint64_t sourcePC, llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
-    llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC) {
-  emitExitAtValue(reason,kind,builder.getInt64(sourcePC),target,regs,regsPtr,builder,detail,returnPC);
+    llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC, detail::LiftCapture *capture) {
+  emitExitAtValue(reason,kind,builder.getInt64(sourcePC),target,regs,regsPtr,builder,detail,returnPC,capture);
 }
 void dragon::llvmlifter::LLVMLifter::emitExitAtValue(std::uint64_t reason, std::uint64_t kind,
     llvm::Value *sourcePC, llvm::Value *target, RegFile &regs, llvm::Value *regsPtr,
-    llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC) {
-  writeExitAtValue(reason,kind,sourcePC,target,regs,builder,detail,returnPC);
+    llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC, detail::LiftCapture *capture) {
+  const auto values=writeExitAtValue(reason,kind,sourcePC,target,regs,builder,detail,returnPC);
   emitReturn(regs,regsPtr,builder);
+  if(capture)capture->exit(llvm::cast<llvm::ReturnInst>(builder.GetInsertBlock()->getTerminator()),values);
 }
-void dragon::llvmlifter::LLVMLifter::writeExitAtValue(std::uint64_t reason, std::uint64_t kind,
+dragon::llvmlifter::detail::ExitValues dragon::llvmlifter::LLVMLifter::writeExitAtValue(std::uint64_t reason, std::uint64_t kind,
     llvm::Value *sourcePC, llvm::Value *target, RegFile &regs,
     llvm::IRBuilder<> &builder, std::uint64_t detail, std::uint64_t returnPC) {
   const bool known = target && !llvm::isa<llvm::UndefValue>(target) && !llvm::isa<llvm::PoisonValue>(target);
@@ -1344,14 +1389,15 @@ void dragon::llvmlifter::LLVMLifter::writeExitAtValue(std::uint64_t reason, std:
   };
   for (const auto &[offset,value] : fields)
     builder.CreateAlignedStore(value,builder.CreateConstGEP1_64(builder.getInt8Ty(),exit,offset),llvm::Align(1));
+  return {reason,kind,detail,returnPC,sourcePC,pc,valid!=0};
 }
 
 void dragon::llvmlifter::LLVMLifter::emitStaticCall(const ignil::Op &op,
     llvm::Value *target, std::uint64_t next, RegFile &regs, llvm::Value *regsPtr,
-    llvm::IRBuilder<> &builder, const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap) {
+    llvm::IRBuilder<> &builder, const std::map<std::uint64_t,llvm::BasicBlock *> &bbMap, detail::LiftCapture *capture) {
   auto *fn=builder.GetInsertBlock()->getParent();
-  writeExitAtValue(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_CALL,builder.getInt64(op.address),
-                   target,regs,builder,0,next);
+  const auto request=writeExitAtValue(DRAGON_EXIT_TRANSFER,DRAGON_TRANSFER_CALL,builder.getInt64(op.address),
+                                     target,regs,builder,0,next);
   writeBackRegisters(regs,regsPtr,builder);
   auto *type=fn->getFunctionType();
   // This declaration makes no promises about effects or preserved registers.
@@ -1363,7 +1409,7 @@ void dragon::llvmlifter::LLVMLifter::emitStaticCall(const ignil::Op &op,
     if (module_->getFunction(internal) || Function(graph_,address).isValid()) calleeName=internal;
   }
   auto callee=module_->getOrInsertFunction(calleeName,type);
-  builder.CreateCall(callee,{fn->getArg(0),fn->getArg(1),fn->getArg(2),fn->getArg(3)});
+  auto *call=builder.CreateCall(callee,{fn->getArg(0),fn->getArg(1),fn->getArg(2),fn->getArg(3)});
   reloadRegisters(regs,regsPtr,builder);
   const auto pcOffset=arch_==Architecture::ARM64 ? 264u : 128u;
   auto *pc=builder.CreateLoad(builder.getInt64Ty(),regs.at(pcOffset).at(64));
@@ -1390,17 +1436,26 @@ void dragon::llvmlifter::LLVMLifter::emitStaticCall(const ignil::Op &op,
       builder.CreateICmpEQ(reason,builder.getInt64(DRAGON_EXIT_UNKNOWN_TARGET)),hasPC));
   auto *check=llvm::BasicBlock::Create(*ctx_,"call.exit.valid",fn);
   auto *bad=llvm::BasicBlock::Create(*ctx_,"call.exit.invalid",fn);
-  builder.CreateCondBr(invalid,bad,check);
+  auto *validateExit=builder.CreateCondBr(invalid,bad,check);
+  if(capture)capture->edge(detail::EdgeRole::CallExitValidation,validateExit);
   llvm::IRBuilder<> error(bad);
-  emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regs,regsPtr,error,DRAGON_DETAIL_INVALID_EXIT,0);
+  emitExitAtValue(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,pc,regs,regsPtr,error,DRAGON_DETAIL_INVALID_EXIT,0,capture);
   builder.SetInsertPoint(check);
   auto *normal=llvm::BasicBlock::Create(*ctx_,"call.continue",fn);
   auto *propagate=llvm::BasicBlock::Create(*ctx_,"call.propagate",fn);
   auto *returned=builder.CreateAnd(isReturn,builder.CreateICmpEQ(kind,builder.getInt64(DRAGON_TRANSFER_RETURN)));
-  builder.CreateCondBr(builder.CreateAnd(returned,builder.CreateICmpEQ(pc,builder.getInt64(next))),normal,propagate);
-  llvm::IRBuilder<>(propagate).CreateRetVoid(); // state/Exit already came from the callee
+  auto *validateReturn=builder.CreateCondBr(builder.CreateAnd(returned,builder.CreateICmpEQ(pc,builder.getInt64(next))),normal,propagate);
+  if(capture)capture->edge(detail::EdgeRole::CallReturnValidation,validateReturn);
+  auto *propagated=llvm::IRBuilder<>(propagate).CreateRetVoid(); // state/Exit already came from the callee
+  if(capture) {
+    capture->exit(propagated,std::nullopt);
+    capture->call(call,target,next,request,validateExit,validateReturn,bad,normal,propagate);
+  }
   builder.SetInsertPoint(normal);
-  if (auto it=bbMap.find(next);it!=bbMap.end()) builder.CreateBr(it->second);
+  if (auto it=bbMap.find(next);it!=bbMap.end()) {
+    auto *branch=builder.CreateBr(it->second);
+    if(capture)capture->edge(detail::EdgeRole::CallContinuation,branch);
+  }
   else resumeEntries_.emplace(next,normal);
 }
 
@@ -1421,7 +1476,7 @@ void dragon::llvmlifter::LLVMLifter::emitBudgetCheck(std::uint64_t pc,
 
 llvm::Value *dragon::llvmlifter::LLVMLifter::memoryAddress(llvm::Value *address,
     std::uint64_t bytes, std::uint64_t pc, RegFile &regs, llvm::Value *regsPtr,
-    llvm::Value *memPtr, llvm::IRBuilder<> &builder) {
+    llvm::Value *memPtr, llvm::IRBuilder<> &builder, detail::MemoryCheck *check, detail::LiftCapture *capture) {
   auto *fn=builder.GetInsertBlock()->getParent();
   auto *index=builder.CreateZExtOrTrunc(address,builder.getInt64Ty());
   auto *sizePtr=builder.CreateConstGEP1_64(builder.getInt8Ty(),fn->getArg(1),offsetof(GuestMemoryV2,size));
@@ -1430,9 +1485,11 @@ llvm::Value *dragon::llvmlifter::LLVMLifter::memoryAddress(llvm::Value *address,
   auto *inside=builder.CreateICmpULE(index,builder.CreateSub(size,builder.getInt64(bytes)));
   auto *work=llvm::BasicBlock::Create(*ctx_,"memory.valid",fn);
   auto *stop=llvm::BasicBlock::Create(*ctx_,"memory.invalid",fn);
-  builder.CreateCondBr(builder.CreateAnd(enough,inside),work,stop);
+  auto *branch=builder.CreateCondBr(builder.CreateAnd(enough,inside),work,stop);
+  if(check)*check={address,index,memPtr,address->getType()->getIntegerBitWidth(),bytes,branch,work,stop};
+  if(capture)capture->edge(detail::EdgeRole::MemoryBounds,branch);
   llvm::IRBuilder<> out(stop);
-  emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,nullptr,regs,regsPtr,out,DRAGON_DETAIL_MEMORY);
+  emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,pc,nullptr,regs,regsPtr,out,DRAGON_DETAIL_MEMORY,0,capture);
   builder.SetInsertPoint(work);
   return builder.CreateGEP(builder.getInt8Ty(),memPtr,index);
 }

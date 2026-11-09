@@ -52,8 +52,9 @@ CALL 保留机器返回槽、独立静态 callee 和调用后核验/重载；RET
 普通 `lift()`、默认六步优化、Graph 目标完整性判定保持原有路径。
 
 后续 S1a 将两种区域准备路径统一到内部拥有只读 Graph 的 `PreparedRegion`，严格 IGNIL 路径
-也会生成快照；普通 `lift()` 不经过它。操作来源按准备实例/块/op 序号区分，但尚不包含 LLVM
-访问映射或内存值证明。范围和验证见[实施进度](deobfuscation-progress-20261109.md)。
+也会生成快照；普通 `lift()` 不经过它。操作来源按准备实例/块/op 序号区分。S1b 在同次 lowering
+中记录实际 LLVM 访问、检查和退出，同步消费后映射失效；尚未实现内存值改写。
+范围和验证见[实施进度](deobfuscation-progress-20261109.md)。
 
 ## 使用
 
