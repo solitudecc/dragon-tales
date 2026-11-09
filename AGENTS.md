@@ -252,14 +252,36 @@ NZFe619/C514; exact10source pins under timing-regressions-v4. Independent
 native/unit reports are native-independent-review-v4, dual verificationd29e996f.
 
 V3 corpus16pairs/32743checks/273raw is partial and retained; it cannot count
-toward final v4. At the implementation milestone commit final v4 has10/69
-sealed inputs/14056checks/120raw, zero measured deltas; full69 still pending.
+toward final v4. Implementation commit43ca7e6 records an early10/69 snapshot.
+Latest v4 has60/69 sealed inputs,172576valid checks/1410fresh raw modules;
+baseline83 same checks are reused, not fresh executions. Full69 still pending.
+Five changed inputs/8strategy pairs have exact root reviews:5instruction rows
+restore existing entry flags,15rows remove empty metadata (6blocks/6null IR/
+3invalid functions). No decoded bytes/decode properties/targets/callees/members
+or valid-entry changes.
+Completed60 alerts missingIGNIL6->0/invalidFn3->0; undecoded26 and objdump146
+remain. Actual unlifted markers173552 unchanged. Three combined IGNIL/unlifted
+digests differ because null kind2 rows were removed; false flags are retained,
+not normalized into equality. These are metadata repairs, not new lift coverage.
+
+Input61 corpus2-sys_python3 attempt001 failed kernel-confirmed global OOM:
+opt-21 invoked OOM and saved worker PID1582195 was killed(-9). Original source,
+plan/chunk128/budgets are unchanged;77linear+29recursive receipts and120027374B
+orphan IR are preserved and excluded from completed-input coverage. No retry or
+62nd input started. User must supply administrator authentication for prepared
+8GiB temporary swap; sudo -n actually requires interactive auth. Do not bypass
+that restriction or change other host VMs. Recovery contract preserves001,
+records/old.json and orphan evidence; original --retry-failed can produce002
+with first seal session001, then resume remaining inputs. No partial success
+reuse. See v4/resource-incident-input61-v1/{incident.json,retry-contract-v1.md}.
 Old side reuses frozen previous new83 Graph
 inventories/138 canonical streams, not old401 or fresh old workers/LLVM. New
 side runs every input and all valid raw modules afresh; no new-success reuse.
-Targeted cxx_i386 O2 keeps13 genuine E9-to-zero edges per strategy while removing
-empty zero registration. Crypto linear's four empty starts are filtered; its
-targeted helper does not measure crypto edges. Full counts await corpus closure.
+Fresh cxx_i386 O2 keeps13 encoded E9-to-zero edges per strategy while removing
+empty zero registration; root checked all four retained streams and rel32s.
+Crypto removes only4empty starts/1invalidFn; root checked full old/newlinear
+streams retain four raw references, ELF section mappings and01010101<unknown>.
+Its earlier targeted helper does not measure crypto edges. Full counts await closure.
 Artifacts: `~/vmc-runs/cfg-entry-audit-20261109/` plus final
 `~/vmc-runs/decoded-entry-registration-v4-20261109/`; old v3 partials remain in
 `~/vmc-runs/decoded-entry-registration-20261109/`. Only owned overlap worktree;
