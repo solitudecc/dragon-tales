@@ -252,6 +252,7 @@ def main():
     parser.add_argument('--plans', default='product-O0,product-O2')
     parser.add_argument('--trials', type=int, default=8)
     parser.add_argument('--without-region', action='store_true')
+    parser.add_argument('--require-diagnostics', action='store_true')
     parser.add_argument('--max-blocks', type=int, default=4096)
     parser.add_argument('--max-dispatch-cases', type=int, default=65536)
     parser.add_argument('--control', choices=('llvm-register', 'llvm-memory'))
@@ -409,6 +410,8 @@ def main():
         argv += ['--profile', profile]
     if args.control:
         argv += ['--control', args.control]
+    if args.require_diagnostics:
+        argv += ['--require-diagnostics']
     for name in ('clang', 'ld', 'opt', 'llc', 'cc'):
         argv += ['--' + name, getattr(args, name)]
     save(out / 'invocation.json', dict(argv=argv, cwd=str(Path.cwd()), started_unix=time.time()))
@@ -447,9 +450,11 @@ def main():
         modules=len(modules), Graph_unchanged=bool(modules) and all(m.get('Graph_unchanged') is True for m in modules),
         memory_bytes=study.MEM_SIZE, real_Guest_megaInit=True, injected_memory=False,
         Graph_finite_dispatch=False,
-        semantic_complete=(bool(rows) and all(r['status'] == 'match' for r in rows)
-                           and all(r['status'] == 'match' for r in raw['c_results'])
-                           and raw['summary']['cfg_wrong_sites'] == 0))
+        semantic_complete=raw['summary']['semantic_complete'],
+        diagnostic_statuses=raw['summary']['diagnostic_statuses'],
+        diagnostics_complete=raw['summary']['diagnostics_complete'],
+        require_diagnostics=args.require_diagnostics,
+        coverage=raw['summary']['coverage'], complete=raw['summary']['complete'])
     save(out / 'static-region-summary.json', summary)
     print(json.dumps(summary, sort_keys=True), flush=True)
     return status

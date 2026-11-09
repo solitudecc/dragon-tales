@@ -22,7 +22,9 @@ Checks, each against an independent reference:
 
 Exit status 0 only if every C check matches, no CFG result is wrong and
 every LLVM comparison is a complete match (so a harder profile that is
-merely incomplete makes it 1: the run is a measurement).
+merely incomplete makes it 1: the run is a measurement). Optional symbolic
+branch diagnostics report unavailable without Z3; --require-diagnostics also
+requires every diagnostic to complete. Missing cases/trials never pass.
 """
 import argparse
 import collections
@@ -40,6 +42,7 @@ from elftools.elf.elffile import ELFFile
 import tigress_function_diff as tf
 from generated_function_diff import PLANS
 import block_deobf_study as block_deobf
+from campaign_diagnostics import branch_diagnostic, campaign_summary
 
 base, guest = tf.base, tf.guest
 # `junk` predicates and Flatten `flag` conditionals emit x86 inline assembly;
@@ -388,6 +391,8 @@ def main():
     ap.add_argument('--trials', type=int, default=24)
     ap.add_argument('--strategy', type=int, choices=[0, 1], default=0)
     ap.add_argument('--function-entry', action='store_true', help='use explicit function-start static views')
+    ap.add_argument('--require-diagnostics', action='store_true',
+                    help='fail if the optional symbolic branch diagnostic is unavailable or incomplete')
     ap.add_argument('--c-level', action='append', choices=['O0', 'O2'])
     ap.add_argument('--plans', default=','.join(p[0] for p in PLANS))
     ap.add_argument('--control', choices=['c-result', 'llvm-register', 'llvm-memory'])
@@ -396,11 +401,18 @@ def main():
     args = ap.parse_args()
     profiles = args.profile or (FUNCTION_PROFILES if args.function_level else PROFILES)
     levels = args.c_level or ['O0', 'O2']
-    plans = [p for p in PLANS if p[0] in args.plans.split(',')]
+    plan_names = args.plans.split(',')
+    if (args.trials < 1 or len(set(profiles)) != len(profiles) or len(set(levels)) != len(levels)
+            or len(set(plan_names)) != len(plan_names) or not set(plan_names) <= {p[0] for p in PLANS}):
+        ap.error('need positive trials and unique valid profiles, levels and plans')
+    plans = [p for p in PLANS if p[0] in plan_names]
+    cases = [f'{profile}-{level}' for profile in profiles for level in levels]
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     adapter = guest.Adapter('x86_64')
     xs = inputs(args.seed, args.trials)
+    if len(xs) != args.trials:
+        raise ValueError('input generator did not provide every requested trial')
     seen_cases = collections.Counter()
     for x in xs:
         seen_cases.update(specification(args.seed, x, guarded=any(p.startswith('f-') for p in profiles))[2])
@@ -414,9 +426,8 @@ def main():
     (out / 'source-guarded.c').write_text(source(args.seed, guarded=True))
     c_rows, rows, analyses = [], [], []
     def save():
-        st = lambda rs: dict(collections.Counter(r['status'] for r in rs))
-        summary = dict(meta, c_statuses=st(c_rows), llvm_statuses=st(rows),
-                       cfg_wrong_sites=sum(a.get('wrong_sites', 0) for a in analyses))
+        summary = dict(meta, **campaign_summary(analyses, c_rows, rows, cases,
+                        [p[0] for p in plans], args.trials, args.require_diagnostics))
         (out / 'results.json').write_text(json.dumps(dict(summary=summary, analyses=analyses,
                                                           c_results=c_rows, results=rows), indent=1, default=list))
         return summary
@@ -461,11 +472,18 @@ def main():
             kblocks = [bb for bb in graph.block_addresses() if ka <= bb < ka + ks and graph.get_block(bb).is_valid]
             conditional = [bb for bb in kblocks
                            if (lambda i: i.is_jump and i.is_conditional)(graph.get_instruction(graph.get_block(bb).terminator_address))]
-            edges = block_deobf.branch_edges(graph, conditional)
+            try:
+                diagnostic = branch_diagnostic(base.dragon.lib, graph, conditional, block_deobf.branch_edges)
+            except Exception as error:
+                analysis.update(status='diagnostic_error', branch_diagnostic=dict(
+                    status='error', type=type(error).__name__, detail=str(error)))
+                analyses.append(analysis)
+                save()
+                raise
             analysis.update(kernel_blocks=len(kblocks), kernel_conditional_branches=len(conditional),
-                            branches_decided_single_edge=sum(1 for v in edges.values() if v == 1),
-                            branches_both_edges=sum(1 for v in edges.values() if v == 2),
-                            branches_symbolic_error=sum(1 for v in edges.values() if v is None))
+                            branch_diagnostic=diagnostic,
+                            **{key: diagnostic[key] for key in ('branches_decided_single_edge',
+                               'branches_both_edges', 'branches_symbolic_error')})
             # C level + dynamic CFG edges, one Unicorn run per input.
             expected, executed_all, edges_all = [], set(), set()
             for trial, x in enumerate(xs):
@@ -544,9 +562,7 @@ def main():
                   dict(collections.Counter(r['status'] for r in rows if r['case'] == case)), flush=True)
     summary = save()
     print(json.dumps(summary, indent=1))
-    ok = (all(r['status'] == 'match' for r in c_rows) and summary['cfg_wrong_sites'] == 0
-          and rows and all(r['status'] == 'match' for r in rows))
-    return 0 if ok else 1
+    return 0 if summary['complete'] else 1
 
 
 if __name__ == '__main__':

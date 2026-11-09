@@ -237,6 +237,9 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - static corpus summary rejects incomplete results"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_static_corpus_summary.py)
+        add_test(NAME "Validation - Tigress diagnostics and exact campaign coverage"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_campaign_diagnostics.py)
         add_test(NAME "Validation - unreachable switch defaults require exact domain proofs"
                  COMMAND ${Python3_EXECUTABLE}
                          ${PROJECT_SOURCE_DIR}/scripts/validation/test_ir_unreachable.py)

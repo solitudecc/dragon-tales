@@ -211,6 +211,23 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Deobfuscation S0 harness gates (2026-11-09, baseline `12b0043`): see
+`docs/deobfuscation-progress-20261109.md`. Optional symbolic diagnostics probe
+the C symbol; absent means unavailable/null proof counts, never semantic success.
+Available diagnostic exceptions are saved and rethrown. --require-diagnostics
+also requires complete diagnostics. Exact requested case/plan/trial coverage
+rejects missing, extra, duplicate and malformed records, including bool/float IDs.
+13 Python cases; complete CTest 801/801 and no-Z3 669/669. Frozen main/no-Z3 each
+C16 and LLVM32 complete root matches,
+all fields/1 MiB/Exit unchanged. No-Z3 RAX/memory controls each detect 16 specified
+single-field differences; strict no-Z3 has 16 matches but correctly returns 1.
+Old exact-ELF build-error control falsely returned 0 despite an absent case;
+new returns 1 with the same remaining C8/LLVM16 matches. Available AttributeError
+and RuntimeError controls propagate, never unavailable. Old no-Z3 missing-symbol
+failure retained. No production library/comparator/ABI changes or new exclusions.
+Final source-pinned raw and dual-host audit: `~/vmc-runs/deobf-s0-20261109/`.
+This repairs validation, not dispatcher/MBA/heap deobfuscation.
+
 Static decoded-region coverage (2026-11-09, baseline `d200f05`): see
 `docs/llvm-static-region.md`. Explicit C++/C/Python liftStaticRegion requires
 StaticAnalysis + FunctionStart, keeps original members and accepts additional
