@@ -614,6 +614,14 @@ dragon::x86::X86IGNILLifter::X86IGNILLifter(
     const std::string_view name = instrInfo.getName(i);
     nameToOpc.emplace(name, i);
 
+    if (name == "SYSCALL" || name == "SYSENTER" ||
+        name.starts_with("SYSRET") || name.starts_with("SYSEXIT") ||
+        name == "INT" || name == "INT1" || name == "INT3" || name == "INTO" || name == "HLT" ||
+        name.starts_with("IRET") || name == "RSM" ||
+        name == "VMCALL" || name == "VMMCALL" || name == "VMRUN" ||
+        name == "VMLAUNCH" || name == "VMRESUME")
+      environmentOpcodes_.insert(i);
+
     // nop in all its encodings: NOOP (90), NOOPW/NOOPL/NOOPQ - the multi-byte
     // `nop word ptr cs:[rax + rax]` alignment padding - and their register
     // forms. FNOP is the x87 one.
@@ -1005,6 +1013,8 @@ dragon::x86::X86IGNILLifter::liftBlock(const BasicBlock &block,
 
   for (const Instruction *insn: block.instructions()) {
     liftInstruction(*insn, result, tempId);
+    if (!result.empty() && result.ops().back().opcode == ignil::Opcode::UNSUPPORTED)
+      break;
   }
 
   // A block that ends without an explicit branch/return (execution simply
@@ -1020,7 +1030,8 @@ dragon::x86::X86IGNILLifter::liftBlock(const BasicBlock &block,
           !result.empty() &&
           (result.ops().back().opcode == ignil::Opcode::JMP ||
            result.ops().back().opcode == ignil::Opcode::CJMP ||
-           result.ops().back().opcode == ignil::Opcode::RET);
+           result.ops().back().opcode == ignil::Opcode::RET ||
+           result.ops().back().opcode == ignil::Opcode::UNSUPPORTED);
   if (!alreadyTerminated) {
     if (const auto &succ = block.successors(); succ.size() == 1) {
       result.append({ignil::Opcode::JMP,
@@ -1041,8 +1052,11 @@ dragon::ignil::Block dragon::x86::X86IGNILLifter::liftTrace(
   ignil::Block result{trace.front().address()};
   std::uint32_t tempId = 0;
 
-  for (const Instruction &insn: trace)
+  for (const Instruction &insn: trace) {
     liftInstruction(insn, result, tempId);
+    if (!result.empty() && result.ops().back().opcode == ignil::Opcode::UNSUPPORTED)
+      break;
+  }
 
   return result;
 }
@@ -1196,6 +1210,16 @@ void dragon::x86::X86IGNILLifter::liftInstruction(const Instruction &insn,
   const auto *mc = insn.mcInst();
   if (!mc)
     return;
+
+  // LLVM's register/memory descriptor does not describe an OS or exception
+  // handler's effects. In particular SYSCALL may have no defs/mayStore at
+  // all. Keep an explicit boundary in the op stream as well as the coverage
+  // marker; consumers of ops alone must not silently execute the suffix.
+  if (insn.isTrap() || environmentOpcodes_.contains(mc->getOpcode())) {
+    out.append({ignil::Opcode::UNSUPPORTED, std::nullopt, {}, insn.address()});
+    out.noteUnlifted(insn.address());
+    return;
+  }
 
   const auto context=addressContext(insn);
   if (liftString(insn,context,out,tempId)) return;

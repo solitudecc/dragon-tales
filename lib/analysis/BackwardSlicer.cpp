@@ -24,6 +24,12 @@ namespace dragon {
 
 namespace {
 
+bool hasUnsupported(const ignil::Block &block) {
+  return std::any_of(block.begin(), block.end(), [](const auto &op) {
+    return op.opcode == ignil::Opcode::UNSUPPORTED;
+  });
+}
+
 std::optional<std::pair<int,int>> localRange(const ignil::Block &block) {
   std::optional<std::pair<int,int>> range;
   for (int i=0;i<static_cast<int>(block.ops().size());++i)
@@ -292,7 +298,7 @@ std::optional<slice::Expr> BackwardSlicer::storedValue(
         const ignil::Block &block, int beforeIdx, const Graph &graph,
         PredMap &preds, int depth, const slice::Expr &address,
         ignil::Width width, std::set<std::uint64_t> &active) const {
-  if (preds.memoryBudget <= 0 || !block.unlifted().empty() ||
+  if (preds.memoryBudget <= 0 || !block.unlifted().empty() || hasUnsupported(block) ||
       !active.insert(block.startAddress()).second)
     return std::nullopt;
   // Active is per traversal path: a shared predecessor on two arms is not
@@ -348,7 +354,7 @@ std::optional<slice::ValueOrigin> BackwardSlicer::memoryState(
   for (int step = 0; step < 64; ++step, --context) {
     if (!seen.insert(block->startAddress()).second)
       return std::nullopt;
-    if (!block->unlifted().empty())
+    if (!block->unlifted().empty() || hasUnsupported(*block))
       return std::nullopt; // an opaque instruction may write memory
     for (int i = beforeIdx - 1; i >= 0; --i) {
       if (--budget < 0)
@@ -409,6 +415,11 @@ slice::Expr BackwardSlicer::sliceValue(const ignil::Value &v,
                                        const ignil::Block &block, int beforeIdx,
                                        const Graph &graph, PredMap &preds,
                                        int depth) const {
+  // This is an explicit execution boundary, unlike the existing partial
+  // UNDEF/unlifted contract. No suffix or end-of-block value is established,
+  // even when hand-built IR omitted its accompanying unlifted marker.
+  if (hasUnsupported(block))
+    return slice::Expr{slice::Undef{ignil::widthOf(v)}};
   const auto local=localRange(block);
   return std::visit(
           utils::overloaded{
@@ -471,6 +482,9 @@ slice::Expr BackwardSlicer::sliceReg(const ignil::Reg &r,
                                      const ignil::Block &block, int beforeIdx,
                                      const Graph &graph, PredMap &preds,
                                      int depth) const {
+  // Recursive predecessor queries enter here without going via sliceValue.
+  if (hasUnsupported(block))
+    return slice::Expr{slice::Undef{r.width}};
   using Opc = ignil::Opcode;
   auto unknown = [&] {
     const auto it = preds.preds->find(block.startAddress());

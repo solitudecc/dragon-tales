@@ -410,6 +410,7 @@ bool hasSideEffect(Opcode op) {
     case Opcode::CJMP:
     case Opcode::CALL:
     case Opcode::RET:
+    case Opcode::UNSUPPORTED:
       return true;
     default:
       // Includes LOAD: IGNIL has no volatile/side-effecting LOAD, so an
@@ -784,8 +785,10 @@ Block passRegDSE(const Block &in,
 Block simplifyBlock(const Block &block, SimplifyStats &stats,
                     int maxIterations) {
   stats = SimplifyStats{};
-  if (std::any_of(block.begin(),block.end(),[](const Op &op) { return isLocalControl(op.opcode); }))
-    return block; // The linear passes do not prove liveness across local loops.
+  if (std::any_of(block.begin(),block.end(),[](const Op &op) {
+        return isLocalControl(op.opcode) || op.opcode == Opcode::UNSUPPORTED;
+      }))
+    return block; // Preserve local flow and the full observable prefix at a boundary.
   Block current = block;
   for (int iter = 0; iter < maxIterations; ++iter) {
     SimplifyStats iterStats;
@@ -813,7 +816,9 @@ Block deadStoreEliminate(const Block &block,
                          const std::optional<std::vector<Reg>> &liveOut,
                          SimplifyStats &stats, DeadStoreOptions opts) {
   stats = SimplifyStats{};
-  if (std::any_of(block.begin(),block.end(),[](const Op &op) { return isLocalControl(op.opcode); }))
+  if (std::any_of(block.begin(),block.end(),[](const Op &op) {
+        return isLocalControl(op.opcode) || op.opcode == Opcode::UNSUPPORTED;
+      }))
     return block;
   Block out = passRegDSE(block, liveOut, opts, stats);
   stats.iterations = 1; // exact in a single backward pass

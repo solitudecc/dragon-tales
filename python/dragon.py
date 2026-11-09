@@ -1126,6 +1126,7 @@ class IGNILOpcode:
     LABEL = 69
     LOCALJMP = 70
     LOCALCJMP = 71
+    UNSUPPORTED = 72
 
     @staticmethod
     def name(opcode_int):

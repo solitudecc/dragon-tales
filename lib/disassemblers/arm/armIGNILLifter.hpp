@@ -13,6 +13,7 @@
 #include <map>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace dragon {
 
@@ -72,6 +73,8 @@ class ARMIGNILLifter {
   liftTrace(std::span<const Instruction> trace) const;
 
   private:
+  std::unordered_set<unsigned> environmentOpcodes_;
+
   // Register-offset (LDR/STR *roW, *roX) and unscaled-immediate (LDUR/STUR)
   // general-register loads and stores, by opcode.
   struct MemForm {

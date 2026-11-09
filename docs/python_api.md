@@ -517,6 +517,12 @@ when the block has to be a complete account of the code, e.g. before trusting a
 symbolic run of it. `simplify()` and `dead_store_eliminate()` carry the list
 over.
 
+System/exception transitions emit `IGNILOpcode.UNSUPPORTED` (72) as well as
+the marker. Execution stops before that instruction, including in symbolic
+trace mode; no OS return value or post-state is supplied. IGNIL optimizers
+preserve the block unchanged. Legacy refuses it; Static/V2 report the exact
+`Unsupported/Instruction` PC. See [the boundary contract](system-transition-boundaries.md).
+
 ```python
 missing = ib.unlifted()
 if missing:
@@ -1231,7 +1237,7 @@ lifted x86-64.
 | `dragon.PassStatus` | `SUCCESS`, `UNAVAILABLE`, `INCOMPLETE`, `ERROR` |
 | `dragon.Strategy` | `LINEAR_SWEEP`, `RECURSIVE_TRAVERSAL` |
 | `dragon.SliceExprType` | `CONST`, `SYM_REG`, `BINOP`, `UNARYOP`, `LOAD`, `UNDEF` |
-| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `FADD`, `FSUB`, `FMUL`, `FDIV`, `SITOFP`, `FPTOSI`, `OPAQUE` (43 values) |
+| `dragon.IGNILOpcode` | `COPY`, `LOAD`, `STORE`, `ADD`, … `UNDEF`, `OPAQUE`, floating-point and local control ops, `UNSUPPORTED` (73 values) |
 | `dragon.Format` | `UNKNOWN`, `ELF`, `PE` |
 | `dragon.SymbolKind` | `UNKNOWN`, `FUNCTION`, `OBJECT`, `SECTION`, `FILE` |
 | `dragon.SymExecStatus` | `OK`, `MALFORMED_OP`, `UNSUPPORTED_OP`, `SOLVER_FAILURE` |

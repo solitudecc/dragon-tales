@@ -49,7 +49,8 @@ std::unique_ptr<PreparedRegion> PreparedRegion::prepare(const Function &fn, cons
       auto ir = dis.liftTrace(trace);
       const auto &ops = ir.ops();
       const bool terminated = !ops.empty() && (ops.back().opcode == ignil::Opcode::JMP ||
-          ops.back().opcode == ignil::Opcode::CJMP || ops.back().opcode == ignil::Opcode::RET);
+          ops.back().opcode == ignil::Opcode::CJMP || ops.back().opcode == ignil::Opcode::RET ||
+          ops.back().opcode == ignil::Opcode::UNSUPPORTED);
       if (!terminated && block.successors().size() == 1)
         ir.append({ignil::Opcode::JMP, std::nullopt,
             {ignil::Const{*block.successors().begin(), 64}}, block.terminatorAddress()});

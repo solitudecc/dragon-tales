@@ -194,6 +194,12 @@ enum class Opcode : std::uint8_t {
   // Intra-instruction control flow. aux identifies a LABEL within this block;
   // LOCALCJMP takes srcs[0] when true, otherwise continues to the next op.
   LABEL, LOCALJMP, LOCALCJMP,
+
+  // An unmodelled execution boundary (for example SYSCALL or SVC). No
+  // operands or destination. Stop before this machine instruction: no
+  // post-state or normal return is claimed, even when executing a trace.
+  // This is distinct from an undefined *value* produced by UNDEF.
+  UNSUPPORTED,
 };
 
 [[nodiscard]] constexpr bool isLocalControl(Opcode opcode) {

@@ -1168,6 +1168,12 @@ ExecStatus SymbolicExecutor::stepBranch(const Op &op, RunResult &result) {
 
 ExecStatus SymbolicExecutor::step(const Op &op, RunResult &result) {
   switch (op.opcode) {
+    case Opcode::UNSUPPORTED:
+      // This boundary has no post-state. In particular do not manufacture
+      // an OS return value or let trace execution step over it.
+      return op.dst || !op.srcs.empty() || op.aux != 0
+          ? ExecStatus::MalformedOp : ExecStatus::UnsupportedOp;
+
     case Opcode::LOAD:
     case Opcode::STORE:
       return stepMemory(op, result);

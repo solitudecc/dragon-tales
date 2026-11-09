@@ -574,9 +574,18 @@ dragon::ignil::Block s = dragon::ignil::deadStoreEliminate(block, liveOut, stats
 | `registerFile` | The target's maximal registers, so a 32-bit write's parent — and the byte range it zero-extends over — resolves exactly. Pass `dragon::x86::registerFile()` or `dragon::arm::registerFile()`. Matters for any block that can touch FP/SIMD lane views (e.g. AArch64 `S0` is a 32-bit view of the 128-bit `V0`); left empty, an 8-byte parent is assumed. |
 
 Block-local and semantics-preserving: side-effecting ops
-(`STORE`/`CALL`/`JMP`/`CJMP`/`RET`) are never removed, and a store is dropped
+(`STORE`/`CALL`/`JMP`/`CJMP`/`RET`/`UNSUPPORTED`) are never removed, and a store is dropped
 only when *every* byte it clobbers is dead. Dead Temps are dropped too,
 subsuming the Temp DCE in `simplifyBlock`.
+
+`Opcode::UNSUPPORTED` (appended value 72) has no operands or destination.
+It stops before an unmodelled execution boundary such as SYSCALL or SVC;
+no OS return value or post-state is assumed. Symbolic execution reports
+`UnsupportedOp`/`Error` even in trace mode. Simplify and DSE preserve a block
+containing this boundary unchanged. Legacy LLVM lifting refuses it; Static
+and V2 report the exact `Unsupported/Instruction` PC. See
+[system transition boundaries](system-transition-boundaries.md) for the
+scope and the distinction from ordinary opaque external CALLs.
 
 ### x86 register constants
 

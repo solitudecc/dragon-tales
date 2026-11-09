@@ -41,6 +41,7 @@ add_executable(dragon_tests
         obfush/TestObfush.cpp
         lifters/TestLLVMLifter.cpp
         lifters/TestLLVMLegacyUnlifted.cpp
+        lifters/TestSystemTransitionBoundaries.cpp
         lifters/TestLLVMPredicateFolding.cpp
         lifters/TestLLVMMBA.cpp
         lifters/TestLLVMFunctionFlow.cpp
@@ -233,6 +234,9 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME "Validation - Legacy unlifted oracle controls"
                  COMMAND ${Python3_EXECUTABLE}
                          ${PROJECT_SOURCE_DIR}/scripts/validation/legacy_unlifted_diff.py --self-test)
+        add_test(NAME "Validation - system transition boundary controls"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${PROJECT_SOURCE_DIR}/scripts/validation/system_transition_diff.py --self-test)
         add_test(NAME "Validation - jump-table bounds follow the actual index"
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_table_bounds.py)

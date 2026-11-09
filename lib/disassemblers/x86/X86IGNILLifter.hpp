@@ -151,6 +151,9 @@ class X86IGNILLifter {
   // the original memory operand before scratch-register rewriting loses it.
   [[nodiscard]] bool hasUnmodelledMemorySegment(const llvm::MCInst &mc) const;
   std::unordered_set<unsigned> unmodelledSegmentRegs_;
+  // Environment/exception transitions must not be lowered as normal calls,
+  // returns or side-effect-free instructions by the generic MC fallback.
+  std::unordered_set<unsigned> environmentOpcodes_;
   [[nodiscard]] bool hasUnmodelledAddressRegisters(const llvm::MCInst &mc) const;
   std::unordered_set<unsigned> zeroAddressRegs_{0}; // NoRegister / EIZ / RIZ
   void liftUnsupported(const llvm::MCInst &mc, std::uint64_t addr,

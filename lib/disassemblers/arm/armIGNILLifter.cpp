@@ -339,6 +339,12 @@ dragon::arm::ARMIGNILLifter::ARMIGNILLifter(
 
   for (unsigned i = 0; i < instrInfo.getNumOpcodes(); ++i) {
     const std::string_view name = instrInfo.getName(i);
+    auto unprefixed = name;
+    if (unprefixed.starts_with("t2")) unprefixed.remove_prefix(2);
+    else if (unprefixed.starts_with("t")) unprefixed.remove_prefix(1);
+    if (unprefixed == "SVC" || unprefixed == "HVC" || unprefixed == "SMC" ||
+        name.starts_with("ERET") || name == "DRPS")
+      environmentOpcodes_.insert(i);
     if (auto it = kOpcodeFields.find(name); it != kOpcodeFields.end())
       this->*(it->second) = i;
     for (const MemName &m: kMemForms)
@@ -471,6 +477,8 @@ dragon::arm::ARMIGNILLifter::liftBlock(const BasicBlock &block,
 
   for (const Instruction *insn: block.instructions()) {
     liftInstruction(*insn, result, tempId);
+    if (!result.empty() && result.ops().back().opcode == ignil::Opcode::UNSUPPORTED)
+      break;
   }
 
   // A block that ends without an explicit branch/return (execution simply
@@ -486,7 +494,8 @@ dragon::arm::ARMIGNILLifter::liftBlock(const BasicBlock &block,
           !result.empty() &&
           (result.ops().back().opcode == ignil::Opcode::JMP ||
            result.ops().back().opcode == ignil::Opcode::CJMP ||
-           result.ops().back().opcode == ignil::Opcode::RET);
+           result.ops().back().opcode == ignil::Opcode::RET ||
+           result.ops().back().opcode == ignil::Opcode::UNSUPPORTED);
   if (!alreadyTerminated) {
     if (const auto &succ = block.successors(); succ.size() == 1) {
       result.append({ignil::Opcode::JMP,
@@ -507,8 +516,11 @@ dragon::ignil::Block dragon::arm::ARMIGNILLifter::liftTrace(
   ignil::Block result{trace.front().address()};
   std::uint32_t tempId = 0;
 
-  for (const Instruction &insn: trace)
+  for (const Instruction &insn: trace) {
     liftInstruction(insn, result, tempId);
+    if (!result.empty() && result.ops().back().opcode == ignil::Opcode::UNSUPPORTED)
+      break;
+  }
 
   return result;
 }
@@ -519,6 +531,15 @@ void dragon::arm::ARMIGNILLifter::liftInstruction(const Instruction &insn,
   const auto *mc = insn.mcInst();
   if (!mc)
     return;
+
+  // Exception entry/return is not an ordinary CALL/RET, and an OS handler
+  // has effects beyond LLVM's MC register/memory descriptor. In particular
+  // ERET must not become the operand-less RET fallback (which uses X30).
+  if (insn.isTrap() || environmentOpcodes_.contains(mc->getOpcode())) {
+    out.append({ignil::Opcode::UNSUPPORTED, std::nullopt, {}, insn.address()});
+    out.noteUnlifted(insn.address());
+    return;
+  }
 
   if (architecture_ == Architecture::ARM32) {
     liftA32(insn, out, tempId);

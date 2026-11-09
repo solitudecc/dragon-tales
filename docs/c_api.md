@@ -627,6 +627,11 @@ list. It writes at most `cap` addresses to `out` (which may be NULL when `cap`
 is 0) and returns the full count — call it once with `cap == 0` to size the
 array.
 
+System/exception transitions instead emit `DRAGON_IGNIL_UNSUPPORTED` (72)
+and an unlifted marker. This operand-less boundary stops before the machine
+instruction and produces no post-state. Legacy refuses it; Static/V2 return
+`Unsupported/Instruction` at that PC. It is preserved by IGNIL optimizers.
+
 ```c
 size_t n = dragon_ignil_block_unlifted(ib, NULL, 0);
 if (n) {

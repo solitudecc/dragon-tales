@@ -211,6 +211,25 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+System/exception boundaries (2026-11-10, baseline `d0fab8d`): see
+docs/system-transition-boundaries.md. Appended IGNIL UNSUPPORTED=72 (C/Python
+mirrors) stops before an unmodelled environment/exception transition, including
+trace execution; it has no operands/destination/aux and produces no post-state.
+Do not replace it with normal CALL/RET or claim a kernel return. Architecture
+gates precede generic control dispatch; HLT is explicit because LLVM does not
+flag it as a trap. Simplify/DSE preserve the block, LLVM Legacy refuses and
+Static/V2 report the exact Unsupported/Instruction boundary. Analyses reject
+suffix facts even without a marker, while retaining real incoming CFG paths
+as Unknown (never turn an unknown environment return into proven unreachability).
+Old final tests compile and fail: 12/13 cases, 724 failed assertions. New main
+13 cases/2424 assertions, no-Z3 10/1736; CTest 827/827 and 692/692, plus 31 pure
+validator controls. Main/no-Z3 native: 1536 full-state pre-instruction boundary
+matches (zero complete roots), 256 detected single-field controls; no exclusions,
+skips or normalizations. Frozen Tigress two-ELF replay totals C32/LLVM64 complete
+roots. Final corpus validation is recorded separately;
+component success is not completed S2 memory forwarding. Use only the owned
+`~/dragon-tales-overlap` worktree and frozen runtime pairs.
+
 Deobfuscation S1b provenance (2026-11-09/10, baseline `9ff29d8`): internal
 RegionLowering captures original op indices, actual Guest accesses/guards and
 post-access points, CALL/RET auxiliary stack roles, real switch/defaults, call

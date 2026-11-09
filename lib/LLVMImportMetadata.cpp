@@ -112,7 +112,7 @@ Known thunk(const Graph& graph,std::uint64_t target,std::set<std::uint64_t>& see
   Provenance values(graph);
   for (const auto &op:block->ops()) {
     using O=ignil::Opcode;
-    if (op.opcode==O::CALL || op.opcode==O::STORE || op.opcode==O::OPAQUE || op.opcode==O::CJMP || op.opcode==O::RET || op.opcode==O::LOCALJMP || op.opcode==O::LOCALCJMP) return {};
+    if (op.opcode==O::CALL || op.opcode==O::STORE || op.opcode==O::OPAQUE || op.opcode==O::CJMP || op.opcode==O::RET || op.opcode==O::LOCALJMP || op.opcode==O::LOCALCJMP || op.opcode==O::UNSUPPORTED) return {};
     if (op.dst && !thunkMayWrite(graph,*op.dst)) return {};
     if(op.opcode==O::JMP) {
       if(!machineTransfer(graph,op))return {};
@@ -135,7 +135,8 @@ void recordLLVMImports(llvm::Module& module,llvm::Function& implementation,const
     Provenance values(graph);
     const auto firstMissing=ir->unlifted().empty() ? UINT64_MAX : *std::min_element(ir->unlifted().begin(),ir->unlifted().end());
     for (const auto &op:ir->ops()) {
-      if(op.address>=firstMissing || op.opcode==ignil::Opcode::OPAQUE)break;
+      if(op.address>=firstMissing || op.opcode==ignil::Opcode::OPAQUE ||
+         op.opcode==ignil::Opcode::UNSUPPORTED)break;
       if((op.opcode==ignil::Opcode::CALL || op.opcode==ignil::Opcode::JMP) && op.srcs.size()==1 && machineTransfer(graph,op)) {
         auto target=values.get(op.srcs[0]);
         if(target && !target->imported) {std::set<std::uint64_t> seen;target=thunk(graph,target->number,seen);}

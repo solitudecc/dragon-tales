@@ -533,7 +533,11 @@ class SymbolicExecutor {
 
   // -- execution ----------------------------------------------------------
 
-  /// Execute every op of `block` against the current state.
+  /// Execute the modelled ops of `block` against the current state. An
+  /// UNSUPPORTED boundary always stops with UnsupportedOp/Error, including
+  /// trace mode; the state is the prefix before that machine instruction.
+  /// Other entries in unlifted() still describe partial instruction lifts:
+  /// callers needing complete machine semantics must also check that list.
   RunResult run(const Block &block);
 
   /// Execute an arbitrary op sequence - a slice of a block, or ops built by

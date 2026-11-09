@@ -126,6 +126,14 @@ bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,
   // default edge is impossible. Unknown/out-of-region targets are not UB.
   if (mode_ != ExecutionMode::Legacy &&
       arch_ != Architecture::X86_32 && arch_ != Architecture::X86_64 && arch_ != Architecture::ARM64) return false;
+  // Check this operand-less boundary before collecting registers or creating
+  // LLVM objects. Stateful block lowering cuts off the op itself, so a later
+  // liftOps check alone would never validate hand-built boundary shapes.
+  for (const auto &[address, block] : blocks)
+    if (const auto *ir = graph.getIGNILBlock(address))
+      for (const auto &op : ir->ops())
+        if (op.opcode == ignil::Opcode::UNSUPPORTED &&
+            (op.dst || !op.srcs.empty() || op.aux != 0)) return false;
   auto localTarget = [&](const ignil::Value &value) {
     const auto *constant = std::get_if<ignil::Const>(&value);
     return constant && blocks.contains(constant->value);
@@ -136,7 +144,10 @@ bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,
     // Check the marker even when the instruction emitted no IGNIL ops (for
     // example an unsupported memory store), before mutating the module.
     // UNDEF alone is still valid for architecturally undefined results.
-    if (!ir || !ir->unlifted().empty()) return false;
+    if (!ir || !ir->unlifted().empty() ||
+        std::any_of(ir->begin(),ir->end(),[](const auto &op) {
+          return op.opcode == ignil::Opcode::UNSUPPORTED;
+        })) return false;
     // The decoder may recognize control flow with no supported IGNIL form.
     // Check machine calls too, so a dropped far/unknown call cannot bypass
     // the Legacy refusal merely by having no CALL op in the block.
@@ -396,6 +407,10 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(const ignil::Block &block,
   if (block.empty() || !block.unlifted().empty() || mode_ != ExecutionMode::Legacy)
     return false;
 
+  if (std::any_of(block.begin(),block.end(),[](const auto &op) {
+        return op.opcode == ignil::Opcode::UNSUPPORTED;
+      })) return false;
+
   bool live=true;
   for (const auto &op : block.ops()) {
     if (op.opcode == ignil::Opcode::LABEL) live=true;
@@ -489,8 +504,9 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(
       }
       if (unsupported) {unsupportedPC=instruction->address();break;}
     }
-    for (const auto &op : ib->ops()) if (op.opcode == ignil::Opcode::OPAQUE)
-      unsupportedPC=unsupportedPC ? std::min(*unsupportedPC,op.address) : op.address;
+    for (const auto &op : ib->ops())
+      if (op.opcode == ignil::Opcode::OPAQUE || op.opcode == ignil::Opcode::UNSUPPORTED)
+        unsupportedPC=unsupportedPC ? std::min(*unsupportedPC,op.address) : op.address;
   }
   auto ops=std::span<const ignil::Op>{ib->ops()};
   if (unsupportedPC) {
@@ -532,6 +548,8 @@ bool dragon::llvmlifter::LLVMLifter::liftOps(
          (op.opcode == O::LOCALCJMP && ignil::widthOf(op.srcs[0]) != 1))) return false;
   for (std::size_t opIndex=0;opIndex<ops.size();++opIndex) {
     const auto &op=ops[opIndex];
+    if (op.opcode == O::UNSUPPORTED &&
+        (!stateful() || op.dst || !op.srcs.empty() || op.aux != 0)) return false;
     if (op.opcode!=O::LABEL && builder.GetInsertBlock()->getTerminator()) continue;
     if(capture)capture->begin(blockAddress,opIndex,builder.GetInsertBlock());
     if (op.opcode == O::LABEL) {
@@ -707,6 +725,11 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
   }
 
   switch (op.opcode) {
+    case ignil::Opcode::UNSUPPORTED:
+      emitExit(DRAGON_EXIT_UNSUPPORTED,DRAGON_TRANSFER_NONE,op.address,nullptr,
+               regs,regsPtr,builder,DRAGON_DETAIL_INSTRUCTION,0,capture);
+      break;
+
     // --- Data movement ---
     case ignil::Opcode::COPY:
       emit(r0());

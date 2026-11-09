@@ -27,6 +27,11 @@ using W = ignil::Width;
 using O = ignil::Opcode;
 std::uint64_t mask(W w) { return w >= 64 ? ~std::uint64_t{0} : w ? (std::uint64_t{1} << w) - 1 : 0; }
 unsigned bytes(W w) { return (unsigned(w) + 7) / 8; }
+bool hasUnsupported(const ignil::Block &block) {
+  return std::ranges::any_of(block.ops(),[](const auto &op) {
+    return op.opcode==O::UNSUPPORTED;
+  });
+}
 struct Pointer {
   std::uint64_t base, offset;
   W width;
@@ -797,7 +802,12 @@ class Engine {
     Transfer t{in,{}};
     const auto *ib=graph.getIGNILBlock(block);
     if(!ib || !ib->unlifted().empty() ||
-       std::ranges::any_of(ib->ops(),[](const auto &op){return ignil::isLocalControl(op.opcode);})) {
+       std::ranges::any_of(ib->ops(),[](const auto &op) {
+         return ignil::isLocalControl(op.opcode) || op.opcode==O::UNSUPPORTED;
+       })) {
+      // Preserve this unknown incoming path for CFG completeness. An explicit
+      // execution boundary is not proof that the real environment cannot
+      // return; discarding its edge could make an agreeing arm look complete.
       t.state.regs.clear();t.state.memory.clear();return t;
     }
     std::map<std::uint32_t,const ignil::Op *> definitions;
@@ -1002,17 +1012,20 @@ FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &gi
     const auto *ib=graph.getIGNILBlock(at);
     const bool jump=ib && !ib->empty() && ib->ops().back().opcode==O::JMP && !ib->ops().back().srcs.empty();
     if(!jump && !requested.contains(at))continue;
+    const bool unsupported=ib && hasUnsupported(*ib);
     const auto it=states.find(at);const bool reached=it!=states.end() && it->second.reached;
     // A literal target does not depend on the block's output state. The work
     // phase has already visited every reached block; replay only for an
     // indirect target or requested end-of-block values. Memory queries below
     // evaluate their own LOAD prefixes, never this unused full output state.
     const bool indirect=jump && !std::holds_alternative<ignil::Const>(ib->ops().back().srcs[0]);
-    const bool needsOutput=indirect || (!memoryQueries && requested.contains(at));
+    const bool needsOutput=!unsupported && (indirect || (!memoryQueries && requested.contains(at)));
     Transfer out=reached && !e.failed && needsOutput?e.transfer(at,it->second):Transfer{};
     if(jump) {
       const auto &value=ib->ops().back().srcs[0];
-      e.result.jumpTargets.emplace(at,e.report(reached?e.operand(out,value):Value{ignil::widthOf(value)},reached));
+      // A suffix literal is not an executed transfer merely because it does
+      // not read state. Hand-built IR need not carry the unlifted marker.
+      e.result.jumpTargets.emplace(at,e.report(reached && !unsupported?e.operand(out,value):Value{ignil::widthOf(value)},reached));
     }
     if constexpr(memoryQueries) {
       // All cells requested at the same LOAD share one prefix evaluation.
@@ -1026,16 +1039,16 @@ FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &gi
         points[query.beforeOpIndex].push_back(i);
       }
       for(const auto &[before,indices]:points) {
-        Transfer prefix=reached && !e.failed?e.transfer(at,it->second,before):Transfer{};
+        Transfer prefix=reached && !e.failed && !unsupported?e.transfer(at,it->second,before):Transfer{};
         for(auto i:indices) {
           const auto &query=queries[i];
-          auto value=reached && !e.failed?e.readMemory(prefix.state,Pointer{0,query.address,64},query.width):Value{query.width};
+          auto value=reached && !e.failed && !unsupported?e.readMemory(prefix.state,Pointer{0,query.address,64},query.width):Value{query.width};
           e.result.values[i]=e.report(value,reached);
         }
       }
     } else {
       for(auto i:requested[at])
-        e.result.values[i]=e.report(reached?e.operand(out,queries[i].value):Value{queryWidth(queries[i])},reached);
+        e.result.values[i]=e.report(reached && !unsupported?e.operand(out,queries[i].value):Value{queryWidth(queries[i])},reached);
     }
   }
   if(e.failed) {

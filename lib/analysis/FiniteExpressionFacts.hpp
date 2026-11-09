@@ -188,7 +188,7 @@ template<class Spend> class Builder {
     for(std::size_t index=0;index<ops.size();++index) {
       if(!step())return {};
       const auto &op=ops[index];
-      if(ignil::isLocalControl(op.opcode))return {};
+      if(ignil::isLocalControl(op.opcode) || op.opcode==ignil::Opcode::UNSUPPORTED)return {};
       if((op.opcode==ignil::Opcode::JMP || op.opcode==ignil::Opcode::CJMP ||
           op.opcode==ignil::Opcode::RET) && index+1!=ops.size())return {};
       // The runtime CALL/STORE handlers ignore dst entirely. Do not assign

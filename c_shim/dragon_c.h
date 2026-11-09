@@ -468,6 +468,7 @@
       DRAGON_IGNIL_LABEL = 69,
       DRAGON_IGNIL_LOCALJMP = 70,
       DRAGON_IGNIL_LOCALCJMP = 71,
+      DRAGON_IGNIL_UNSUPPORTED = 72,
   } dragon_ignil_opcode_t;
 
   // Returns a static string for the opcode mnemonic (e.g. "ADD", "COPY").
