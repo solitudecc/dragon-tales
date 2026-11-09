@@ -211,6 +211,27 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
+LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and
+rebuild region paths lower the same frozen view; strict keeps custom IGNIL and
+markers, machine mode rebuilds every selected split prefix/suffix. Origin uses
+instance/block/op index, not PC alone or a runtime memory snapshot. Different
+preparations cannot share origins. Ordinary lift/ABI/default optimization stay
+on their original paths; strict region now also pays whole-Graph clone cost.
+prepare is not full lowerability or operational-CFG proof; lifter mode/entry
+checks remain mandatory. Four new cases/223 assertions; main/no-Z3 region group
+14/1103, full CTest 805/805 and 673/673. New internal API tests cannot compile
+old headers (saved); this is not old execution error or deobfuscation gain.
+Actual builds ced8210 + patch; artifacts `~/vmc-runs/llvm-prepared-region-20261109/`.
+Main/no-Z3 native each 240 matches (96 root/48 Transfer/96 rejected); result
+and memory controls each detect 240 specified single-field differences. Frozen
+two-ELF main/no-Z3 each C16/LLVM32 full roots, no incomplete/errors. Against S0,
+36 IR+16 Graph files: 48 byte-identical; four optimized files differ only in
+exact input-path ModuleID first lines, all remaining bytes identical. No new
+exclusions, skips, normalization or deobfuscation gain.
+See docs/deobfuscation-progress-20261109.md; LLVM access/guard mapping is S1b,
+Guest memory value forwarding is S2 and is not implemented by this snapshot.
+
 Deobfuscation S0 harness gates (2026-11-09, baseline `12b0043`): see
 `docs/deobfuscation-progress-20261109.md`. Optional symbolic diagnostics probe
 the C symbol; absent means unavailable/null proof counts, never semantic success.

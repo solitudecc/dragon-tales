@@ -13,6 +13,7 @@
 #include "LLVMImportMetadata.hpp"
 #include "LLVMPredicateFolding.hpp"
 #include "LLVMMBASimplification.hpp"
+#include "LLVMPreparedRegion.hpp"
 #include <llvm/IR/Intrinsics.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
@@ -84,79 +85,13 @@ bool dragon::llvmlifter::LLVMLifter::liftStaticRegion(const Function &fn,
      !options.maxDispatchCases || options.maxDispatchCases>65536 ||
      additionalBlockStarts.size()>options.maxBlocks || fn.blocks().size()>options.maxBlocks)
     return false;
-  if(options.rebuildDecodedBlocks) {
-    std::set<std::uint64_t> starts;
-    for(const auto &[address,block]:fn.blocks()) {
-      const auto instructions=block.instructions();
-      if(instructions.empty() || graph.get(address)!=instructions.front())return false;
-      starts.insert(address);
-    }
-    for(auto address:additionalBlockStarts) {
-      const auto *instruction=graph.get(address);
-      if(!instruction || instruction->bytes().empty() || !instruction->size())return false;
-      starts.insert(address);
-      if(starts.size()>options.maxBlocks)return false;
-    }
-    // This is a private machine-code view, not publication of Graph edges.
-    // Register all starts before constructing blocks so overlapping prefixes
-    // and suffixes are split consistently, then rebuild every selected path.
-    Graph work=graph.clone();
-    for(auto address:starts)work.addBlock(address);
-    Disassembler dis{arch_,graph.configuration()};
-    std::size_t instructionCount=0;
-    for(auto address:starts) {
-      BasicBlock block{&work,address};
-      if(!block.isValid())return false;
-      const auto instructions=block.instructions();
-      if(instructions.empty() || instructions.size()>65536-instructionCount)return false;
-      instructionCount+=instructions.size();
-      std::vector<Instruction> trace;trace.reserve(instructions.size());
-      for(const auto *instruction:instructions) {
-        // A caller-constructed Instruction can carry bytes without decoder
-        // semantics. liftTrace deliberately cannot invent its missing MCInst.
-        if(!instruction->mcInst())return false;
-        trace.push_back(*instruction);
-      }
-      auto ir=dis.liftTrace(trace); // keeps machine JMP/CJMP/CALL/RET semantics
-      const auto &ops=ir.ops();
-      const bool terminated=!ops.empty() && (ops.back().opcode==ignil::Opcode::JMP ||
-          ops.back().opcode==ignil::Opcode::CJMP || ops.back().opcode==ignil::Opcode::RET);
-      if(!terminated && block.successors().size()==1)
-        ir.append({ignil::Opcode::JMP,std::nullopt,
-            {ignil::Const{*block.successors().begin(),64}},block.terminatorAddress()});
-      if(auto *existing=work.getIGNILBlock(address))*existing=std::move(ir);
-      else work.addIGNILBlock(std::move(ir));
-    }
-    Function root{&work,fn.startAddress()};
-    const std::vector<std::uint64_t> selected(starts.begin(),starts.end());
-    auto strict=options;strict.rebuildDecodedBlocks=false;
-    if(!liftStaticRegion(root,work,selected,strict))return false;
+  // Preparation owns the exact immutable view used by lowering. Future
+  // analyses must consume this view, never pre-rebuild indices in the source.
+  auto region=detail::PreparedRegion::prepare(fn,graph,additionalBlockStarts,options);
+  if(!region || !liftFunction(region->root(),region->graph(),region->blocks(),true))return false;
+  if(region->rebuilt())
     module_->getFunction(staticFunctionName(fn.startAddress()))->addFnAttr("dragon.coverage-source","decoded-machine");
-    return true;
-  }
-  auto blocks=fn.blocks();
-  for(auto address:additionalBlockStarts) {
-    if(!blocks.contains(address)) {
-      if(blocks.size()==options.maxBlocks)return false;
-      blocks.emplace(address,BasicBlock{&graph,address});
-    }
-  }
-  std::size_t dynamicJumps=0;
-  for(const auto &[address,block]:blocks) {
-    const auto instructions=block.instructions();
-    const auto *ir=graph.getIGNILBlock(address);
-    // isValidBlock alone permits caller registrations with no machine bytes.
-    // Also reject a Function view borrowed from a different Graph.
-    if(!graph.isValidBlock(address) || !block.isValid() || instructions.empty() ||
-       instructions.front()->address()!=address || graph.get(address)!=instructions.front() || !ir)
-      return false;
-    for(const auto &op:ir->ops())if(op.opcode==ignil::Opcode::JMP) {
-      if(op.srcs.size()!=1)return false;
-      if(!std::holds_alternative<ignil::Const>(op.srcs[0]))++dynamicJumps;
-    }
-  }
-  if(dynamicJumps && blocks.size()>options.maxDispatchCases/dynamicJumps)return false;
-  return liftFunction(fn,graph,blocks,true);
+  return true;
 }
 
 bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,

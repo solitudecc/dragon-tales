@@ -51,6 +51,7 @@ add_executable(dragon_tests
         lifters/TestPassPipeline.cpp
         lifters/TestLLVMControlFlow.cpp
         lifters/TestLLVMStaticRegion.cpp
+        lifters/TestLLVMPreparedRegion.cpp
         loader/TestLoader.cpp
 )
 

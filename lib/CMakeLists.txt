@@ -9,6 +9,7 @@ add_library(libdragon SHARED
         PassPipeline.cpp
         FiniteDispatch.cpp
         LLVMLifter.cpp
+        LLVMPreparedRegion.cpp
         LLVMPredicateFolding.cpp
         LLVMMBASimplification.cpp
         LLVMExecution.cpp
