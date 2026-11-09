@@ -226,8 +226,12 @@ Old final tests compile and fail: 12/13 cases, 724 failed assertions. New main
 validator controls. Main/no-Z3 native: 1536 full-state pre-instruction boundary
 matches (zero complete roots), 256 detected single-field controls; no exclusions,
 skips or normalizations. Frozen Tigress two-ELF replay totals C32/LLVM64 complete
-roots. Final corpus validation is recorded separately;
-component success is not completed S2 memory forwarding. Use only the owned
+roots. The current implementation also completed 69 inputs / 138 strategy
+records, 205018 valid function checkpoints and 6476 raw+optimized modules with
+zero lift/verify failures. This is IR validity coverage, not a whole-corpus
+semantic proof. The old-structure rerun had one frozen-interpreter path
+infrastructure failure; retain its stderr and do not describe it as a semantic
+pass. Component success is not completed S2 memory forwarding. Use only the owned
 `~/dragon-tales-overlap` worktree and frozen runtime pairs.
 
 Deobfuscation S1b provenance (2026-11-09/10, baseline `9ff29d8`): internal
