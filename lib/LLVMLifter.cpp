@@ -1,6 +1,7 @@
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 
 #include <dragon/analysis/ArgumentRecovery.hpp>
+#include <dragon/disassembler/Disassembler.hpp>
 #include <dragon/lifters/ignil/arm/armIGNILRegs.hpp>
 #include <dragon/lifters/ignil/x86/x86IGNILRegs.hpp>
 
@@ -71,6 +72,95 @@ std::optional<std::size_t> x86BranchOpcode(const dragon::Instruction *instructio
 
 bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
                                           const Graph &graph) {
+  return liftFunction(fn,graph,fn.blocks(),false);
+}
+
+bool dragon::llvmlifter::LLVMLifter::liftStaticRegion(const Function &fn,
+    const Graph &graph,std::span<const std::uint64_t> additionalBlockStarts,
+    const StaticRegionOptions &options) {
+  if(mode_!=ExecutionMode::StaticAnalysis || staticEntryPolicy_!=StaticEntryPolicy::FunctionStart ||
+     !fn.isValid() || graph.architecture()!=arch_ ||
+     !options.maxBlocks || options.maxBlocks>4096 ||
+     !options.maxDispatchCases || options.maxDispatchCases>65536 ||
+     additionalBlockStarts.size()>options.maxBlocks || fn.blocks().size()>options.maxBlocks)
+    return false;
+  if(options.rebuildDecodedBlocks) {
+    std::set<std::uint64_t> starts;
+    for(const auto &[address,block]:fn.blocks()) {
+      const auto instructions=block.instructions();
+      if(instructions.empty() || graph.get(address)!=instructions.front())return false;
+      starts.insert(address);
+    }
+    for(auto address:additionalBlockStarts) {
+      const auto *instruction=graph.get(address);
+      if(!instruction || instruction->bytes().empty() || !instruction->size())return false;
+      starts.insert(address);
+      if(starts.size()>options.maxBlocks)return false;
+    }
+    // This is a private machine-code view, not publication of Graph edges.
+    // Register all starts before constructing blocks so overlapping prefixes
+    // and suffixes are split consistently, then rebuild every selected path.
+    Graph work=graph.clone();
+    for(auto address:starts)work.addBlock(address);
+    Disassembler dis{arch_,graph.configuration()};
+    std::size_t instructionCount=0;
+    for(auto address:starts) {
+      BasicBlock block{&work,address};
+      if(!block.isValid())return false;
+      const auto instructions=block.instructions();
+      if(instructions.empty() || instructions.size()>65536-instructionCount)return false;
+      instructionCount+=instructions.size();
+      std::vector<Instruction> trace;trace.reserve(instructions.size());
+      for(const auto *instruction:instructions) {
+        // A caller-constructed Instruction can carry bytes without decoder
+        // semantics. liftTrace deliberately cannot invent its missing MCInst.
+        if(!instruction->mcInst())return false;
+        trace.push_back(*instruction);
+      }
+      auto ir=dis.liftTrace(trace); // keeps machine JMP/CJMP/CALL/RET semantics
+      const auto &ops=ir.ops();
+      const bool terminated=!ops.empty() && (ops.back().opcode==ignil::Opcode::JMP ||
+          ops.back().opcode==ignil::Opcode::CJMP || ops.back().opcode==ignil::Opcode::RET);
+      if(!terminated && block.successors().size()==1)
+        ir.append({ignil::Opcode::JMP,std::nullopt,
+            {ignil::Const{*block.successors().begin(),64}},block.terminatorAddress()});
+      if(auto *existing=work.getIGNILBlock(address))*existing=std::move(ir);
+      else work.addIGNILBlock(std::move(ir));
+    }
+    Function root{&work,fn.startAddress()};
+    const std::vector<std::uint64_t> selected(starts.begin(),starts.end());
+    auto strict=options;strict.rebuildDecodedBlocks=false;
+    if(!liftStaticRegion(root,work,selected,strict))return false;
+    module_->getFunction(staticFunctionName(fn.startAddress()))->addFnAttr("dragon.coverage-source","decoded-machine");
+    return true;
+  }
+  auto blocks=fn.blocks();
+  for(auto address:additionalBlockStarts) {
+    if(!blocks.contains(address)) {
+      if(blocks.size()==options.maxBlocks)return false;
+      blocks.emplace(address,BasicBlock{&graph,address});
+    }
+  }
+  std::size_t dynamicJumps=0;
+  for(const auto &[address,block]:blocks) {
+    const auto instructions=block.instructions();
+    const auto *ir=graph.getIGNILBlock(address);
+    // isValidBlock alone permits caller registrations with no machine bytes.
+    // Also reject a Function view borrowed from a different Graph.
+    if(!graph.isValidBlock(address) || !block.isValid() || instructions.empty() ||
+       instructions.front()->address()!=address || graph.get(address)!=instructions.front() || !ir)
+      return false;
+    for(const auto &op:ir->ops())if(op.opcode==ignil::Opcode::JMP) {
+      if(op.srcs.size()!=1)return false;
+      if(!std::holds_alternative<ignil::Const>(op.srcs[0]))++dynamicJumps;
+    }
+  }
+  if(dynamicJumps && blocks.size()>options.maxDispatchCases/dynamicJumps)return false;
+  return liftFunction(fn,graph,blocks,true);
+}
+
+bool dragon::llvmlifter::LLVMLifter::liftFunction(const Function &fn,
+    const Graph &graph,const std::map<std::uint64_t,BasicBlock> &blocks,bool staticRegion) {
   // Refuse an invalid Function view rather than crash on it. Function's
   // constructor already defines what that means - not a known valid
   // function, no blocks, or an invalid block inside it - lift() simply
@@ -102,7 +192,6 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   // default edge is impossible. Unknown/out-of-region targets are not UB.
   if (mode_ != ExecutionMode::Legacy &&
       arch_ != Architecture::X86_32 && arch_ != Architecture::X86_64 && arch_ != Architecture::ARM64) return false;
-  const auto &blocks = fn.blocks();
   auto localTarget = [&](const ignil::Value &value) {
     const auto *constant = std::get_if<ignil::Const>(&value);
     return constant && blocks.contains(constant->value);
@@ -150,12 +239,22 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   if (llfn && (mode_!=ExecutionMode::StaticAnalysis || !llfn->isDeclaration() ||
                llfn->getFunctionType()!=FnType)) return false;
   if (!llfn) llfn=llvm::Function::Create(FnType,llvm::GlobalValue::ExternalLinkage,name,*module_);
+  const auto originalAttributes=llfn->getAttributes();
+  std::vector<std::string> originalArgumentNames;
+  if(hadDeclaration)for(const auto &argument:llfn->args())originalArgumentNames.push_back(argument.getName().str());
   auto failedLift=[&] {
     // A caller may already reference a forward declaration. Preserve that
     // symbol if the body cannot be lifted, rather than leaving dangling uses.
     llfn->deleteBody();llfn->removeFnAttr("dragon.entrypoints");
     llfn->removeFnAttr("dragon.static-entry-policy");
     llfn->removeFnAttr("dragon.signature");
+    llfn->removeFnAttr("dragon.static-coverage");
+    llfn->removeFnAttr("dragon.coverage-blocks");
+    llfn->removeFnAttr("dragon.coverage-source");
+    if(hadDeclaration) {
+      llfn->setAttributes(originalAttributes);
+      for(std::size_t i=0;i<originalArgumentNames.size();++i)llfn->getArg(i)->setName(originalArgumentNames[i]);
+    }
     if (!hadDeclaration && llfn->use_empty()) llfn->eraseFromParent();
     return false;
   };
@@ -177,12 +276,22 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
           "dragon.signature",
           analysis::toString(analysis::recoverSignature(fn, graph, arch_),
                              fn.startAddress()));
+  if(staticRegion) {
+    std::string addresses;
+    for(const auto &[address,block]:blocks) {
+      if(!addresses.empty())addresses+=',';
+      addresses+=std::format("{:x}",address);
+    }
+    llfn->addFnAttr("dragon.static-coverage","decoded-region");
+    llfn->addFnAttr("dragon.coverage-blocks",addresses);
+    llfn->addFnAttr("dragon.coverage-source","graph-ignil");
+  }
 
   llvm::Value *memPtr = llfn->getArg(0);
   llvm::Value *regsPtr = llfn->getArg(1);
 
   unsupportedAddresses_.clear();
-  for (const auto &[address,block] : fn.blocks()) {
+  for (const auto &[address,block] : blocks) {
     const auto *ib=graph.getIGNILBlock(address);
     if (ib) unsupportedAddresses_.insert(ib->unlifted().begin(),ib->unlifted().end());
   }
@@ -204,7 +313,7 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
     regsPtr = prologue.CreateAlignedLoad(ptrTy, prologue.CreateConstGEP1_64(prologue.getInt8Ty(), llfn->getArg(0), offsetof(GuestStateV2,regs_bytes)), llvm::Align(1));
     memPtr = prologue.CreateAlignedLoad(ptrTy, llfn->getArg(1), llvm::Align(1));
   }
-  auto bbMap = buildBlockMap(llfn, &fn, graph);
+  auto bbMap = buildBlockMap(llfn, blocks, graph);
 
   if (!bbMap || !bbMap->contains(fn.startAddress())) {
     return failedLift();
@@ -212,11 +321,11 @@ bool dragon::llvmlifter::LLVMLifter::lift(const Function &fn,
   llvm::IRBuilder<>(entryBB).CreateBr(bbMap->at(fn.startAddress()));
   resumeEntries_=*bbMap;
 
-  auto regFile = buildRegFile(llfn, &fn, graph);
+  auto regFile = buildRegFile(llfn, blocks, graph);
 
   initializeRegistersFromParam(llfn, regFile, regsPtr);
 
-  for (const auto &[addr, block]: fn.blocks()) {
+  for (const auto &[addr, block]: blocks) {
     const auto *ib = graph.getIGNILBlock(addr);
     if (!ib)
       continue;
@@ -310,13 +419,13 @@ void dragon::llvmlifter::LLVMLifter::allocateRegFile(
 
 dragon::llvmlifter::LLVMLifter::RegFile
 dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
-                                             const Function *fn,
+                                             const std::map<std::uint64_t,BasicBlock> &blocks,
                                              const Graph &graph) const {
   RegFile regFile{};
   std::map<std::pair<uint32_t, ignil::Width>, std::string_view> regNames;
 
   // go through every block of the function
-  for (const auto &[addr, block]: fn->blocks()) {
+  for (const auto &[addr, block]: blocks) {
     // retrieve the lifted version
     const auto *ignilBlock = graph.getIGNILBlock(addr);
     if (!ignilBlock)
@@ -329,7 +438,7 @@ dragon::llvmlifter::LLVMLifter::buildRegFile(llvm::Function *llfn,
     if (arch_ != Architecture::ARM64) regFile[32].try_emplace(arch_ == Architecture::X86_64 ? 64 : 32,nullptr);
     else {
       regFile[240].try_emplace(64,nullptr);
-      for (const auto &[address,block] : fn->blocks())
+      for (const auto &[address,block] : blocks)
         for (const auto &op : graph.getIGNILBlock(address)->ops())
           if (op.opcode == ignil::Opcode::RET && op.aux<=32) {
             const auto n=op.aux ? op.aux-1 : 30;
@@ -390,11 +499,11 @@ bool dragon::llvmlifter::LLVMLifter::liftBlock(const ignil::Block &block,
 }
 std::optional<std::map<std::uint64_t, llvm::BasicBlock *>>
 dragon::llvmlifter::LLVMLifter::buildBlockMap(llvm::Function *llfn,
-                                              const Function *fn,
+                                              const std::map<std::uint64_t,BasicBlock> &blocks,
                                               const Graph &graph) const {
   std::map<std::uint64_t, llvm::BasicBlock *> addrBlock;
 
-  for (const auto &[addr, block]: fn->blocks()) {
+  for (const auto &[addr, block]: blocks) {
     // If a block cannot be obtained from IGNIL, it doesn't have
     // any sense to lift the function to LLVM IR, since a block
     // would be lost.
@@ -754,16 +863,25 @@ void dragon::llvmlifter::LLVMLifter::liftOp(
           break;
         }
       }
-      // An indirect jump whose targets the analysis resolved (a jump table)
-      // carries them as branches of its instruction: dispatch on the target
-      // value. Anything else is unreachable here.
+      // The default view dispatches only analysis-derived Graph targets. An
+      // explicit static region can execute any of its decoded block starts,
+      // but still checks the real target and retains the unknown-target exit.
       const Instruction *insn = graph_ ? graph_->get(op.address) : nullptr;
       auto *intTy = llvm::dyn_cast<llvm::IntegerType>(target->getType());
-      if (insn && intTy && insn->isJump() && !insn->branches().empty()) {
+      const bool region=mode_==ExecutionMode::StaticAnalysis &&
+          builder.GetInsertBlock()->getParent()->hasFnAttribute("dragon.static-coverage") &&
+          builder.GetInsertBlock()->getParent()->getFnAttribute("dragon.static-coverage").getValueAsString()=="decoded-region";
+      if (insn && intTy && insn->isJump() && (region || !insn->branches().empty())) {
         std::vector<std::pair<std::uint64_t, llvm::BasicBlock *>> cases;
-        for (std::uint64_t t: insn->branches())
-          if (auto it = bbMap.find(t); it != bbMap.end())
-            cases.emplace_back(t, it->second);
+        if(region) {
+          for(const auto &[address,block]:bbMap)
+            if(intTy->getBitWidth()>=64 || address<(std::uint64_t{1}<<intTy->getBitWidth()))
+              cases.emplace_back(address,block);
+        } else {
+          for (std::uint64_t t: insn->branches())
+            if (auto it = bbMap.find(t); it != bbMap.end())
+              cases.emplace_back(t, it->second);
+        }
         if (!cases.empty()) {
           auto *fn = builder.GetInsertBlock()->getParent();
           auto *other = llvm::BasicBlock::Create(*ctx_, "jmp.unresolved", fn);

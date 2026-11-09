@@ -211,6 +211,32 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Static decoded-region coverage (2026-11-09, baseline `d200f05`): see
+`docs/llvm-static-region.md`. Explicit C++/C/Python liftStaticRegion requires
+StaticAnalysis + FunctionStart, keeps original members and accepts additional
+machine blocks; optional rebuildDecodedBlocks uses a private Graph clone and
+existing instruction lifting with exact fallthrough. Real target switch has
+all covered starts and a Transfer default; no Graph target/publication change,
+image-content assumption, or V2/Legacy extension. Calls/RET retain protocols.
+Caps4096 blocks/65536 total dispatch cases; rebuilding caps65536 instructions;
+clone cost still depends on whole Graph. Failed used declarations restore attrs
+and argument names. No MCInst cannot silently become an empty machine lift.
+Ten cases/880 assertions main and no-Z3; CTest800/800 and668/668. New API tests
+cannot compile old headers, not an old execution semantic defect. Native
+three-architecture STORE-before-table-JMP oracle: main and NZ each240 matches
+(96 complete roots/48Transfer/96rejected entries), result/memory controls240
+each; frozen old0roots/96incomplete plus144boundary/reject matches, rc1 kept.
+Two real O0 Tigress ELFs, linear/product O0,O2/eight inputs: oldC16/LLVM0root+
+32incomplete, newC16/LLVM32 complete full-state/1MiB root matches; real Guest
+megaInit runs, no heap snapshot. Graph semantic fingerprints unchanged.
+Ordinary lift compatibility16 IR/8Graph files byte-identical; extra O2 files
+differ only actual input-path ModuleID first line (raw originals retained).
+Real dispatch switch/backedges remain; do not claim de-flattening or new opaque
+proofs. No new exclusions/skips/normalizations. Optional NZ Tigress run stopped
+before C/CPU/native/LLVM because original diagnostic requires unavailable
+SymbolicExecutor; no16-match claim. No full69 corpus/single-insn campaign;
+artifacts ~/vmc-runs/llvm-static-region-20261109/. Use owned VM worktree only.
+
 Opt-in LLVM control-flow cleanup (2026-11-09, baseline `4487600`): see
 `docs/llvm-control-flow-cleanup.md`. New `control-flow` pipeline builtin and
 `LLVMLifter::runControlFlowSimplification` compose SCCP/DFAJumpThreading/

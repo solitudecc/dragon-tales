@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string_view>
 
 namespace dragon::llvmlifter {
@@ -59,6 +60,15 @@ struct MBASimplifyStats {
   std::size_t budgetSkipped = 0;
 };
 
+struct StaticRegionOptions {
+  std::uint32_t maxBlocks = 4096; ///< May only lower the hard 4096-block cap.
+  std::uint32_t maxDispatchCases = 65536; ///< Total indirect dispatch cases; hard cap.
+  /// Opt in to rebuilding machine IGNIL in a private Graph copy. Additional
+  /// addresses may then be decoded instruction starts without existing blocks.
+  /// Existing custom IGNIL rewrites are not the source of this machine view.
+  bool rebuildDecodedBlocks = false;
+};
+
 class LLVMLifter {
   public:
   explicit LLVMLifter(Architecture arch,
@@ -89,6 +99,19 @@ class LLVMLifter {
   /// StaticAnalysis uses the same state layout and opaque external declarations;
   /// it requires no runtime or external bodies for IR analysis/optimization.
   bool lift(const Function &fn, const Graph &graph);
+
+  /// Explicitly extend execution coverage with already decoded machine blocks.
+  /// Requires StaticAnalysis + FunctionStart. Original function members remain
+  /// included; additionalBlockStarts must be exact valid machine block starts
+  /// with IGNIL (or opt in to rebuilding from decoded instructions). Runtime
+  /// indirect JMP targets dispatch into this set; anything
+  /// outside it retains the ordinary Transfer exit. No table bytes, Graph edges
+  /// or function membership are assumed or modified. CALL and RET keep their
+  /// existing protocols. This is extra coverage, not a completeness proof or
+  /// de-flattening. Invalid selections/budgets fail before module mutation.
+  bool liftStaticRegion(const Function &fn, const Graph &graph,
+      std::span<const std::uint64_t> additionalBlockStarts,
+      const StaticRegionOptions &options = {});
 
   /// Lifts a single, already-flattened IGNIL block directly to LLVM IR -
   /// no Graph/Function needed. This is the Graph-free counterpart to
@@ -164,10 +187,13 @@ class LLVMLifter {
   // SSA values produced by Temp operands within the current block.
   using TempMap = std::map<std::uint32_t, llvm::Value *>;
 
+  bool liftFunction(const Function &fn, const Graph &graph,
+      const std::map<std::uint64_t, BasicBlock> &blocks, bool staticRegion);
+
   // First pass: scan every IGNIL op in every block of the function,
   // collect all (offset, width) pairs, emit one alloca per pair
   // in the entry block.
-  RegFile buildRegFile(llvm::Function *llfn, const Function *fn,
+  RegFile buildRegFile(llvm::Function *llfn, const std::map<std::uint64_t, BasicBlock> &blocks,
                        const Graph &graph) const;
 
   // Shared by buildRegFile() and liftBlock(): scan `ops`, recording every
@@ -199,7 +225,7 @@ class LLVMLifter {
   // Returns nullopt if any block in fn is missing an IGNIL translation,
   // since the function cannot be correctly lifted with a gap.
   std::optional<std::map<std::uint64_t, llvm::BasicBlock *>>
-  buildBlockMap(llvm::Function *llfn, const Function *fn,
+  buildBlockMap(llvm::Function *llfn, const std::map<std::uint64_t, BasicBlock> &blocks,
                 const Graph &graph) const;
 
   // Translate one IGNIL block into its llvm::BasicBlock.

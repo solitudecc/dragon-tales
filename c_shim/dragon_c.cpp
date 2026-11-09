@@ -1361,6 +1361,18 @@ int dragon_llvm_lifter_lift(dragon_llvm_lifter_t *l,
   return l->lifter.lift(*as_fn(fn), *as_graph(g)) ? 1 : 0;
 }
 
+int dragon_llvm_lifter_lift_static_region(dragon_llvm_lifter_t *l,
+    const dragon_function_t *fn,const dragon_graph_t *g,
+    const std::uint64_t *blocks,std::size_t count,
+    std::uint32_t maxBlocks,std::uint32_t maxDispatchCases,int rebuildDecodedBlocks) {
+  if(!l || !fn || !g || (count && !blocks) || count>4096 ||
+     (rebuildDecodedBlocks!=0 && rebuildDecodedBlocks!=1))return 0;
+  try {
+    return l->lifter.liftStaticRegion(*as_fn(fn),*as_graph(g),{blocks,count},
+        {maxBlocks,maxDispatchCases,rebuildDecodedBlocks!=0}) ? 1 : 0;
+  } catch(...) {return 0;}
+}
+
 char *dragon_llvm_lifter_ir(const dragon_llvm_lifter_t *l) {
   if (!l)
     return dup_string("");

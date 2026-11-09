@@ -1726,6 +1726,34 @@ class LLVMLifter:
         return bool(lib.dragon_llvm_lifter_lift(
             self._ptr, function._ptr, graph._ptr))
 
+    def lift_static_region(self, function, graph, block_addresses, *,
+                           max_blocks=4096, max_dispatch_cases=65536, rebuild_decoded_blocks=False):
+        """Extend static function-start coverage with decoded machine blocks.
+
+        Original members remain included. Runtime jumps can enter the selected
+        blocks; unmatched targets keep Transfer exits. This neither modifies
+        Graph nor asserts table contents or complete control-flow recovery.
+        Requires STATIC_ANALYSIS and FUNCTION_START. Returns False on native
+        validation failure. Limits may only lower the hard caps shown here.
+        rebuild_decoded_blocks=True rebuilds selected machine blocks in a
+        private Graph copy; it uses decoded bytes, not custom IGNIL rewrites.
+        """
+        from itertools import islice
+        if type(rebuild_decoded_blocks) is not bool:
+            raise ValueError('rebuild_decoded_blocks must be bool')
+        for value, cap in ((max_blocks, 4096), (max_dispatch_cases, 65536)):
+            if type(value) is not int or not 1 <= value <= cap:
+                raise ValueError('static region limits must be positive integers within hard caps')
+        addresses = tuple(islice(iter(block_addresses), max_blocks + 1))
+        if len(addresses) > max_blocks:
+            raise ValueError('too many static region blocks')
+        if any(type(a) is not int or not 0 <= a <= 0xffffffffffffffff for a in addresses):
+            raise ValueError('static region addresses must be uint64 integers')
+        array = ffi.new('uint64_t[]', addresses) if addresses else ffi.NULL
+        return bool(lib.dragon_llvm_lifter_lift_static_region(
+            self._ptr, function._ptr, graph._ptr, array, len(addresses),
+            max_blocks, max_dispatch_cases, rebuild_decoded_blocks))
+
     def ir(self):
         """Return the textual LLVM IR for all lifted functions."""
         raw = lib.dragon_llvm_lifter_ir(self._ptr)

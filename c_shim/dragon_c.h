@@ -775,6 +775,17 @@
                                const dragon_function_t* fn,
                                const dragon_graph_t* g);
 
+  // Explicit StaticAnalysis + FunctionStart coverage extension. Existing
+  // members plus exact decoded block starts; no Graph edges/content assumptions.
+  // rebuild_decoded_blocks=1 uses a private machine re-lift and permits decoded
+  // instruction starts without existing blocks. 0 uses existing IGNIL only.
+  // Unknown targets retain Transfer exits. Hard caps: blocks<=4096 and total
+  // indirect dispatch cases<=65536. Zero/invalid limits return 0.
+  int dragon_llvm_lifter_lift_static_region(dragon_llvm_lifter_t* l,
+      const dragon_function_t* fn, const dragon_graph_t* g,
+      const uint64_t* additional_blocks, size_t block_count,
+      uint32_t max_blocks, uint32_t max_dispatch_cases, int rebuild_decoded_blocks);
+
   // Dump textual LLVM IR. Caller must free with dragon_cstr_free.
   char* dragon_llvm_lifter_ir(const dragon_llvm_lifter_t* l);
 
