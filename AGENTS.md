@@ -226,8 +226,16 @@ budget control 192. No-Z3 selected native entries: 336 (144 roots / 192 rejects)
 No new exclusions/skips/normalizations. Pure LLVM PHI state machine loses its
 dispatcher; historical Tigress f-combo O0 39-case dispatcher remains a Guest
 LOAD switch despite small IR cleanup. Do not claim generic de-flattening or
-heap-predicate removal. Fresh two-ELF replay is pending at implementation
-milestone; no full corpus or new instruction/IGNIL campaign in this opt-in step.
+heap-predicate removal. Implementation milestone `1a24a21`; final fresh two-ELF
+O0 replay (two strategies / product O0,O2 / eight inputs): C32 match, LLVM
+0 complete / 64 incomplete / 0 different / 0 other errors; original rc1 retained.
+Actual Guest megaInit executes. Default Graph publishes no corresponding table
+edges, so fresh IR already lacks those switches before cleanup. Both strategies
+stop at f-mba JMP 0x10167 -> 0x101ac and f-combo JMP 0x10adc -> 0x1154c.
+CFG wrong/unlifted zero; recursive executed-undecoded counts132/5704, linear0.
+Do not describe those incomplete paths as full-function semantic matches. Next
+component must prove dispatch value/memory relations within the IR input contract.
+No full corpus or new instruction/IGNIL campaign in this opt-in step.
 Artifacts: `~/vmc-runs/llvm-control-flow-20261109/`.
 
 Decoded automatic entries (2026-11-09, baseline `83e8c8c`): see
