@@ -100,6 +100,7 @@ bool dragon::x86::X86Analysis::analyze(std::span<const std::uint8_t> bytes,
   for (auto &insn: instructions)
     graph.addInstruction(std::move(insn));
 
+
   // A linear sweep can consume a real entry inside another instruction's
   // immediate (junk-byte anti-disassembly). Follow only explicit control-flow
   // evidence, retaining both decodes. integrateNewBlock follows any further
@@ -402,25 +403,49 @@ void dragon::x86::X86Analysis::discoverFunctionStarts(
 // =============================================================================
 
 std::vector<std::uint64_t> dragon::x86::X86Analysis::commitPending(
-        Graph &graph, const std::unordered_set<std::uint64_t> &blockStarts,
-        const std::unordered_set<std::uint64_t> &fnStarts) const {
+        Graph &graph, std::unordered_set<std::uint64_t> &blockStarts,
+        std::unordered_set<std::uint64_t> &fnStarts) const {
+  // A target can be decoded by direct recovery or a tentative indirect
+  // expansion after the initial sweep. Reapply historical evidence at every
+  // commit, before lifting/revalidation, using only this graph's decoded
+  // targets. Missing targets stay with loader recovery and its root policy.
+  for (const auto &[address, insn] : graph.listing()) {
+    if (insn.isJump()) {
+      for (auto target : insn.branches())
+        if (graph.get(target)) blockStarts.insert(target);
+      if (insn.isConditional() && graph.get(address + insn.size()))
+        blockStarts.insert(address + insn.size());
+    }
+    if (insn.isCall())
+      for (auto callee : insn.callees())
+        if (graph.get(callee)) {
+          blockStarts.insert(callee);
+          fnStarts.insert(callee);
+        }
+  }
+
   // Keep the per-instruction flags in step with the Graph's sets: call
   // targets and resolved indirect-jump targets reach the sets without the
   // instruction already at that address being flagged, and the flags are
   // what Instruction::isBlockStart()/isFunctionStart() report through the
   // C and Python APIs.
+  // A discovered address is only a candidate until its first instruction
+  // exists. Keep real external targets on instructions, without advertising
+  // undecoded addresses as valid block/function views.
   std::vector<std::uint64_t> added;
   for (std::uint64_t addr: blockStarts) {
+    Instruction *insn = graph.get(addr);
+    if (!insn) continue;
     if (!graph.isValidBlock(addr))
       added.push_back(addr);
     graph.addBlock(addr);
-    if (Instruction *insn = graph.get(addr))
-      insn->setBlockStart(true);
+    insn->setBlockStart(true);
   }
   for (std::uint64_t addr: fnStarts) {
+    Instruction *insn = graph.get(addr);
+    if (!insn) continue;
     graph.addFunction(addr);
-    if (Instruction *insn = graph.get(addr))
-      insn->setFunctionStart(true);
+    insn->setFunctionStart(true);
   }
   return added;
 }

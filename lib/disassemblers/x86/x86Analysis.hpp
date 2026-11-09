@@ -72,8 +72,8 @@ class X86Analysis {
 
   /// Flush all pending block and function start addresses into the graph.
   std::vector<std::uint64_t> commitPending(Graph &graph,
-                     const std::unordered_set<std::uint64_t> &blockStarts,
-                     const std::unordered_set<std::uint64_t> &fnStarts) const;
+                     std::unordered_set<std::uint64_t> &blockStarts,
+                     std::unordered_set<std::uint64_t> &fnStarts) const;
 
   /// Lift IGNIL for every block in the graph that has not been lifted yet.
   // Which blocks still need (re-)lifting. The first call lifts every block;

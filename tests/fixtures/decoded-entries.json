@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_32_call0",
+      "architecture": "x86_32",
+      "code_hex": "31c083c0007405e8f4efffffc7050030000000110000ff2500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "set_gprs": {},
+      "indirect_site": 4118,
+      "expected_targets": [
+        4352
+      ],
+      "decoded_entries": {
+        "required_trials": 16,
+        "direct_site": 4103,
+        "direct_target": 0,
+        "boundary_kind": 2,
+        "continuation": 4108,
+        "table_address": 12288,
+        "table_width": 4,
+        "root_target": 4352,
+        "flags": "ADD EAX,0 defines CF/PF/AF/ZF/SF/OF; DF is preserved."
+      }
+    },
+    {
+      "id": "x86_32_jmp0",
+      "architecture": "x86_32",
+      "code_hex": "31c083c0007405e9f4efffffc7050030000000110000ff2500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "set_gprs": {},
+      "indirect_site": 4118,
+      "expected_targets": [
+        4352
+      ],
+      "decoded_entries": {
+        "required_trials": 16,
+        "direct_site": 4103,
+        "direct_target": 0,
+        "boundary_kind": 1,
+        "continuation": 4108,
+        "table_address": 12288,
+        "table_width": 4,
+        "root_target": 4352,
+        "flags": "ADD EAX,0 defines CF/PF/AF/ZF/SF/OF; DF is preserved."
+      }
+    },
+    {
+      "id": "x86_64_call0",
+      "architecture": "x86_64",
+      "code_hex": "31c083c0007405e8f4efffff48c704250030000000110000ff242500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "set_gprs": {},
+      "indirect_site": 4120,
+      "expected_targets": [
+        4352
+      ],
+      "decoded_entries": {
+        "required_trials": 16,
+        "direct_site": 4103,
+        "direct_target": 0,
+        "boundary_kind": 2,
+        "continuation": 4108,
+        "table_address": 12288,
+        "table_width": 8,
+        "root_target": 4352,
+        "flags": "ADD EAX,0 defines CF/PF/AF/ZF/SF/OF; DF is preserved."
+      }
+    },
+    {
+      "id": "x86_64_jmp0",
+      "architecture": "x86_64",
+      "code_hex": "31c083c0007405e9f4efffff48c704250030000000110000ff242500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "set_gprs": {},
+      "indirect_site": 4120,
+      "expected_targets": [
+        4352
+      ],
+      "decoded_entries": {
+        "required_trials": 16,
+        "direct_site": 4103,
+        "direct_target": 0,
+        "boundary_kind": 1,
+        "continuation": 4108,
+        "table_address": 12288,
+        "table_width": 8,
+        "root_target": 4352,
+        "flags": "ADD EAX,0 defines CF/PF/AF/ZF/SF/OF; DF is preserved."
+      }
+    }
+  ],
+  "scope": "Real CALL/JMP to zero stays decoded evidence; complete roots skip it. Separate CPU-only boundary observations never become Graph hints."
+}

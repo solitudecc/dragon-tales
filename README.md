@@ -4,7 +4,7 @@ A binary analysis library for disassembling, assembling, and analyzing machine c
 
 Features:
 - Disassembly (linear sweep and recursive traversal) and assembly across six architectures
-- CFG and function recovery, with x86-64 CET landing pads distinguished from independent function entries ([scope and validation](docs/cet-function-boundaries.md))
+- CFG and function recovery, with x86-64 CET landing pads distinguished from independent function entries ([scope and validation](docs/cet-function-boundaries.md)); automatic x86/ARM entries require decoded instructions while real external edges remain available ([entry and cross-section contracts](docs/decoded-entry-registration.md))
 - **IGNIL** — a lightweight intermediate language for architecture-independent analysis
 - **IGNIL peephole simplifier** — block-local constant folding, algebraic identities, dead-Temp elimination
 - **Backward slicer** — propagates values through IGNIL CFGs, honouring sub-register aliasing; join nodes are merged when every path yields the same constant

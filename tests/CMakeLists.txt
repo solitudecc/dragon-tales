@@ -2,6 +2,7 @@ add_executable(dragon_tests
         TestMain.cpp
         disassemblers/TestDisassembler.cpp
         disassemblers/TestX86Analysis.cpp
+        disassemblers/TestDecodedEntries.cpp
         disassemblers/TestTableContents.cpp
         disassemblers/TestInferredBranches.cpp
         disassemblers/TestARMTableClosure.cpp

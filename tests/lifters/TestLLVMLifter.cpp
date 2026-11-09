@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <vector>
 
 TEST_CASE("LLVM guest memory and register snapshots have byte alignment", "[llvm][alignment]") {
@@ -63,10 +64,10 @@ TEST_CASE("LLVMLifter - lift() refuses a function with no blocks",
   // Byte sequence verified with:
   //   objdump -D -b binary -m i386:x86-64 -M intel --adjust-vma=0x1000
   //
-  // Call targets are trusted as function starts unconditionally, so 0x0
-  // becomes a discovered function with zero blocks - the ordinary shape of
-  // a PLT stub reached from a raw .text blob, not a contrived input. lift()
-  // used to segfault on exactly this: buildBlockMap()'s "missing IGNIL
+  // Explicit registration can provide a function with zero decoded blocks.
+  // Automatic analysis keeps undecoded targets on the call instruction;
+  // it no longer advertises them as valid entries. lift() used to segfault
+  // on a blockless view: buildBlockMap()'s "missing IGNIL
   // block" guard only fires from inside its per-block loop, so a blockless
   // function passed it vacuously and then read llfn->getEntryBlock() on a
   // function with no basic blocks. lift() now rejects any invalid Function
@@ -80,9 +81,11 @@ TEST_CASE("LLVMLifter - lift() refuses a function with no blocks",
   dragon::Disassembler dis(dragon::Architecture::X86_64, cfg);
   dragon::Graph g(dragon::Architecture::X86_64, cfg);
   dis.disassemble(bytes, 0x1000, g);
+  REQUIRE(g.get(0x1000));
+  REQUIRE(g.get(0x1000)->callees() == std::set<std::uint64_t>{0});
+  g.addFunction(0x0);
 
-  // 0x0 is a discovered function start (call targets are trusted
-  // unconditionally) but has no blocks, so its Function view reports
+  // 0x0 is explicitly registered but has no blocks, so its Function view reports
   // itself invalid - exactly what the constructor documents.
   //
   // Built directly rather than via Graph::functions(), which filters

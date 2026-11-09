@@ -104,22 +104,35 @@ Graph disassembleImage(const LoadedImage &image, const Configuration &config,
 
   // Each section is analysed on its own, so a call or a jump into another
   // section (`bl` from .text to a .plt stub, or the tail call `b stub`)
-  // registers a function or block start there that nothing decoded - under
-  // recursive traversal, the stub stays empty. Feed such addresses back as
-  // entry points of their section (a cross-section jump is a tail call)
+  // supplies a target that this invocation has not decoded. Feed those real
+  // control-flow targets back as entry points of their section (a cross-section
+  // jump is a tail call)
   // until none is left.
   for (int round = 0; round < 8; ++round) {
     bool any = false;
     for (const Section *s : sections) {
       std::vector<std::uint64_t> missing;
+      auto collectAddress = [&](std::uint64_t a) {
+        if (s->contains(a) && a - s->address < s->bytes.size() &&
+            !graph.get(a))
+          missing.push_back(a);
+      };
       auto collect = [&](const std::set<std::uint64_t> &addrs) {
         for (std::uint64_t a : addrs)
-          if (s->contains(a) && a - s->address < s->bytes.size() &&
-              !graph.get(a))
-            missing.push_back(a);
+          collectAddress(a);
       };
       collect(graph.validFunctionAddresses());
       collect(graph.validBlockAddresses());
+      // Automatic registrations contain decoded starts, not missing targets.
+      // Read the instruction evidence directly, including the implicit
+      // conditional successor. Recollect for each section: an earlier
+      // section in this round may have revealed targets in a later one.
+      for (const auto &[address, instruction] : graph.listing()) {
+        for (auto target : instruction.branches()) collectAddress(target);
+        for (auto target : instruction.callees()) collectAddress(target);
+        if (instruction.isJump() && instruction.isConditional())
+          collectAddress(address + instruction.size());
+      }
       std::sort(missing.begin(), missing.end());
       missing.erase(std::unique(missing.begin(), missing.end()),
                     missing.end());

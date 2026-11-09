@@ -42,6 +42,10 @@ disagrees, known deliberate differences, reporting - are in
   the remote. Commit author is configured repo-locally (`solitudecc`).
 - **Do not open PRs or push to upstream `Fare9/dragon-tales`** without the
   owner's explicit consent.
+- **Commit substantial milestones** (owner request, 2026-11-09). Keep a Git
+  commit for a completed implementation milestone after its focused and full
+  tests pass. State any ongoing corpus validation explicitly; commit the final
+  results separately and finish required validation before merging into `main`.
 - `ToDo/` is in `.gitignore` but its files are tracked: stage them with
   `git add ToDo/<file>` or `git add -u`, never `git add ToDo`.
 
@@ -206,6 +210,64 @@ Gotchas:
   command-line option registration with the main suite's static LLVM linkage.
 
 ## 4. Validation tools (`scripts/validation/`)
+
+Decoded automatic entries (2026-11-09, baseline `83e8c8c`): see
+`docs/decoded-entry-registration.md`. x86/ARM commitPending registers only
+targets with a decoded first instruction; real branches/callees/conditional
+fallthroughs remain, including zero. Actual code at zero is accepted. Public
+Graph::addBlock/addFunction still permit manual undecoded/pure-IGNIL graphs.
+Historical real edges reclassify already decoded late fragment interiors at
+every commit, after direct recovery and each tentative expansion, before
+lifting/revalidation. Missing targets stay with loader recovery to preserve its root
+policy; replaying missing conditional successors early failed a permanent test.
+Loader also reads instruction evidence directly, recollecting per section;
+original eight-round limit remains. No decoder/lifter/API/ABI/optimizer changes.
+
+Final13cases/2550assert pass in both builds; fresh CTest main785/785, NZ653/653.
+Old main9/1864 fails5cases/66assert, four controls pass; added2/516 controls pass
+old but guard-only intermediate fails100assert. Old NZ initial11/2380 fails5/66,
+errors/skips0. Original old9 source is a separate exact dependency, not final13.
+Two final timing regressions catch callee classification lost after direct
+overlap/indirect expansion: actual v3 corrected13/2550 fails15assert; final0.
+Old83 main/NZ final13 each77fail includes pre-existing flag differences, not all
+new view failures. Initial test wrongly expected A64linear no-table constant BR
+resolution; retained same bytes/all combinations but strictly checks that fixed
+case empty as an existing policy negative control, all other targets/fn/IR checks
+unchanged. Initial16/78/1 failed runs retained separately from actual15/77/0.
+Initial main779/781 failures and conditional-root intermediate failure preserved;
+blockless LLVM test now explicitly constructs its same invalid Graph view and
+keeps original refusal/no-partial-module/neighbor checks. Real API image checks
+pass after late PLT classification restoration; no failed-version raw completeness
+claim. CPU fourfixtures64roots+64boundaries,8192fields/8388608memoryB; controls
+result/memory/AF/target128each (reused CPU evidence, no Dragon). Final v4 native
+1024complete roots (main768/NZ256),
+65536fields/67108864memoryB; result/memory/edge64each. Old native256also match,
+so this is compatibility, not newly successful root returns. All normal semantic
+diff/incomplete/exclusion/skip/normalization0. Independent raw review covers
+1216newnormal+control rows,88programs/176IR bindings,77824fields/79691776B
+without new execution; actual1216native traces=V2Ea/Fb256+standalone960,
+11frontends finalpin. CPU128 and old256 are retained references, not freshv4;
+prior v3 matrix/audit1472rows stays separately archived. Runtime mainEa77/Fb,
+NZFe619/C514; exact10source pins under timing-regressions-v4. Independent
+native/unit reports are native-independent-review-v4, dual verificationd29e996f.
+
+V3 corpus16pairs/32743checks/273raw is partial and retained; it cannot count
+toward final v4. At the implementation milestone commit final v4 has10/69
+sealed inputs/14056checks/120raw, zero measured deltas; full69 still pending.
+Old side reuses frozen previous new83 Graph
+inventories/138 canonical streams, not old401 or fresh old workers/LLVM. New
+side runs every input and all valid raw modules afresh; no new-success reuse.
+Targeted cxx_i386 O2 keeps13 genuine E9-to-zero edges per strategy while removing
+empty zero registration. Crypto linear's four empty starts are filtered; its
+targeted helper does not measure crypto edges. Full counts await corpus closure.
+Artifacts: `~/vmc-runs/cfg-entry-audit-20261109/` plus final
+`~/vmc-runs/decoded-entry-registration-v4-20261109/`; old v3 partials remain in
+`~/vmc-runs/decoded-entry-registration-20261109/`. Only owned overlap worktree;
+original dirty113 preserved. This is not whole-program semantic proof or a new
+heap/deflat capability. Storage cleanup converted only29952 historical snapshot
+files in seven groups into a dual-verified recoverable content-addressed tar;
+net26.06GiB released, restore tools/receipts in storage-cleanup-20261109.
+Sources/libraries/objects/exes/logs untouched; current six test exes remain on VM.
 
 Finite write footprints and snapshot bounds (2026-11-09, baseline `401ece6`):
 see `docs/finite-write-footprints.md`. Both proveLeafCalls settings use precise
