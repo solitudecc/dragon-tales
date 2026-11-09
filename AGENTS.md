@@ -253,27 +253,37 @@ native/unit reports are native-independent-review-v4, dual verificationd29e996f.
 
 V3 corpus16pairs/32743checks/273raw is partial and retained; it cannot count
 toward final v4. Implementation commit43ca7e6 records an early10/69 snapshot.
-Latest v4 has60/69 sealed inputs,172576valid checks/1410fresh raw modules;
-baseline83 same checks are reused, not fresh executions. Full69 still pending.
-Five changed inputs/8strategy pairs have exact root reviews:5instruction rows
+Final v4 has69/69 sealed inputs and138strategy pairs. Each side records205018
+valid-function checks; the new side freshly verifies1671V2 raw modules,0optimized.
+Baseline83's69Graph records/138canonical streams are reused, not fresh old
+executions;138new streams are generated and all276preserved. No new-success reuse.
+Five changed inputs/8canonical strategy pairs have exact root reviews:5instruction rows
 restore existing entry flags,15rows remove empty metadata (6blocks/6null IR/
 3invalid functions). No decoded bytes/decode properties/targets/callees/members
 or valid-entry changes.
-Completed60 alerts missingIGNIL6->0/invalidFn3->0; undecoded26 and objdump146
-remain. Actual unlifted markers173552 unchanged. Three combined IGNIL/unlifted
+Full69 alerts missingIGNIL6->0/invalidFn3->0; undecoded26 and objdump146
+remain. Actual unlifted markers231798 unchanged. Three combined IGNIL/unlifted
 digests differ because null kind2 rows were removed; false flags are retained,
 not normalized into equality. These are metadata repairs, not new lift coverage.
+The independent retained-metadata audit and27-field typed alignment pass; they
+do not rerun canonical/IR/CPU execution or prove whole-corpus semantics.
 
 Input61 corpus2-sys_python3 attempt001 failed kernel-confirmed global OOM:
 opt-21 invoked OOM and saved worker PID1582195 was killed(-9). Original source,
-plan/chunk128/budgets are unchanged;77linear+29recursive receipts and120027374B
-orphan IR are preserved and excluded from completed-input coverage. No retry or
-62nd input started. User must supply administrator authentication for prepared
-8GiB temporary swap; sudo -n actually requires interactive auth. Do not bypass
-that restriction or change other host VMs. Recovery contract preserves001,
-records/old.json and orphan evidence; original --retry-failed can produce002
-with first seal session001, then resume remaining inputs. No partial success
-reuse. See v4/resource-incident-input61-v1/{incident.json,retry-contract-v1.md}.
+plan/chunk128/budgets remain unchanged. Its77linear+29recursive partial receipts
+do not count toward1671successful modules. The user rebooted with8GB configured
+RAM (guest7757115392B,boot4c497468-9091-4f9c-9dc5-241ad6d127bb);
+the prepared8GiB swap script was not executed. The unverified120027374B tmpfs
+orphan disappeared before capture: no bytes or contentSHA were saved. Explicit
+loss exception17b2a57 records this one failed artifact, not a semantic exclusion
+or permission for future loss. Surviving336files plus old.json/logs/dependencies
+are actually preserved and dual-member verified under receipt94085dcb; all
+surviving001files remain, and old.json's pre-retry bytes stay in the archive.
+Attempt002 then reran both strategies completely;
+no failed partial modules were reused. Final recovery accounting is70newworker
+starts,69successful inputs,1OOM failure and1retry. Earlier60-input/pending and
+pre-reboot orphan-preserved observations remain historical, not current state.
+See v4/resource-incident-input61-v1/ and failed-input61-preservation-v1/.
 Old side reuses frozen previous new83 Graph
 inventories/138 canonical streams, not old401 or fresh old workers/LLVM. New
 side runs every input and all valid raw modules afresh; no new-success reuse.
@@ -281,7 +291,8 @@ Fresh cxx_i386 O2 keeps13 encoded E9-to-zero edges per strategy while removing
 empty zero registration; root checked all four retained streams and rel32s.
 Crypto removes only4empty starts/1invalidFn; root checked full old/newlinear
 streams retain four raw references, ELF section mappings and01010101<unknown>.
-Its earlier targeted helper does not measure crypto edges. Full counts await closure.
+Its earlier targeted helper does not measure crypto edges. Full69counts above
+come from the original producer and independent typed final audit.
 Artifacts: `~/vmc-runs/cfg-entry-audit-20261109/` plus final
 `~/vmc-runs/decoded-entry-registration-v4-20261109/`; old v3 partials remain in
 `~/vmc-runs/decoded-entry-registration-20261109/`. Only owned overlap worktree;
