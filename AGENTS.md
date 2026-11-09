@@ -207,6 +207,65 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Finite write footprints and snapshot bounds (2026-11-09, baseline `401ece6`):
+see `docs/finite-write-footprints.md`. Both proveLeafCalls settings use precise
+weak-update footprints for complete finite destination sets. Only singleton
+destinations install values; multiple candidates invalidate their whole union,
+retaining disjoint cells/bytes. Wider data remains unknown but its exact byte
+extent participates in alias checks. Width is uint8_t: actual tests reach255,
+never claim256 or round255 to wrapped0. Unknown address/zero width/different
+unconstrained bases retain barriers. Modular interval overlap replaces byte
+Cartesian intersection; extra candidate/wide work is budgeted. STORE now checks
+fact growth before continuing, including terminal query-free blocks.
+
+Private per-block snapshot DAG proves equal-width1..64 `(x|mask)-x=(~x)&mask`.
+COPY/register intermediates preserve identities; reaching Temp definitions,
+independent LOAD/UNDEF, partial writes, parent clearing and CALL are distinct.
+No equation of abstract Unknowns, image-memory assumption or runtime Z3.
+Per-run immutable-block plans/values count as facts; scratch min(remaining,
+65536) and8192nodes cap construction. All scans/results spend; failed work is
+not refunded and no partial plan is published. Existing finite bounds intersect
+the tautology domain. Defaults1M/value64/block4096/fact262144 unchanged. No
+public API/opcode/ABI/lifter/LLVM optimization or parser-policy change.
+
+New17cases/5698assert pass in both builds. Old actual main17/5698 fails11cases/
+2566assert; old NZ16/5662 fails10/2554 (terminalSTORE budget was only run on
+old main,12/36 failures). Explicit v3 loader traces pin729/b743 runtime; earlier
+v1/v2 only SHA/ldd evidence is preserved, not retroactively called actual maps.
+Initial singular-tag filter ran only7cases and remains partial. Fresh CTest
+main772/772 and NZ640/640 pass, not an aggregate from earlier phases.
+Independent math:128UNSAT/8SAT/0unknown, width1..64;1396736 circular byteset
+checks0diff. This is formula validation, not C++/whole-program proof.
+
+CPU5fixtures/80complete roots,5728fields/5242880memory bytes; result80/memory80/
+DF64/NF16/edge80 controls. Zero exclusions/skips/normalizations. Per config
+readonly40 reports (20positive Finite1100,20aliasUnknown); old401 positives
+Unknown. No observed target becomes a hint. Native x86 fourfixtures/s0-s1/
+O0-O2/16inputs:main V2-static-product768+NZproduct256=1024root matches,
+65536fields/67108864memory bytes. Controls result/memory/edge64each; edge64
+semantic matches/64missing with empty publication/unresolved64, not old
+63-of-64 target semantics. A64 STRQ0 is CPU/API only: x86-only recovery Pass
+unchanged. Old native256 incomplete Transfer/rc1 preserved; pilot4 separate.
+
+Real TG conditional queries:each config16complete/160Finite32Unknown,
+ops700828..921926; unchanged frozen constraints/12queries/defaultGraph fp.
+Disjoint8reports each12F0U; alias8 each8F4U. x86 vector stores were already
+two64-bit STOREs; actual loss was100d4's `(x|7)-x` index and weak-address barrier.
+Original8 CPU prefixes reused; no new TG CPU/megaInit/heap snapshot or complete
+kernel/automatic-deflat claim. Stage `finite-write-footprints-20261109` uses
+only owned `~/dragon-tales-overlap`; main/NZ actual binary snapshots are separate
+and each tested config's3executables were precisely offloaded, not objects.
+Fresh69 corpus replay completed: old/new main each205018 valid-function
+checkpoints/138strategies, new1671 V2raw modules verify; old LLVM and optimized
+corpus not rerun, no historical record reuse. All276 canonical streams sealed;
+decode/target/callee/member/entry/strict deltas0. Both unlifted totals231798;
+existing warnings6missingIGNIL/26undecodedEdges/3invalidFn/0emptySymbol/
+146objdump retained, not new successes. No worker/resource failures or analysis
+retries. This is structure/IR validation, not whole-program semantic proof.
+Deployment output collision and a temporary status-aggregation KeyError were
+metadata-only; the latter has an after-the-fact note, not a retained original
+heredoc/traceback. Original producer/worker/plan bytes remained unchanged.
+
 Finite-analysis cost (2026-11-08/09, baseline `a9f916d`): exact XOR-set
 acceleration and unused report replay removal; see
 `docs/finite-analysis-cost.md`. Both proveLeafCalls settings use the cost changes.

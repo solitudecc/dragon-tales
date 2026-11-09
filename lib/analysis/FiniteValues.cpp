@@ -1,5 +1,6 @@
 #include <dragon/analysis/FiniteValues.hpp>
 #include "LeafCallEffects.hpp"
+#include "FiniteExpressionFacts.hpp"
 #include "SnapshotIdentity.hpp"
 #include <dragon/analysis/BackwardSlicer.hpp>
 #include <dragon/disassembler/BasicBlock.hpp>
@@ -181,10 +182,12 @@ class Engine {
   static bool sameSpace(const Pointer &a,const Pointer &b) {return a.base==b.base && a.width==b.width;}
   static bool overlap(const Slot &a,const Slot &b) {
     if(!sameSpace(a.address,b.address))return true; // Unconstrained bases may alias.
-    for(unsigned i=0;i<bytes(a.width);++i)
-      for(unsigned j=0;j<bytes(b.width);++j)
-        if(advance(a.address,i).offset==advance(b.address,j).offset)return true;
-    return false;
+    // Each slot is a forward interval in its pointer's modular address space.
+    // Overlapping intervals contain one another's start, including wraparound.
+    // Lengths may exceed a small address space; the same test then covers it.
+    return a.width && b.width &&
+        (((b.address.offset-a.address.offset)&mask(a.address.width))<bytes(a.width) ||
+         ((a.address.offset-b.address.offset)&mask(a.address.width))<bytes(b.width));
   }
   Value readMemory(const State &s,Pointer at,W width) {
     if(!width || width>64)return {width};
@@ -219,24 +222,58 @@ class Engine {
     return result?std::move(*result):Value{width};
   }
   void store(State &s,const Value &at,Value value) {
-    auto p=address(at);
-    if(!p || !value.width || value.width>64) {s.memory.clear();return;}
-    value=resize(std::move(value),W(bytes(value.width)*8));
-    const Slot written{*p,value.width};
+    if(!value.width) {s.memory.clear();return;}
+    // Retain the existing scalar/single-destination accounting. The new
+    // candidate and wide-footprint scans have their own additional charges.
+    const bool scalarStore=value.width<=64 &&
+        ((at.pointers.size()==1 && at.finite.empty()) ||
+         (at.finite.size()==1 && at.pointers.empty()));
+    std::vector<Pointer> destinations;
+    for(auto p:at.pointers) {
+      if(!scalarStore && !spend())return;
+      destinations.push_back(p);
+    }
+    for(auto address:at.finite) {
+      if(!scalarStore && !spend())return;
+      destinations.push_back(Pointer{0,address,64});
+    }
+    if(destinations.empty()) {s.memory.clear();return;}
+    std::sort(destinations.begin(),destinations.end());
+    destinations.erase(std::unique(destinations.begin(),destinations.end()),destinations.end());
+    // Value sets model at most 64 data bits, but wider stores still have a
+    // known footprint. Keep the original width: rounding Width(255) to 256
+    // would wrap the uint8_t type and accidentally erase the write extent.
+    const auto writtenWidth=value.width;
+    if(value.width<=64)value=resize(std::move(value),W(bytes(value.width)*8));
+    else value=Value{value.width};
+    auto mayOverlap=[&](const Slot &slot) {
+      for(auto destination:destinations) {
+        if(!scalarStore && !spend())return true;
+        if(overlap(Slot{destination,writtenWidth},slot))return true;
+      }
+      return false;
+    };
     std::vector<std::pair<Slot,Value>> preserved;
     for(auto it=s.memory.begin();it!=s.memory.end();) {
-      if(!overlap(written,it->first)) {++it;continue;}
-      if(sameSpace(written.address,it->first.address)) {
-        // Preserve disjoint bytes, including wrapped addresses.
+      const bool touched=mayOverlap(it->first);
+      if(failed)return;
+      if(!touched) {++it;continue;}
+      // A weak update invalidates the union of all possible write footprints.
+      // A destination with an unrelated symbolic base may alias every byte.
+      if(!scalarStore || sameSpace(destinations.front(),it->first.address))
         for(unsigned i=0;i<bytes(it->first.width);++i) {
           const Slot byte{advance(it->first.address,i),8};
-          if(!overlap(written,byte))preserved.push_back({byte,extract(it->second,i*8,8)});
+          const bool touchedByte=mayOverlap(byte);
+          if(failed)return;
+          if(!touchedByte)preserved.push_back({byte,extract(it->second,i*8,8)});
         }
-      }
       it=s.memory.erase(it);
     }
     for(auto &[key,v]:preserved)if(known(v))s.memory.insert_or_assign(key,std::move(v));
-    if(known(value))s.memory.insert_or_assign(written,std::move(value));
+    // Only one exact destination permits a strong value update. Writing that
+    // value to every candidate would invent writes to paths not taken.
+    if(destinations.size()==1 && known(value))
+      s.memory.insert_or_assign(Slot{destinations.front(),value.width},std::move(value));
   }
   Value operand(const Transfer &t,const ignil::Value &v) {
     return std::visit([&](const auto &x)->Value {
@@ -709,6 +746,52 @@ class Engine {
     result.operations+=cost;
     return context;
   }
+  const detail::FiniteExpressionBound *expressionBound(std::uint64_t block,
+      const ignil::Block &ir,std::size_t index,const Transfer &working) {
+    auto found=expressionPlans.find(block);
+    if(found==expressionPlans.end()) {
+      // These are optional pure-expression proofs, not new entry facts. Bound
+      // both construction scratch and retained plans alongside the live
+      // dataflow states, working state/temps and existing call-proof cache.
+      const auto resident=retainedStateFacts+working.state.regs.size()+
+          working.state.memory.size()+working.temps.size();
+      if(resident>=limits.maxFacts || proofFacts>=limits.maxFacts-resident)return nullptr;
+      const auto remaining=limits.maxFacts-resident-proofFacts;
+      if(remaining<=1)return nullptr;
+      auto plan=detail::buildFiniteExpressionFacts(ir,parents,limits.maxValues,
+          remaining-1,[&]{return spend();});
+      if(failed)return nullptr;
+      const auto cost=1+(plan?plan->facts():0);
+      if(cost>remaining) {failed=true;return nullptr;}
+      proofFacts+=cost;
+      found=expressionPlans.emplace(block,std::move(plan)).first;
+    }
+    if(!found->second)return nullptr;
+    const auto bound=found->second->byOp.find(index);
+    return bound==found->second->byOp.end()?nullptr:&bound->second;
+  }
+  void refineExpression(Value &value,const detail::FiniteExpressionBound &bound) {
+    if(value.width!=bound.width || !value.pointers.empty())return;
+    if(value.finite.empty()) {
+      for(auto candidate:bound.values) {
+        if(!spend())return;
+        value.finite.push_back(candidate);
+      }
+      return;
+    }
+    // Both sets are independently sound upper bounds. Their intersection
+    // preserves known constants and narrows Cartesian correlation loss.
+    std::vector<std::uint64_t> common;
+    std::size_t i=0,j=0;
+    while(i<value.finite.size() && j<bound.values.size()) {
+      if(!spend())return;
+      const auto left=value.finite[i],right=bound.values[j];
+      if(left==right)common.push_back(left);
+      if(left<=right)++i;
+      if(right<=left)++j;
+    }
+    value.finite=std::move(common);
+  }
   Transfer transfer(std::uint64_t block,const State &in,
                     std::optional<std::size_t> beforeOp = std::nullopt) {
     Transfer t{in,{}};
@@ -734,6 +817,11 @@ class Engine {
       if(op.opcode==O::STORE) {
         if(op.srcs.size()==2)store(t.state,operand(t,op.srcs[0]),operand(t,op.srcs[1]));
         else t.state.memory.clear();
+        // A partial/weak write can split a slot into several preserved byte
+        // facts. Check here even when this is the block's final operation.
+        if(t.temps.size()+t.state.regs.size()+t.state.memory.size()+proofFacts>limits.maxFacts) {
+          failed=true;return t;
+        }
         continue;
       }
       if(!op.dst)continue;
@@ -751,6 +839,9 @@ class Engine {
               op.opcode==O::ZEXT || op.opcode==O::SEXT || op.opcode==O::TRUNC))
         v=operation(op.opcode,operand(t,op.srcs[0]),{},width,true);
       else if(op.srcs.size()==2)v=operation(op.opcode,operand(t,op.srcs[0]),operand(t,op.srcs[1]),width,false);
+      if(!failed && op.opcode==O::SUB && v.pointers.empty() && v.finite.size()!=1)
+        if(const auto *bound=expressionBound(block,*ib,index,t))refineExpression(v,*bound);
+      if(failed)return t;
       if(const auto *reg=std::get_if<ignil::Reg>(&*op.dst))writeRegister(t.state,*reg,std::move(v));
       else if(const auto *tmp=std::get_if<ignil::Temp>(&*op.dst)) {
         t.temps.insert_or_assign(tmp->id,std::move(v));definitions.insert_or_assign(tmp->id,&op);
@@ -838,8 +929,10 @@ class Engine {
   std::vector<ignil::RegExtent> parents;
   FiniteValueResult result;
   std::map<std::pair<std::uint64_t,detail::CallContext>,detail::LeafCallProof> callProofs;
+  std::map<std::uint64_t,std::optional<detail::FiniteExpressionFacts>> expressionPlans;
   std::set<std::uint64_t> provenSites,rejectedSites;
   std::uint64_t proofFacts=0;
+  std::uint64_t retainedStateFacts=0;
   bool failed=false;
 };
 std::set<std::uint64_t> admittedEntries(const Graph &graph,
@@ -887,6 +980,7 @@ FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &gi
   if(states.size()>limits.maxBlocks || facts+e.proofFacts>limits.maxFacts)e.failed=true;
   while(!queue.empty() && !e.failed) {
     auto at=queue.front();queue.pop_front();queued.erase(at);++e.result.blockVisits;
+    e.retainedStateFacts=facts;
     auto out=e.transfer(at,states.at(at));
     for(auto next:successors[at]) {
       if(!states.contains(next) && states.size()>=limits.maxBlocks) {e.failed=true;break;}
@@ -897,6 +991,7 @@ FiniteValueResult runFinite(const Graph &graph,const std::set<std::uint64_t> &gi
       if(facts+e.proofFacts>limits.maxFacts) {e.failed=true;break;}
     }
   }
+  e.retainedStateFacts=facts;
   std::map<std::uint64_t,std::vector<std::size_t>> requested;
   e.result.values.resize(queries.size());
   for(std::size_t i=0;i<queries.size();++i) {

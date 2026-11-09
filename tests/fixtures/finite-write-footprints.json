@@ -1,0 +1,316 @@
+{
+  "schema": 1,
+  "entry": 4096,
+  "cases": [
+    {
+      "id": "x86_32_snapshot_masked_store",
+      "architecture": "x86_32",
+      "code_hex": "c705003000000011000089f883c80729f889148500400000ff2500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "indirect_site": 4120,
+      "expected_targets": [
+        4352
+      ],
+      "set_gprs": {
+        "EDI": [
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          0,
+          0,
+          4294967295,
+          7,
+          6,
+          4294967293,
+          2147483652,
+          2147483643,
+          2,
+          1,
+          4294967288
+        ],
+        "EDX": [
+          4294967295,
+          2147483648,
+          2147483647,
+          0,
+          0,
+          4294967295,
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          0,
+          0,
+          4294967295,
+          0,
+          1
+        ]
+      },
+      "finite_write_footprints": {
+        "shape": "snapshot_masked_store",
+        "required_trials": 16,
+        "native_finite_dispatch": true,
+        "table_address": 12288,
+        "table_width": 4,
+        "target": 4352,
+        "variable_store_pc": 4113,
+        "variable_store_width": 4,
+        "variable_store_displacement_offset": 20,
+        "possible_written_bytes": [
+          16384,
+          16415
+        ],
+        "input_registers": [
+          "EDI",
+          "EDX"
+        ],
+        "flags": "Final SUB or ADD defines all arithmetic flags; DF is preserved."
+      }
+    },
+    {
+      "id": "x86_32_masked_store_only",
+      "architecture": "x86_32",
+      "code_hex": "c705003000000011000089f883e00783c00089148500400000ff2500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "indirect_site": 4121,
+      "expected_targets": [
+        4352
+      ],
+      "set_gprs": {
+        "EDI": [
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          0,
+          0,
+          4294967295,
+          0,
+          1,
+          4294967290,
+          2147483651,
+          2147483644,
+          5,
+          6,
+          4294967295
+        ],
+        "EDX": [
+          4294967295,
+          2147483648,
+          2147483647,
+          0,
+          0,
+          4294967295,
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          0,
+          0,
+          4294967295,
+          0,
+          1
+        ]
+      },
+      "finite_write_footprints": {
+        "shape": "masked_store_only",
+        "required_trials": 16,
+        "native_finite_dispatch": true,
+        "table_address": 12288,
+        "table_width": 4,
+        "target": 4352,
+        "variable_store_pc": 4114,
+        "variable_store_width": 4,
+        "variable_store_displacement_offset": 21,
+        "possible_written_bytes": [
+          16384,
+          16415
+        ],
+        "input_registers": [
+          "EDI",
+          "EDX"
+        ],
+        "flags": "Final SUB or ADD defines all arithmetic flags; DF is preserved."
+      }
+    },
+    {
+      "id": "x86_64_snapshot_masked_store",
+      "architecture": "x86_64",
+      "code_hex": "48c70425003000000011000089f883c80729f889148500400000ff242500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "indirect_site": 4122,
+      "expected_targets": [
+        4352
+      ],
+      "set_gprs": {
+        "RDI": [
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          4294967296,
+          9223372036854775808,
+          18446744073709551615,
+          7,
+          6,
+          4294967293,
+          2147483652,
+          2147483643,
+          4294967298,
+          9223372036854775809,
+          18446744073709551608
+        ],
+        "RDX": [
+          4294967295,
+          2147483648,
+          2147483647,
+          4294967296,
+          9223372036854775808,
+          18446744073709551615,
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          4294967296,
+          9223372036854775808,
+          18446744073709551615,
+          0,
+          1
+        ]
+      },
+      "finite_write_footprints": {
+        "shape": "snapshot_masked_store",
+        "required_trials": 16,
+        "native_finite_dispatch": true,
+        "table_address": 12288,
+        "table_width": 8,
+        "target": 4352,
+        "variable_store_pc": 4115,
+        "variable_store_width": 4,
+        "variable_store_displacement_offset": 22,
+        "possible_written_bytes": [
+          16384,
+          16415
+        ],
+        "input_registers": [
+          "RDI",
+          "RDX"
+        ],
+        "flags": "Final SUB or ADD defines all arithmetic flags; DF is preserved."
+      }
+    },
+    {
+      "id": "x86_64_masked_store_only",
+      "architecture": "x86_64",
+      "code_hex": "48c70425003000000011000089f883e00783c00089148500400000ff242500300000ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc3",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "indirect_site": 4123,
+      "expected_targets": [
+        4352
+      ],
+      "set_gprs": {
+        "RDI": [
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          4294967296,
+          9223372036854775808,
+          18446744073709551615,
+          0,
+          1,
+          4294967290,
+          2147483651,
+          2147483644,
+          4294967301,
+          9223372036854775814,
+          18446744073709551615
+        ],
+        "RDX": [
+          4294967295,
+          2147483648,
+          2147483647,
+          4294967296,
+          9223372036854775808,
+          18446744073709551615,
+          0,
+          1,
+          4294967295,
+          2147483648,
+          2147483647,
+          4294967296,
+          9223372036854775808,
+          18446744073709551615,
+          0,
+          1
+        ]
+      },
+      "finite_write_footprints": {
+        "shape": "masked_store_only",
+        "required_trials": 16,
+        "native_finite_dispatch": true,
+        "table_address": 12288,
+        "table_width": 8,
+        "target": 4352,
+        "variable_store_pc": 4116,
+        "variable_store_width": 4,
+        "variable_store_displacement_offset": 23,
+        "possible_written_bytes": [
+          16384,
+          16415
+        ],
+        "input_registers": [
+          "RDI",
+          "RDX"
+        ],
+        "flags": "Final SUB or ADD defines all arithmetic flags; DF is preserved."
+      }
+    },
+    {
+      "id": "arm64_wide_store",
+      "architecture": "arm64",
+      "code_hex": "002082d2010086d2200000f9020088d24000803d230040f960001fd6000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4000020d4c0035fd6",
+      "undefined_flags": [],
+      "stubs": [],
+      "local_functions": [],
+      "indirect_site": 4120,
+      "expected_targets": [
+        4352
+      ],
+      "set_gprs": {},
+      "finite_write_footprints": {
+        "shape": "wide_store",
+        "required_trials": 16,
+        "native_finite_dispatch": false,
+        "table_address": 12288,
+        "table_width": 8,
+        "target": 4352,
+        "variable_store_pc": 4112,
+        "variable_store_width": 16,
+        "possible_written_bytes": [
+          16384,
+          16399
+        ],
+        "flags": "No instruction changes NZCV; the real RET preserves SP.",
+        "native_limit": "FiniteDispatchPass currently supports x86 only; no A64 native recovery claim."
+      }
+    }
+  ],
+  "scope": "Guest-established table cell, precise disjoint STORE footprints; no image-memory contract or observed CFG hints."
+}
