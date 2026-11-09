@@ -3,6 +3,7 @@
 #include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/raw_ostream.h>
 #include <algorithm>
@@ -59,6 +60,17 @@ Result predicates(LLVMContext &ctx,const Options &o) {
        {"solver_queries",s.solverQueries},{"unknown_queries",s.unknownQueries},
        {"unsupported_conditions",s.unsupportedConditions},{"budget_skipped",s.budgetSkipped}}};
 }
+Counters controlFlowCounts(llvm::Module &module,const std::string &suffix) {
+  Counters counts;
+  for(auto name:{"blocks","instructions","conditional_branches","switches"})counts[name+suffix]=0;
+  for(auto &f:module)for(auto &b:f) {
+    ++counts["blocks"+suffix];counts["instructions"+suffix]+=b.size();
+    if(auto *branch=llvm::dyn_cast<llvm::BranchInst>(b.getTerminator()))
+      counts["conditional_branches"+suffix]+=branch->isConditional();
+    counts["switches"+suffix]+=llvm::isa<llvm::SwitchInst>(b.getTerminator());
+  }
+  return counts;
+}
 }
 Options parseOptionsJSON(std::string_view text) {
   auto value=parse(text.empty()?"{}":text);auto *object=value.getAsObject();
@@ -103,6 +115,11 @@ PassPipeline::PassPipeline(bool builtins) {
   registerLLVM("instcombine",[](LLVMContext &c,const Options &){c.lifter.runInstCombine();return Result{};},false,{},none);
   registerLLVM("gvn",[](LLVMContext &c,const Options &){c.lifter.runGVN();return Result{};},false,{},none);
   registerLLVM("dce",[](LLVMContext &c,const Options &){c.lifter.runDCE();return Result{};},false,{},none);
+  registerLLVM("control-flow",[](LLVMContext &c,const Options &) {
+    Result r;r.counters=controlFlowCounts(c.lifter.module(),"_before");
+    c.lifter.runControlFlowSimplification();
+    r.counters.merge(controlFlowCounts(c.lifter.module(),"_after"));return r;
+  },false,{},none);
   registerLLVM("mba",mba,false,{},numeric({"timeout_ms","max_queries","max_expression_nodes","max_variables","resource_limit"}));
   registerLLVM("predicates",predicates,false,{},numeric({"timeout_ms","max_queries","max_expression_nodes","resource_limit"}));
   registerGraph("graph-audit",[](GraphContext &c,const Options &) {

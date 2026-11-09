@@ -211,6 +211,25 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Opt-in LLVM control-flow cleanup (2026-11-09, baseline `4487600`): see
+`docs/llvm-control-flow-cleanup.md`. New `control-flow` pipeline builtin and
+`LLVMLifter::runControlFlowSimplification` compose SCCP/DFAJumpThreading/
+JumpThreading/SimplifyCFG/InstCombine/DCE with before/after IR counters. No
+new entry/memory/call assumptions; historical default six steps unchanged.
+Four C++ regressions fail old code (also with final tests and frozen old libs),
+then pass new; CTest 789/789 and no Z3 657/657. Native state-machine oracle:
+384 before/after comparisons (192 post-pass), result/memory controls 384 each.
+Unchanged full Guest static-entry oracle: 3776 matches (1040 complete roots /
+480 declared boundaries / 2256 rejected entries); result/memory controls 224
+each. Exact V2 budgets 0/1/2/3: 192 matches (96 roots / 96 budget boundaries),
+budget control 192. No-Z3 selected native entries: 336 (144 roots / 192 rejects).
+No new exclusions/skips/normalizations. Pure LLVM PHI state machine loses its
+dispatcher; historical Tigress f-combo O0 39-case dispatcher remains a Guest
+LOAD switch despite small IR cleanup. Do not claim generic de-flattening or
+heap-predicate removal. Fresh two-ELF replay is pending at implementation
+milestone; no full corpus or new instruction/IGNIL campaign in this opt-in step.
+Artifacts: `~/vmc-runs/llvm-control-flow-20261109/`.
+
 Decoded automatic entries (2026-11-09, baseline `83e8c8c`): see
 `docs/decoded-entry-registration.md`. x86/ARM commitPending registers only
 targets with a decoded first instruction; real branches/callees/conditional

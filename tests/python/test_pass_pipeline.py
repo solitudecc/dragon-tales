@@ -51,7 +51,7 @@ with lift(g) as manual,lift(g) as managed:
 
 with lift(g) as l,d.PassPipeline() as p:
     names={x['name'] for x in p.passes()}
-    assert names==set(d.PassPipeline.DEFAULT_LLVM)|{'graph-audit','finite-values'}
+    assert names==set(d.PassPipeline.DEFAULT_LLVM)|{'graph-audit','finite-values','control-flow'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
@@ -61,6 +61,23 @@ with lift(g) as l,d.PassPipeline() as p:
     expect(d.PipelineError,lambda:p.run(l));assert l.ir()==before
     expect(ValueError,lambda:p.register('dependent',lambda c,o:None))
     expect(ValueError,lambda:p.register('wrong',lambda c,o:None,stage=7))
+
+with lift(g) as l,d.PassPipeline(['control-flow']) as p:
+    assert 'control-flow' not in d.PassPipeline.DEFAULT_LLVM
+    expect(ValueError,lambda:p.add('control-flow',assume_initialized=True))
+    r=p.run(l)
+    assert r['ok'] and r['runs'][0]['status']==d.PassStatus.SUCCESS
+    assert set(r['runs'][0]['counters'])=={name+'_'+suffix for name in
+        ('blocks','instructions','conditional_branches','switches') for suffix in ('before','after')}
+
+with lift(g) as l:
+    raw=d.lib.dragon_pass_pipeline_create(1)
+    try:
+        assert d.lib.dragon_pass_pipeline_add(raw,b'control-flow',b'{}')
+        report=json.loads(d.PassPipeline._text(d.lib.dragon_pass_pipeline_run_llvm(raw,l._ptr,1,64,1)))
+        assert report['ok'] and report['runs'][0]['status']==d.PassStatus.SUCCESS
+        assert report['runs'][0]['counters']['blocks_before']>=1
+    finally:d.lib.dragon_pass_pipeline_destroy(raw)
 
 with lift(g) as l,d.PassPipeline() as p:
     events=[]

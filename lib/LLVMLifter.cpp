@@ -20,7 +20,10 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Transforms/Scalar/DCE.h>
+#include <llvm/Transforms/Scalar/DFAJumpThreading.h>
 #include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Scalar/JumpThreading.h>
+#include <llvm/Transforms/Scalar/SCCP.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
@@ -1175,6 +1178,19 @@ void dragon::llvmlifter::LLVMLifter::runGVN() {
 
 void dragon::llvmlifter::LLVMLifter::runDCE() {
   llvm::FunctionPassManager fpm;
+  fpm.addPass(llvm::DCEPass());
+  runFPM(*module_, std::move(fpm));
+}
+
+void dragon::llvmlifter::LLVMLifter::runControlFlowSimplification() {
+  llvm::FunctionPassManager fpm;
+  fpm.addPass(llvm::SCCPPass());
+  // Ordinary jump threading avoids some loop headers. DFA threading handles
+  // the predictable PHI/select state machines found in flattened switches.
+  fpm.addPass(llvm::DFAJumpThreadingPass());
+  fpm.addPass(llvm::JumpThreadingPass());
+  fpm.addPass(llvm::SimplifyCFGPass());
+  fpm.addPass(llvm::InstCombinePass());
   fpm.addPass(llvm::DCEPass());
   runFPM(*module_, std::move(fpm));
 }

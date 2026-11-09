@@ -116,6 +116,14 @@ class LLVMLifter {
   void runGVN(); // eliminates redundant loads
   void runDCE(); // removes dead flag computations
 
+  /// Simplify known-state dispatch and predecessor-dependent branches using
+  /// LLVM SCCP, DFA jump threading, jump threading and CFG cleanup. Run after
+  /// mem2reg and expression/predicate simplification. Unknown entries, memory
+  /// and call effects keep their normal LLVM semantics; no image or runtime
+  /// state assumptions are introduced. This optional step is not a guarantee
+  /// of complete de-flattening and does not change the default sweep.
+  void runControlFlowSimplification();
+
   /// Prove integer branch/select conditions constant for all input values,
   /// then simplify the CFG and dead computations. Run after mem2reg and the
   /// ordinary integer passes. Loads/PHIs are independent unknown SSA inputs;
