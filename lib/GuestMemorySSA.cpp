@@ -7,6 +7,9 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/IR/Value.h>
+#include <llvm/IR/CFG.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/Analysis/ValueTracking.h>
 
 #include <algorithm>
@@ -94,6 +97,14 @@ bool mayOverlap(const AddressKey &left, unsigned leftBytes,
   return !provablyDisjoint(left, leftBytes, right, rightBytes);
 }
 
+bool equivalentValue(const llvm::Value *left, const llvm::Value *right) {
+  if (left == right) return true;
+  const auto *a = llvm::dyn_cast<llvm::ConstantInt>(left);
+  const auto *b = llvm::dyn_cast<llvm::ConstantInt>(right);
+  return a && b && a->getType() == b->getType() &&
+         a->getValue() == b->getValue();
+}
+
 bool isMemoryBaseLoad(const llvm::LoadInst &load, const llvm::Function &function) {
   if (!load.getType()->isPointerTy() || load.isVolatile() || load.isAtomic() ||
       function.arg_size() < 2)
@@ -174,38 +185,50 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     if (memoryBases.empty())
       continue;
 
-    auto memoryBlock = [](const llvm::BasicBlock *block) {
-      return block->getName().starts_with("memory.");
-    };
-    auto carriesFacts = [&](const llvm::BasicBlock *from,
-                            const llvm::BasicBlock *to) {
-      if (to->getName().starts_with("bb_") ||
-          to->getName().starts_with("call."))
-        return false;
-      return memoryBlock(to) || memoryBlock(from);
-    };
-    auto sameFacts = [](const std::vector<Fact> &left,
-                        const std::vector<Fact> &right) {
-      if (left.size() != right.size()) return false;
-      for (std::size_t i = 0; i < left.size(); ++i) {
-        if (left[i].access.bytes != right[i].access.bytes ||
-            !sameAddress(left[i].access.address, right[i].access.address) ||
-            left[i].value != right[i].value)
-          return false;
+    llvm::DominatorTree dom(function);
+    std::unordered_set<llvm::BasicBlock *> reachable;
+    std::deque<llvm::BasicBlock *> reachQueue{&function.getEntryBlock()};
+    while (!reachQueue.empty()) {
+      auto *block = reachQueue.front(); reachQueue.pop_front();
+      if (!reachable.insert(block).second) continue;
+      for (auto *successor : llvm::successors(block)) reachQueue.push_back(successor);
+    }
+    std::unordered_set<llvm::BasicBlock *> loopBlocks;
+    for (auto *header : reachable) {
+      for (auto *pred : llvm::predecessors(header)) {
+        if (!reachable.contains(pred) || !dom.dominates(header, pred))
+          continue;
+        std::deque<llvm::BasicBlock *> loopQueue{pred};
+        loopBlocks.insert(header);
+        while (!loopQueue.empty()) {
+          auto *member = loopQueue.front();
+          loopQueue.pop_front();
+          if (!loopBlocks.insert(member).second)
+            continue;
+          for (auto *memberPred : llvm::predecessors(member)) {
+            if (reachable.contains(memberPred) && memberPred != header)
+              loopQueue.push_back(memberPred);
+          }
+        }
       }
-      return true;
-    };
+    }
     std::map<llvm::BasicBlock *, std::vector<Fact>> incoming;
+    std::map<llvm::BasicBlock *, std::map<llvm::BasicBlock *, std::vector<Fact>>> edgeFacts;
+    std::map<llvm::BasicBlock *, std::size_t> pending;
     std::deque<llvm::BasicBlock *> work;
     incoming[&function.getEntryBlock()] = {};
     work.push_back(&function.getEntryBlock());
     std::unordered_set<llvm::BasicBlock *> visited;
+    for (auto *block : reachable) {
+      if (block == &function.getEntryBlock()) continue;
+      pending[block] = 0;
+      for (auto *pred : llvm::predecessors(block))
+        if (reachable.contains(pred) && !dom.dominates(block, pred))
+          ++pending[block];
+    }
     while (!work.empty()) {
-      auto *block = work.front();
-      work.pop_front();
-      if (!visited.insert(block).second ||
-          (block != &function.getEntryBlock() && llvm::pred_size(block) > 1))
-        continue; // joins/loops are S2's next PHI stage
+      auto *block = work.front(); work.pop_front();
+      if (!visited.insert(block).second) continue;
       ++stats.blocksVisited;
       auto facts = incoming[block];
       for (auto it = block->begin(); it != block->end();) {
@@ -268,15 +291,66 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
         }
       }
       for (auto *successor : llvm::successors(block)) {
-        auto nextFacts = carriesFacts(block, successor)
+        if (!reachable.contains(successor)) continue;
+        const bool crossesLoop = loopBlocks.contains(block) ||
+                                 loopBlocks.contains(successor);
+        if (crossesLoop)
+          ++stats.loopBarriers;
+        if (dom.dominates(successor, block)) {
+          continue;
+        }
+        auto nextFacts = options.enableCrossBlock && !crossesLoop
             ? facts : std::vector<Fact>{};
-        auto [it, inserted] = incoming.emplace(successor, nextFacts);
-        if (inserted)
-          work.push_back(successor);
-        else if (sameFacts(it->second, nextFacts))
-          work.push_back(successor);
-        else
-          it->second.clear(); // conflicting paths are not forwarded
+        edgeFacts[successor][block] = nextFacts;
+        if (pending[successor] > 0) --pending[successor];
+        if (pending[successor] != 0) continue;
+
+        std::vector<Fact> merged;
+        auto &edges = edgeFacts[successor];
+        if (!edges.empty()) {
+          const auto &first = edges.begin()->second;
+          for (const auto &candidate : first) {
+            bool presentEverywhere = true;
+            std::vector<llvm::Value *> values;
+            for (const auto &[pred, predFacts] : edges) {
+              auto it = std::find_if(predFacts.begin(), predFacts.end(),
+                  [&](const Fact &fact) {
+                    return fact.access.bytes == candidate.access.bytes &&
+                           sameAddress(fact.access.address, candidate.access.address);
+                  });
+              if (it == predFacts.end()) { presentEverywhere = false; break; }
+              values.push_back(it->value);
+            }
+            if (!presentEverywhere) { ++stats.joinBarriers; continue; }
+            bool equal = std::all_of(values.begin() + 1, values.end(),
+                                     [&](llvm::Value *v) { return equivalentValue(v, values.front()); });
+            llvm::Value *value = values.front();
+            if (!equal && options.enablePhi) {
+              auto *type = value->getType();
+              llvm::IRBuilder<> builder(successor, successor->getFirstInsertionPt());
+              auto *phi = builder.CreatePHI(type, values.size(), "guest.mem.phi");
+              std::size_t index = 0;
+              for (const auto &[pred, predFacts] : edges) {
+                auto it = std::find_if(predFacts.begin(), predFacts.end(),
+                    [&](const Fact &fact) {
+                      return fact.access.bytes == candidate.access.bytes &&
+                             sameAddress(fact.access.address, candidate.access.address);
+                    });
+                phi->addIncoming(values[index++], pred);
+              }
+              value = phi;
+              ++stats.phisInserted;
+            } else if (!equal) {
+              ++stats.joinBarriers;
+              continue;
+            }
+            auto fact = candidate;
+            fact.value = value;
+            merged.push_back(fact);
+          }
+        }
+        incoming[successor] = std::move(merged);
+        work.push_back(successor);
       }
     }
     if (stats.loadsForwarded >= options.maxRewrites) {

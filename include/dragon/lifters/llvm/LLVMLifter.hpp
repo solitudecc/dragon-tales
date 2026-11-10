@@ -171,10 +171,11 @@ class LLVMLifter {
   [[nodiscard]] MBASimplifyStats runMBASimplification(
       const MBASimplifyOptions &options = {});
 
-  /// Promote register allocas and perform conservative same-block Guest memory
-  /// forwarding. CALLs, unknown aliases, partial overlaps and CFG joins remain
-  /// barriers in this first S2 component. The default optimization pipeline is
-  /// unchanged; callers opt into this stage explicitly.
+  /// Promote register allocas and perform conservative Guest-memory forwarding.
+  /// Acyclic CFG edges carry exact-width facts; joins retain common facts and
+  /// create PHIs for differing values. Calls, unknown aliases, partial
+  /// overlaps and natural-loop edges remain barriers. The default optimization
+  /// pipeline is unchanged; callers opt into this stage explicitly.
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const MemoryForwardOptions &options = {});
 

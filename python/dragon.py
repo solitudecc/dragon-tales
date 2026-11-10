@@ -1780,12 +1780,12 @@ class LLVMLifter:
         lib.dragon_llvm_lifter_run_dce(self._ptr)
 
     def run_guest_memory_ssa(self, max_rewrites=65536, run_mem2reg=True):
-        """Run the conservative first S2 Guest-memory forwarding stage.
+        """Run the conservative S2 Guest-memory forwarding stage.
 
-        Register promotion is optional. Facts stay on successful linear
-        memory paths; calls, unknown aliases, joins, loops and partial
-        overlaps remain barriers. The default optimization pipeline does not
-        invoke this stage implicitly.
+        Register promotion is optional. Exact-width facts cross acyclic CFG
+        edges; differing values at a join use a Guest-memory PHI. Calls,
+        unknown aliases, natural loops and partial overlaps remain barriers.
+        The default optimization pipeline does not invoke this stage.
         """
         if type(max_rewrites) is not int or not 0 <= max_rewrites <= 0xffffffffffffffff:
             raise ValueError('max_rewrites must be a non-negative integer')
@@ -1848,14 +1848,15 @@ class LLVMLifter:
 
 
 class MemoryForwardStats:
-    """Bounded first-stage Guest-memory forwarding results."""
+    """Bounded S2 Guest-memory forwarding results."""
 
     def __init__(self, stats):
         for name in ('available', 'complete', 'changed'):
             setattr(self, name, bool(getattr(stats, name)))
         for name in ('blocks_visited', 'guest_loads', 'guest_stores',
                      'loads_forwarded', 'loads_reused', 'call_barriers',
-                     'alias_barriers', 'partial_overlaps', 'budget_exhausted'):
+                     'alias_barriers', 'partial_overlaps', 'phis_inserted',
+                     'join_barriers', 'loop_barriers', 'budget_exhausted'):
             setattr(self, name, int(getattr(stats, name)))
 
     def __repr__(self):

@@ -1405,7 +1405,7 @@ int dragon_llvm_lifter_run_guest_memory_ssa(
     dragon_memory_forward_stats_t *out) {
   if (out) *out = {};
   if (!l || !out || (run_mem2reg != 0 && run_mem2reg != 1)) return 0;
-  const auto stats = l->lifter.runGuestMemorySSA({max_rewrites, run_mem2reg != 0});
+  const auto stats = l->lifter.runGuestMemorySSA({max_rewrites, run_mem2reg != 0, true, true});
   out->available = stats.available;
   out->complete = stats.complete;
   out->changed = stats.changed;
@@ -1417,6 +1417,9 @@ int dragon_llvm_lifter_run_guest_memory_ssa(
   out->call_barriers = stats.callBarriers;
   out->alias_barriers = stats.aliasBarriers;
   out->partial_overlaps = stats.partialOverlaps;
+  out->phis_inserted = stats.phisInserted;
+  out->join_barriers = stats.joinBarriers;
+  out->loop_barriers = stats.loopBarriers;
   out->budget_exhausted = stats.budgetExhausted;
   return 1;
 }

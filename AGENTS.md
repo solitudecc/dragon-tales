@@ -258,13 +258,16 @@ deobfuscation gain. Build9ff29d8+patch, artifact `~/vmc-runs/llvm-lift-provenanc
 Details: docs/deobfuscation-progress-20261109.md. S2 first-stage exact Guest
 memory forwarding is now implemented; see docs/llvm-memory-forwarding.md.
 
-S2 first stage (2026-11-10): `LLVMLifter::runGuestMemorySSA` and C/Python mirrors
-optionally promote registers, then forward exact-width Guest LOADs from prior
-LOAD/STORE facts along successful linear memory-check chains. Calls, unknown
-aliases, volatile/atomic accesses, partial overlaps, joins, loops and ordinary
-basic-block edges remain barriers; default optimize() is unchanged. Four focused
-cases / 34 assertions; main CTest 831/831 and no-Z3 696/696. This is not
-cross-block PHI, loop fixed-point, byte reconstruction or heap analysis.
+S2 Guest-memory SSA (2026-11-10): `LLVMLifter::runGuestMemorySSA` and C/Python
+mirrors optionally promote registers, then forward exact-width Guest LOADs from
+prior LOAD/STORE facts. Acyclic CFG edges carry facts; joins keep facts present
+on every edge and insert PHIs for differing values. Calls, unknown aliases,
+volatile/atomic accesses, partial overlaps and natural-loop entry/internal/exit
+edges remain conservative barriers; no loop fixed point is guessed. Default
+optimize() is unchanged. The first-stage four cases/34 assertions remain green;
+the cross-block focused group is 5/5 cases/39 assertions, main CTest 832/832 and
+no-Z3 697/697. The old implementation fails three key join assertions. This is
+not byte reconstruction, heap analysis or external-call effect summarization.
 
 Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
 LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and
@@ -285,7 +288,9 @@ two-ELF main/no-Z3 each C16/LLVM32 full roots, no incomplete/errors. Against S0,
 exact input-path ModuleID first lines, all remaining bytes identical. No new
 exclusions, skips, normalization or deobfuscation gain.
 See docs/deobfuscation-progress-20261109.md; LLVM access/guard mapping is S1b,
-Guest memory value forwarding is S2 and is not implemented by this snapshot.
+and explicit S2 Guest-memory forwarding now covers acyclic CFG joins with PHIs.
+Stack-slot reconstruction beyond the current Guest base, heap relations,
+external-call effect summaries and loop fixed points remain outside this snapshot.
 
 Deobfuscation S0 harness gates (2026-11-09, baseline `12b0043`): see
 `docs/deobfuscation-progress-20261109.md`. Optional symbolic diagnostics probe

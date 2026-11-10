@@ -5,6 +5,7 @@
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <cstddef>
@@ -45,6 +46,15 @@ std::size_t integerLoads(const llvm::Module &module) {
       for (const auto &instruction : block)
         if (const auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction))
           if (load->getType()->isIntegerTy()) ++count;
+  return count;
+}
+
+std::size_t phiNodes(const llvm::Module &module) {
+  std::size_t count = 0;
+  for (const auto &function : module)
+    for (const auto &block : function)
+      for (const auto &instruction : block)
+        if (llvm::isa<llvm::PHINode>(&instruction)) ++count;
   return count;
 }
 
@@ -118,4 +128,44 @@ TEST_CASE("S2 treats overlapping concrete slots as an alias barrier",
   CHECK(stats.partialOverlaps >= 1);
   CHECK(stats.loadsForwarded == 0);
   verify(lifter.module());
+}
+
+TEST_CASE("S2 merges differing acyclic paths with a Guest-memory PHI",
+          "[llvm][guest-memory-ssa]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"guest-memory-phi", context};
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                       {ptr, ptr, ptr, ptr}, false);
+  auto *function = llvm::Function::Create(type, llvm::Function::ExternalLinkage,
+                                          "phi_case", module);
+  auto args = function->arg_begin();
+  auto *condition = &*args++;
+  auto *memory = &*args++;
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *left = llvm::BasicBlock::Create(context, "left", function);
+  auto *right = llvm::BasicBlock::Create(context, "right", function);
+  auto *join = llvm::BasicBlock::Create(context, "join", function);
+  llvm::IRBuilder<> builder(entry);
+  auto *data = builder.CreateLoad(ptr, memory);
+  auto *isNull = builder.CreateIsNull(condition);
+  builder.CreateCondBr(isNull, left, right);
+  for (auto *block : {left, right}) {
+    llvm::IRBuilder<> arm(block);
+    auto *slot = arm.CreateGEP(arm.getInt8Ty(), data, arm.getInt64(0x4000));
+    arm.CreateStore(arm.getInt64(block == left ? 1 : 2), slot);
+    arm.CreateBr(join);
+  }
+  llvm::IRBuilder<> tail(join);
+  auto *slot = tail.CreateGEP(tail.getInt8Ty(), data, tail.getInt64(0x4000));
+  tail.CreateLoad(tail.getInt64Ty(), slot);
+  tail.CreateRetVoid();
+
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(
+      module, MemoryForwardOptions{65536, false});
+  CHECK(stats.available);
+  CHECK(stats.loadsForwarded >= 1);
+  CHECK(phiNodes(module) >= 1);
+  CHECK(integerLoads(module) == 0);
+  verify(module);
 }
