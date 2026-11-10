@@ -19,6 +19,13 @@ revision 2128，seed `20261110`，8 个边界输入，O0/O2，两种反汇编策
 - `f-combo-O0` 最大约 `24675` 条机器指令，仍能完整记录执行到的状态；
 - `f-combo` 的未解码 PC 和未知分发边被保留为缺口，不算成功。
 
+随后对同一批 16 个 ELF 显式运行
+`mem2reg → instcombine → gvn → mba → predicates → dispatch-specialize →
+dispatch-deflatten → control-flow → dce`，16/16 个 LLVM pipeline 报告和 IR verify
+通过。MBA/谓词阶段在可证明位置发生改写，例如 `f-mba-O0` 的 IR 行数由 `14021` 降到
+`3094`，`f-combo-O2` 由 `4109` 降到 `1775`。这些复杂样本的 dispatcher 状态仍然是
+未知或多值，因此两个分发 Pass 都报告 unresolved、改写边为零；这是正确的保守结果。
+
 基础函数语料另用 seed `1901/1902` 测试 arithmetic 和 flatten-switch，线性/递归各一组：
 每组 `128` 次 C 对照全部匹配，`768` 次 LLVM 比较中 `384` 次完整匹配、`384` 次明确
 `incomplete`，`different=0`。
@@ -30,7 +37,7 @@ tail call 和 noreturn API。plain O2/PLT 共 `480` 次静态执行：
 
 - `352` 次精确 API 边界匹配；
 - `128` 次完整 root 返回匹配；
-- Host/C 对照 `224/224`；
+- Host 对照 `224/224`，C 对照 `128/128`；
 - 错误内存属性、错误入口、unlifted 和错误导入来源均为 `0`。
 
 Flatten 后的外部语料 `64/64` 次执行都在到达 API 前停在未解决分发，统一记为控制流
