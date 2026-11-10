@@ -1784,8 +1784,9 @@ class LLVMLifter:
 
         Register promotion is optional. Exact-width and proven little-endian
         byte facts cross acyclic CFG edges; differing values at a join use a
-        Guest-memory PHI. Loop facts cross a backedge only after an exact invariant check. Calls, unknown
-        aliases and partial overlaps remain barriers otherwise. The default
+        Guest-memory PHI. Loop facts cross a backedge only after an exact invariant check. Calls with
+        no proven LLVM memory effect, unknown aliases and partial overlaps remain barriers otherwise.
+        The default
         optimization pipeline does not invoke this stage.
         """
         if type(max_rewrites) is not int or not 0 <= max_rewrites <= 0xffffffffffffffff:

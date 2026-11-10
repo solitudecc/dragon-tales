@@ -186,6 +186,10 @@ bool isMemoryBaseLoad(const llvm::LoadInst &load, const llvm::Function &function
   return base == function.getArg(1) && offset == 0;
 }
 
+bool callPreservesMemory(const llvm::CallBase &call) {
+  return call.doesNotAccessMemory() || call.onlyReadsMemory();
+}
+
 bool isKnownLocalStore(const llvm::StoreInst &store,
                        const std::unordered_set<llvm::Value *> &memoryBases,
                        const llvm::DataLayout &layout) {
@@ -379,9 +383,10 @@ void runByteForwarding(llvm::Function &function,
     for (auto it = block->begin(); it != block->end();) {
       auto &instruction = *it++;
       if (auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
-        if (!call->getCalledFunction() ||
-            !call->getCalledFunction()->isIntrinsic() ||
-            call->getCalledFunction()->getIntrinsicID() != llvm::Intrinsic::lifetime_start)
+        const bool lifetimeStart = call->getCalledFunction() &&
+            call->getCalledFunction()->isIntrinsic() &&
+            call->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
+        if (!lifetimeStart && !callPreservesMemory(*call))
           facts.clear();
         continue;
       }
@@ -603,9 +608,10 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
         for (auto it = block->begin(); it != block->end();) {
           auto &instruction = *it++;
           if (auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
-            if (!call->getCalledFunction() ||
-                !call->getCalledFunction()->isIntrinsic() ||
-                call->getCalledFunction()->getIntrinsicID() != llvm::Intrinsic::lifetime_start) {
+            const bool lifetimeStart = call->getCalledFunction() &&
+                call->getCalledFunction()->isIntrinsic() &&
+                call->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
+            if (!lifetimeStart && !callPreservesMemory(*call)) {
               facts.clear();
               ++stats.callBarriers;
             }

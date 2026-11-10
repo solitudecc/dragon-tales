@@ -816,8 +816,9 @@
 
   // Explicit S2 Guest-memory SSA. It promotes registers when requested, then
   // forwards exact-width and proven byte facts across acyclic CFG edges and inserts PHIs at
-  // joins with differing values. Calls, unknown aliases and partial overlaps
-  // remain barriers; loop facts require an exact invariant check.
+  // joins with differing values. Calls without a proven IR memory effect,
+  // unknown aliases and partial overlaps remain barriers; readnone/readonly
+  // calls are preserved from their LLVM attributes.
   int dragon_llvm_lifter_run_guest_memory_ssa(dragon_llvm_lifter_t* l,
       size_t max_rewrites, int run_mem2reg, dragon_memory_forward_stats_t* out);
 

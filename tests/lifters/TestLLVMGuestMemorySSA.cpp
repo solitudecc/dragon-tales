@@ -61,8 +61,10 @@ std::size_t phiNodes(const llvm::Module &module) {
 void verify(const llvm::Module &module) {
   std::string error;
   llvm::raw_string_ostream stream{error};
+  const bool invalid = llvm::verifyModule(module, &stream);
+  stream.flush();
   INFO(error);
-  CHECK_FALSE(llvm::verifyModule(module, &stream));
+  CHECK_FALSE(invalid);
 }
 } // namespace
 
@@ -113,6 +115,39 @@ TEST_CASE("S2 does not forward across a call or an overlapping partial write",
   CHECK(stats.callBarriers >= 1);
   CHECK(stats.loadsForwarded == 0);
   verify(lifter.module());
+}
+
+TEST_CASE("S3 preserves Guest facts across an IR readnone call",
+          "[llvm][guest-memory-ssa]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"guest-memory-readnone", context};
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                       {ptr, ptr, ptr, ptr}, false);
+  auto *function = llvm::Function::Create(type, llvm::Function::ExternalLinkage,
+                                          "readnone_case", module);
+  auto *pureType = llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false);
+  auto *pure = llvm::Function::Create(pureType, llvm::Function::ExternalLinkage,
+                                      "pure_helper", module);
+  pure->setDoesNotAccessMemory();
+  auto args = function->arg_begin();
+  ++args;
+  auto *memory = &*args++;
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  llvm::IRBuilder<> builder(entry);
+  auto *data = builder.CreateLoad(ptr, memory);
+  auto *slot = builder.CreateGEP(builder.getInt8Ty(), data, builder.getInt64(0x4000));
+  builder.CreateStore(builder.getInt64(7), slot);
+  builder.CreateCall(pure);
+  builder.CreateLoad(builder.getInt64Ty(), slot);
+  builder.CreateRetVoid();
+
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(
+      module, MemoryForwardOptions{65536, false});
+  CHECK(stats.available);
+  CHECK(stats.loadsForwarded >= 1);
+  CHECK(integerLoads(module) == 0);
+  verify(module);
 }
 
 TEST_CASE("S2 keeps a partially uncovered concrete slot conservative",

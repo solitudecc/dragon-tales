@@ -263,6 +263,8 @@ mirrors optionally promote registers, then forward exact-width and proven byte
 Guest LOADs from prior LOAD/STORE facts. Acyclic CFG edges carry facts; joins keep facts present
 on every edge and insert PHIs for differing values. Calls, unknown aliases,
 volatile/atomic accesses and partial overlaps remain conservative barriers.
+Calls preserve facts only when their LLVM memory effects prove readnone/readonly;
+ordinary calls remain barriers.
 Loop facts cross a backedge only after an exact entry/backedge check; a canonical
 two-block loop may use a loop-carried PHI when its backedge value is loop-independent.
 Unknown loop effects and other shapes remain barriers; no general loop fixed point is guessed. Default
