@@ -261,6 +261,33 @@ bool onlyPHIsAndTerminator(const llvm::BasicBlock &block) {
   return true;
 }
 
+bool onlyPHIsAndOneLoad(const llvm::BasicBlock &block,
+                        const llvm::LoadInst &load) {
+  bool sawLoad = false;
+  for (const auto &instruction : block) {
+    if (&instruction == block.getTerminator()) break;
+    if (&instruction == &load) {
+      if (sawLoad) return false;
+      sawLoad = true;
+      continue;
+    }
+    if (!llvm::isa<llvm::PHINode>(&instruction)) return false;
+  }
+  return sawLoad;
+}
+
+llvm::StoreInst *immediateStateStore(llvm::BasicBlock &block,
+                                     const llvm::Value *pointer) {
+  auto iterator = block.getTerminator()->getIterator();
+  if (iterator == block.begin()) return nullptr;
+  --iterator;
+  auto *store = llvm::dyn_cast<llvm::StoreInst>(&*iterator);
+  if (!store || store->isVolatile() || store->isAtomic() ||
+      store->getPointerOperand() != pointer)
+    return nullptr;
+  return store;
+}
+
 unsigned successorCount(const llvm::Instruction *terminator,
                         const llvm::BasicBlock *target) {
   unsigned count = 0;
@@ -293,19 +320,41 @@ llvm::BasicBlock *targetFor(llvm::SwitchInst &switchInst,
 bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
                     const DeflatteningOptions &options,
                     std::vector<EdgePlan> &plans) {
-  if (!onlyPHIsAndTerminator(dispatch)) return false;
   auto *state = llvm::dyn_cast<llvm::PHINode>(switchInst.getCondition());
-  if (!state || state->getParent() != &dispatch || !state->hasOneUse())
+  auto *stateLoad = llvm::dyn_cast<llvm::LoadInst>(switchInst.getCondition());
+  if (state) {
+    if (!onlyPHIsAndTerminator(dispatch) || state->getParent() != &dispatch ||
+        !state->hasOneUse() || !state->getNumIncomingValues() ||
+        state->getNumIncomingValues() > options.maxIncomingEdges)
+      return false;
+  } else if (stateLoad) {
+    // A load-backed dispatcher is accepted only when each incoming block ends
+    // in the exact store feeding the load. We do not chase aliases, calls or
+    // stores in other functions; those remain unresolved.
+    if (stateLoad->getParent() != &dispatch || !stateLoad->hasOneUse() ||
+        !onlyPHIsAndOneLoad(dispatch, *stateLoad))
+      return false;
+  } else {
     return false;
-  if (!state->getNumIncomingValues() ||
-      state->getNumIncomingValues() > options.maxIncomingEdges)
-    return false;
+  }
+
+  std::vector<llvm::BasicBlock *> predecessors;
+  if (state) {
+    predecessors.reserve(state->getNumIncomingValues());
+    for (unsigned index = 0; index < state->getNumIncomingValues(); ++index)
+      predecessors.push_back(state->getIncomingBlock(index));
+  } else {
+    for (auto *predecessor : llvm::predecessors(&dispatch))
+      predecessors.push_back(predecessor);
+    if (predecessors.empty() || predecessors.size() > options.maxIncomingEdges)
+      return false;
+  }
 
   std::unordered_set<const llvm::BasicBlock *> seen;
   std::vector<EdgePlan> candidate;
-  candidate.reserve(state->getNumIncomingValues());
-  for (unsigned index = 0; index < state->getNumIncomingValues(); ++index) {
-    auto *predecessor = state->getIncomingBlock(index);
+  candidate.reserve(predecessors.size());
+  for (unsigned index = 0; index < predecessors.size(); ++index) {
+    auto *predecessor = predecessors[index];
     if (!predecessor || predecessor == &dispatch ||
         !seen.insert(predecessor).second)
       return false;
@@ -315,9 +364,19 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
     auto edge = soleSuccessorIndex(terminator, &dispatch);
     if (!edge) return false;
 
+    const llvm::Value *incomingValue = nullptr;
+    if (state) {
+      incomingValue = state->getIncomingValue(index);
+    } else {
+      auto *store = immediateStateStore(*predecessor,
+                                        stateLoad->getPointerOperand());
+      if (!store) return false;
+      incomingValue = store->getValueOperand();
+    }
+
     std::size_t nodes = 0;
     Active active;
-    auto values = finiteConstants(state->getIncomingValue(index), nodes,
+    auto values = finiteConstants(incomingValue, nodes,
                                   options.maxExpressionNodes,
                                   options.maxValues, active);
     if (!values || values->empty() ||
