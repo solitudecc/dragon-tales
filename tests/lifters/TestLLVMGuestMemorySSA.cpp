@@ -4,6 +4,7 @@
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/raw_ostream.h>
@@ -145,6 +146,60 @@ TEST_CASE("S3 preserves Guest facts across an IR readnone call",
   const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(
       module, MemoryForwardOptions{65536, false});
   CHECK(stats.available);
+  CHECK(stats.loadsForwarded >= 1);
+  CHECK(integerLoads(module) == 0);
+  verify(module);
+}
+
+TEST_CASE("S3 preserves Guest facts across a proven internal leaf call",
+          "[llvm][guest-memory-ssa]") {
+  // A one-instruction RET graph is enough to prove that the explicitly
+  // annotated internal target has no Guest-memory writes.  The IR callee is
+  // kept as a declaration: the proof source is the frozen disassembly graph,
+  // never the function/import spelling.
+  Configuration config;
+  config.disassemblyStrategy = DisassemblyStrategy::LINEAR_SWEEP;
+  Graph graph{Architecture::X86_64, config};
+  Disassembler dis{Architecture::X86_64, config};
+  const Bytes leafCode{0xc3};
+  dis.disassemble(leafCode, 0x2000, graph);
+  REQUIRE(Function{&graph, 0x2000}.isValid());
+
+  llvm::LLVMContext context;
+  llvm::Module module{"guest-memory-leaf-call", context};
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                       {ptr, ptr, ptr, ptr}, false);
+  auto *function = llvm::Function::Create(type, llvm::Function::ExternalLinkage,
+                                          "leaf_call_case", module);
+  auto *callee = llvm::Function::Create(
+      type, llvm::Function::ExternalLinkage, "arbitrary_internal_name", module);
+  auto args = function->arg_begin();
+  ++args;
+  auto *memory = &*args++;
+  auto *entryBlock = llvm::BasicBlock::Create(context, "entry", function);
+  llvm::IRBuilder<> builder(entryBlock);
+  auto *data = builder.CreateLoad(ptr, memory);
+  auto *slot = builder.CreateGEP(builder.getInt8Ty(), data,
+                                 builder.getInt64(0x4000));
+  builder.CreateStore(builder.getInt64(7), slot);
+  auto *call = builder.CreateCall(callee, {function->getArg(0), function->getArg(1),
+                                          function->getArg(2), function->getArg(3)});
+  call->setMetadata(
+      "dragon.guest.call.target",
+      llvm::MDNode::get(context, llvm::ConstantAsMetadata::get(
+          llvm::ConstantInt::get(builder.getInt64Ty(), 0x2000))));
+  builder.CreateLoad(builder.getInt64Ty(), slot);
+  builder.CreateRetVoid();
+
+  MemoryForwardOptions options;
+  options.runMem2Reg = false;
+  options.proveLeafCalls = true;
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(
+      module, options, &graph);
+  CHECK(stats.available);
+  CHECK(stats.leafCallsPreserved >= 1);
+  CHECK(stats.callBarriers == 0);
   CHECK(stats.loadsForwarded >= 1);
   CHECK(integerLoads(module) == 0);
   verify(module);

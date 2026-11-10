@@ -17,6 +17,7 @@
 #include "LLVMPreparedRegion.hpp"
 #include "LLVMLiftProvenance.hpp"
 #include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/Metadata.h>
 
 #include <llvm/Analysis/CGSCCPassManager.h>
 #include <llvm/Analysis/LoopAnalysisManager.h>
@@ -1359,6 +1360,16 @@ dragon::llvmlifter::LLVMLifter::runDispatcherSpecialization(
   return ::dragon::llvmlifter::runDispatcherSpecialization(*module_, options);
 }
 
+dragon::llvmlifter::MemoryForwardStats
+dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(
+    const Graph &graph, const MemoryForwardOptions &options) {
+  if (mode_ == ExecutionMode::Legacy || module_->empty())
+    return {};
+  if (options.runMem2Reg)
+    runMem2Reg();
+  return detail::runGuestMemorySSA(*module_, options, &graph);
+}
+
 std::string dragon::llvmlifter::LLVMLifter::ir() const {
   std::string out;
   llvm::raw_string_ostream os(out);
@@ -1450,6 +1461,17 @@ void dragon::llvmlifter::LLVMLifter::emitStaticCall(const ignil::Op &op,
   }
   auto callee=module_->getOrInsertFunction(calleeName,type);
   auto *call=builder.CreateCall(callee,{fn->getArg(0),fn->getArg(1),fn->getArg(2),fn->getArg(3)});
+  // The numeric Guest target is the sole contract used by the optional
+  // LeafCallProof consumer.  External/unknown targets intentionally carry no
+  // metadata and remain ordinary CALL barriers.
+  if (calleeName != "dragon_static_external") {
+    auto *targetMetadata = llvm::MDNode::get(
+        *ctx_, llvm::ConstantAsMetadata::get(
+                   llvm::ConstantInt::get(
+                       builder.getInt64Ty(),
+                       llvm::cast<llvm::ConstantInt>(target)->getZExtValue())));
+    call->setMetadata("dragon.guest.call.target", targetMetadata);
+  }
   reloadRegisters(regs,regsPtr,builder);
   const auto pcOffset=arch_==Architecture::ARM64 ? 264u : 128u;
   auto *pc=builder.CreateLoad(builder.getInt64Ty(),regs.at(pcOffset).at(64));

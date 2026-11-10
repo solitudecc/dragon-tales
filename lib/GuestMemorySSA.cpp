@@ -1,9 +1,12 @@
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 
+#include "analysis/LeafCallEffects.hpp"
+#include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/llvm/Execution.hpp>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/IR/Value.h>
@@ -190,6 +193,51 @@ bool callPreservesMemory(const llvm::CallBase &call) {
   return call.doesNotAccessMemory() || call.onlyReadsMemory();
 }
 
+// A proof is keyed by the explicit target metadata emitted for a static
+// internal call.  It is deliberately narrower than the full LeafCallProof:
+// Guest-memory SSA can consume only a proof that the callee writes no memory
+// at all.  Stack writes and constants are retained as barriers because this
+// pass has no callee-entry-SP/global-address relation to the Guest base.
+using LeafCallCache = std::map<std::uint64_t, bool>;
+
+bool provenLeafNoMemoryWrite(const llvm::CallBase &call, const Graph *graph,
+                             const MemoryForwardOptions &options,
+                             LeafCallCache &cache) {
+  if (!options.proveLeafCalls || !graph)
+    return false;
+  const auto *metadata = call.getMetadata("dragon.guest.call.target");
+  if (!metadata || metadata->getNumOperands() != 1)
+    return false;
+  const auto *constant = llvm::mdconst::dyn_extract<llvm::ConstantInt>(
+      metadata->getOperand(0));
+  if (!constant || constant->getBitWidth() > 64)
+    return false;
+  const auto target = constant->getZExtValue();
+  if (const auto it = cache.find(target); it != cache.end())
+    return it->second;
+
+  const auto proof = analysis::detail::proveLeafCallee(
+      *graph, target, options.maxCallBlocks, options.maxCallOperations,
+      options.maxCallFacts, {});
+  const bool safe = proof.proven && proof.stackWriteBytes.empty() &&
+                    proof.memoryConstants.empty();
+  cache.emplace(target, safe);
+  return safe;
+}
+
+enum class CallMemoryEffect { Barrier, ReadOnly, ProvenLeafNoWrite };
+
+CallMemoryEffect callMemoryEffect(const llvm::CallBase &call,
+                                  const Graph *graph,
+                                  const MemoryForwardOptions &options,
+                                  LeafCallCache &cache) {
+  if (callPreservesMemory(call))
+    return CallMemoryEffect::ReadOnly;
+  if (provenLeafNoMemoryWrite(call, graph, options, cache))
+    return CallMemoryEffect::ProvenLeafNoWrite;
+  return CallMemoryEffect::Barrier;
+}
+
 bool isKnownLocalStore(const llvm::StoreInst &store,
                        const std::unordered_set<llvm::Value *> &memoryBases,
                        const llvm::DataLayout &layout) {
@@ -304,7 +352,8 @@ void runByteForwarding(llvm::Function &function,
                        const std::unordered_set<llvm::Value *> &memoryBases,
                        const llvm::DataLayout &layout,
                        const MemoryForwardOptions &options,
-                       MemoryForwardStats &stats) {
+                       MemoryForwardStats &stats, const Graph *graph,
+                       LeafCallCache &leafCallCache) {
   if (!layout.isLittleEndian()) return;
   llvm::DominatorTree dom(function);
   std::unordered_set<llvm::BasicBlock *> reachable;
@@ -386,7 +435,9 @@ void runByteForwarding(llvm::Function &function,
         const bool lifetimeStart = call->getCalledFunction() &&
             call->getCalledFunction()->isIntrinsic() &&
             call->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
-        if (!lifetimeStart && !callPreservesMemory(*call))
+        if (!lifetimeStart && callMemoryEffect(*call, graph, options,
+                                               leafCallCache) ==
+                                CallMemoryEffect::Barrier)
           facts.clear();
         continue;
       }
@@ -462,10 +513,18 @@ void runByteForwarding(llvm::Function &function,
 
 MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
                                      const MemoryForwardOptions &options) {
+  return runGuestMemorySSA(module, options, nullptr);
+}
+
+MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
+                                     const MemoryForwardOptions &options,
+                                     const Graph *graph) {
   MemoryForwardStats stats;
   stats.available = true;
   if (!options.maxRewrites)
     return stats;
+
+  LeafCallCache leafCallCache;
 
   for (auto &function : module) {
     if (function.isDeclaration() || function.arg_size() < 2)
@@ -611,9 +670,15 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             const bool lifetimeStart = call->getCalledFunction() &&
                 call->getCalledFunction()->isIntrinsic() &&
                 call->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
-            if (!lifetimeStart && !callPreservesMemory(*call)) {
+            const auto effect = lifetimeStart
+                ? CallMemoryEffect::ReadOnly
+                : callMemoryEffect(*call, graph, options, leafCallCache);
+            if (!lifetimeStart && effect == CallMemoryEffect::Barrier) {
               facts.clear();
               ++stats.callBarriers;
+            } else if (!lifetimeStart &&
+                       effect == CallMemoryEffect::ProvenLeafNoWrite) {
+              ++stats.leafCallsPreserved;
             }
             continue;
           }
@@ -846,7 +911,8 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
       }
     }
     if (stats.loadsForwarded < options.maxRewrites)
-      runByteForwarding(function, memoryBases, module.getDataLayout(), options, stats);
+      runByteForwarding(function, memoryBases, module.getDataLayout(), options,
+                        stats, graph, leafCallCache);
     if (stats.loadsForwarded >= options.maxRewrites) {
       stats.complete = false;
       ++stats.budgetExhausted;

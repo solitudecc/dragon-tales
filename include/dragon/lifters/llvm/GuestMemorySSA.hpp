@@ -1,9 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace llvm {
 class Module;
+}
+
+namespace dragon {
+class Graph;
 }
 
 namespace dragon::llvmlifter {
@@ -19,6 +24,12 @@ struct MemoryForwardOptions {
   bool runMem2Reg = true;
   bool enableCrossBlock = true;
   bool enablePhi = true;
+  // Prove only explicitly annotated static internal calls.  The default
+  // remains a CALL barrier; no symbol/import-name heuristics are used.
+  bool proveLeafCalls = false;
+  std::uint32_t maxCallBlocks = 32;
+  std::uint32_t maxCallOperations = 4096;
+  std::uint32_t maxCallFacts = 8192;
 };
 
 struct MemoryForwardStats {
@@ -38,10 +49,15 @@ struct MemoryForwardStats {
   std::size_t loopBarriers = 0;
   std::size_t budgetExhausted = 0;
   std::size_t byteRebuilds = 0;
+  std::size_t leafCallsPreserved = 0;
 };
 
 namespace detail {
+// Keep the original two-argument symbol for source and binary compatibility;
+// the graph-aware overload is an explicit opt-in contract.
 MemoryForwardStats runGuestMemorySSA(llvm::Module &, const MemoryForwardOptions &);
+MemoryForwardStats runGuestMemorySSA(llvm::Module &, const MemoryForwardOptions &,
+                                     const Graph *graph);
 }
 
 } // namespace dragon::llvmlifter

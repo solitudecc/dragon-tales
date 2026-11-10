@@ -188,6 +188,12 @@ class LLVMLifter {
   [[nodiscard]] DispatcherSpecializationStats runDispatcherSpecialization(
       const DispatcherSpecializationOptions &options = {});
 
+  /// Graph-aware opt-in variant. When `proveLeafCalls` is enabled, it may
+  /// consume a bounded LeafCallProof for static internal calls annotated by
+  /// the lifter; unknown or non-proven effects remain CALL barriers.
+  [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
+      const Graph &graph, const MemoryForwardOptions &options = {});
+
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();
 

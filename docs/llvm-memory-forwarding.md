@@ -24,6 +24,20 @@
 跨块传播或冲突值 PHI；C shim/Python 使用完整的默认 S2 行为，并返回
 `phis_inserted`、`join_barriers`、`loop_barriers` 和 `byte_rebuilds` 统计。
 
+## 已证明的内部调用（可选）
+
+需要把静态内部调用当作内存 SSA 中的无写入边界时，C++ 调用者可以传入同一份
+`Graph` 并设置 `MemoryForwardOptions::proveLeafCalls=true`，再调用
+`LLVMLifter::runGuestMemorySSA(graph, options)` 或三参数的 detail 函数。静态提升器只给
+能确定数值目标的内部调用附加 `dragon.guest.call.target` 元数据；摘要按目标地址查找，
+不读取函数名、导入名或 LLVM linkage。
+
+当前消费契约故意很窄：只有 `LeafCallProof::proven` 且没有任何
+`stackWriteBytes` 或 `memoryConstants` 的证明，才允许 Guest facts 穿过调用。堆栈写集、
+全局/堆常量、未知目标、超预算和其它失败证明继续作为 CALL barrier；因此不会把尚未建立
+Guest 地址关系的摘要误当作无别名证明。`proveLeafCalls` 默认为关闭，原来的两参数
+`detail::runGuestMemorySSA` 符号也保留，C shim/Python 的默认行为不变。
+
 ## 验证
 
 S2 新增菱形、循环不变槽、规范循环 PHI 和完全覆盖窄读回归；旧实现对窄读没有转发。
