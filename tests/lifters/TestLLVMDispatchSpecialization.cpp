@@ -314,6 +314,57 @@ TEST_CASE("LLVM deflattening consumes a complete cross-call GuestState summary",
   verify(lifter.module());
 }
 
+TEST_CASE("LLVM deflattening consumes a direct caller GuestState store",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *i64 = llvm::Type::getInt64Ty(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false);
+  auto *callee = llvm::Function::Create(
+      type, llvm::GlobalValue::InternalLinkage, "direct_state_dispatch",
+      lifter.module());
+  auto *caller = llvm::Function::Create(
+      type, llvm::GlobalValue::InternalLinkage, "direct_state_caller",
+      lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", callee);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", callee);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", callee);
+  llvm::IRBuilder<> builder(entry);
+  auto *slot = builder.CreateGEP(builder.getInt8Ty(), callee->getArg(0),
+                                 builder.getInt64(128));
+  auto *state = builder.CreateLoad(i64, slot, "state");
+  auto *dispatch = builder.CreateSwitch(state, fallback, 1);
+  dispatch->addCase(llvm::ConstantInt::get(i64, 42), taken);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+
+  auto *callerEntry = llvm::BasicBlock::Create(context, "entry", caller);
+  llvm::IRBuilder<> callerBuilder(callerEntry);
+  auto *callerSlot = callerBuilder.CreateGEP(
+      callerBuilder.getInt8Ty(), caller->getArg(0), callerBuilder.getInt64(128));
+  callerBuilder.CreateStore(llvm::ConstantInt::get(i64, 42), callerSlot);
+  callerBuilder.CreateCall(callee, {caller->getArg(0)});
+  callerBuilder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK(report.changed);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 1);
+  CHECK(report.runs[0].result.counters.at("cross_call_summaries_consumed") == 0);
+  CHECK(report.runs[0].result.counters.at("cross_call_direct_stores_consumed") == 1);
+  CHECK(llvm::isa<llvm::BranchInst>(entry->getTerminator()));
+  CHECK(entry->getTerminator()->getSuccessor(0) == taken);
+  CHECK(switches(lifter.module()) == 0);
+  verify(lifter.module());
+}
+
 TEST_CASE("LLVM deflattening keeps externally visible cross-call state explicit",
           "[llvm][dispatch-deflatten]") {
   llvmlifter::LLVMLifter lifter{Architecture::X86_64};

@@ -20,17 +20,18 @@
 - `dispatch-specialize` 折叠当前 IR 中唯一可证明的常量 branch/switch 条件；
   `dispatch-deflatten` 对状态 PHI、有限状态集合和同函数 load-backed selector 做证明型直连，
   并保留未知状态和未证明分发器。
-- `CallEffectSummary v2` 可携带 `GuestState` 的完整常量写。对本地链接、所有直接调用点都
-  有完整且一致摘要的 callee，`dispatch-deflatten` 可以把入口 load-backed dispatcher 改成
-  直连；外部可见函数、未知/间接调用、不完整摘要和多目标调用保持 unresolved。
+- `CallEffectSummary v2` 可携带 `GuestState` 的完整常量写；调用点所在块的直接常量 STORE
+  也可作为同样的局部证明。对本地链接、所有直接调用点都有完整且一致事实的 callee，
+  `dispatch-deflatten` 可以把入口 load-backed dispatcher 改成直连；外部可见函数、未知/间接
+  调用、不完整摘要和多目标调用保持 unresolved。
 
 这几个组件都是显式选择的 LLVM/分析能力，不生成新的去混淆二进制，也不按 Tigress、OLLVM、
 函数名或固定地址匹配。它们覆盖普通控制流平坦化、常量/有限状态分发、线性 MBA 和代数型
 不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
 
-截至 `c75af12` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
-`856/856`，无 Z3 构建 `721/721`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
+截至当前跨调用直接 STORE 修复的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
+`857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
 地址关系、完整 GuestMemory 常量写和显式调用摘要；去平坦化覆盖有限状态集合、同函数
 load-backed selector，以及受摘要约束的跨函数 GuestState selector。未知调用仍然 barrier。
 新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、非法摘要、外部可见
@@ -246,7 +247,7 @@ LLVM MemorySSA 可用于加速查找内存依赖，但它本身不会把 Guest �
 ### 6.3 调用摘要先接消费者，再扩分析域
 
 当前已落地第一版消费者：`CallEffectSummary v2` 的 `GuestMemory` 完整常量写可被
-`guest-memory-ssa` 消费，`GuestState` 完整槽写可被受限的跨调用 `dispatch-deflatten`
+`guest-memory-ssa` 消费，`GuestState` 完整槽写和调用点直接常量 STORE 可被受限的跨调用 `dispatch-deflatten`
 消费。后者只接受本地链接且调用图闭合、所有直接调用点摘要完整并映射到同一目标的情况；
 它不自动生成外部函数模型，也不把不同调用点的值合并成一个共享 callee 结论。
 

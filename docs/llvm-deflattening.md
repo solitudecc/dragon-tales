@@ -14,11 +14,11 @@
 ## 跨调用 GuestState 专门化
 
 开启默认的 `consumeCallEffectSummaries` 后，Pass 还可以处理一类封闭的跨函数入口：目标函数必须
-是本地链接、所有直接调用点都可枚举；每个调用点都要附带 `CallEffectSummary v2`，声明完整的
-`KnownRanges` 写集，并对与 dispatcher LOAD 完全重合的 `GuestState` 槽提供一个 `complete`
-常量。所有调用点的常量必须映射到同一个 LLVM switch 目标，之后才把 callee 入口的 switch
-改成直连。外部可见函数、未知/间接调用者、不完整摘要、部分重叠写和映射到不同目标的调用点
-都保持 unresolved。
+是本地链接、所有直接调用点都可枚举；每个调用点要么附带 `CallEffectSummary v2`，声明完整的
+`KnownRanges` 写集并对与 dispatcher LOAD 完全重合的 `GuestState` 槽提供一个 `complete` 常量，
+要么在调用点所在块中有一个可证明覆盖该槽的直接常量 STORE。所有调用点的常量必须映射到同一个
+LLVM switch 目标，之后才把 callee 入口的 switch 改成直连。外部可见函数、未知/间接调用者、
+不完整摘要、部分重叠写和映射到不同目标的调用点都保持 unresolved。
 
 这是一种调用图闭合条件下的全局专门化，不是把一个调用点的动态值传播给共享 callee。需要不同
 调用点分别进入不同目标时，应保留通用 callee，或由可信插件先生成调用点 clone；当前 Pass 不

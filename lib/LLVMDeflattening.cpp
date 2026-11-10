@@ -7,6 +7,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
+#include <llvm/Analysis/ValueTracking.h>
 
 #include <algorithm>
 #include <limits>
@@ -389,6 +390,58 @@ bool rangesOverlap(std::uint64_t leftOffset, std::uint32_t leftBytes,
          rightOffset < leftOffset + leftBytes;
 }
 
+std::optional<unsigned> integerBytes(const llvm::Type *type) {
+  if (!type || !type->isIntegerTy()) return std::nullopt;
+  const unsigned bits = type->getIntegerBitWidth();
+  if (!bits || bits % 8 || bits > 64) return std::nullopt;
+  return bits / 8;
+}
+
+std::optional<llvm::APInt> directCallerStateConstant(
+    const llvm::CallBase &call, std::uint64_t slot, unsigned bytes) {
+  const auto *caller = call.getFunction();
+  if (!caller || caller->arg_size() == 0 || !call.arg_size())
+    return std::nullopt;
+  // The direct-store proof is relative to the caller's outer GuestState
+  // argument. Do not normalize a separately loaded pointer to the same zero
+  // point: two nested state objects could otherwise be confused.
+  if (call.getArgOperand(0)->stripPointerCasts() != caller->getArg(0))
+    return std::nullopt;
+
+  auto *block = call.getParent();
+  for (auto iterator = call.getIterator(); iterator != block->begin();) {
+    --iterator;
+    auto &instruction = *iterator;
+    if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+      if (store->isVolatile() || store->isAtomic()) return std::nullopt;
+      const auto storeOffset = stateSlotOffset(
+          store->getPointerOperand(), *caller,
+          caller->getParent()->getDataLayout());
+      const auto storeBytes = integerBytes(store->getValueOperand()->getType());
+      if (!storeOffset || !storeBytes) {
+        const auto *underlying = llvm::getUnderlyingObject(
+            store->getPointerOperand(), 32);
+        if (llvm::isa<llvm::AllocaInst>(underlying)) continue;
+        return std::nullopt;
+      }
+      if (!rangesOverlap(*storeOffset, *storeBytes, slot, bytes)) continue;
+      if (*storeOffset != slot || *storeBytes != bytes) return std::nullopt;
+      const auto *constant = llvm::dyn_cast<llvm::ConstantInt>(
+          store->getValueOperand());
+      if (!constant || constant->getBitWidth() != bytes * 8)
+        return std::nullopt;
+      return constant->getValue();
+    }
+    if (auto *otherCall = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+      if (!otherCall->doesNotAccessMemory() && !otherCall->onlyReadsMemory())
+        return std::nullopt;
+      continue;
+    }
+    if (instruction.mayWriteToMemory()) return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 bool directCallUsersOnly(const llvm::Function &callee,
                          std::size_t maxCallSites,
                          std::vector<const llvm::CallBase *> &calls) {
@@ -401,10 +454,55 @@ bool directCallUsersOnly(const llvm::Function &callee,
   return !calls.empty();
 }
 
+enum class CrossCallProofKind { Summary, DirectStore };
+
+struct CrossCallProof {
+  FiniteConstants values;
+  CrossCallProofKind kind = CrossCallProofKind::Summary;
+};
+
+std::optional<CrossCallProof> crossCallProof(
+    const llvm::CallBase &call, std::uint64_t slot, unsigned bytes) {
+  if (call.getMetadata("dragon.call.effect")) {
+    const auto summary = getCallEffectSummary(call);
+    if (!summary || !summary->proven ||
+        summary->memory != CallMemoryEffectKind::KnownRanges)
+      return std::nullopt;
+    std::size_t selectorWrites = 0;
+    for (const auto &write : summary->writes) {
+      if (write.base != CallMemoryRange::Base::GuestState ||
+          !rangesOverlap(write.offset, write.bytes, slot, bytes))
+        continue;
+      ++selectorWrites;
+      if (write.offset != slot || write.bytes != bytes) return std::nullopt;
+    }
+    if (selectorWrites != 1) return std::nullopt;
+
+    CrossCallProof proof;
+    proof.kind = CrossCallProofKind::Summary;
+    for (const auto &constant : summary->memoryConstants) {
+      if (constant.range.base != CallMemoryRange::Base::GuestState ||
+          constant.range.offset != slot || constant.range.bytes != bytes)
+        continue;
+      if (!constant.complete) return std::nullopt;
+      if (!appendFinite(proof.values,
+                        llvm::APInt(bytes * 8, constant.value), 2))
+        return std::nullopt;
+    }
+    if (proof.values.size() != 1) return std::nullopt;
+    return proof;
+  }
+
+  auto constant = directCallerStateConstant(call, slot, bytes);
+  if (!constant) return std::nullopt;
+  return CrossCallProof{FiniteConstants{*constant},
+                        CrossCallProofKind::DirectStore};
+}
+
 std::optional<llvm::BasicBlock *> crossCallTarget(
     llvm::Function &callee, llvm::BasicBlock &dispatch,
     llvm::SwitchInst &switchInst, const DeflatteningOptions &options,
-    std::size_t &summariesConsumed) {
+    std::size_t &summariesConsumed, std::size_t &directStoresConsumed) {
   // An externally visible function may have callers outside this module.  A
   // module-local summary cannot prove those entries, so keep the dispatcher
   // explicit unless linkage itself closes the call graph.
@@ -430,27 +528,13 @@ std::optional<llvm::BasicBlock *> crossCallTarget(
   llvm::BasicBlock *chosenTarget = nullptr;
   std::size_t consumed = 0;
   for (const auto *call : calls) {
-    const auto summary = getCallEffectSummary(*call);
-    if (!summary || !summary->proven ||
-        summary->memory != CallMemoryEffectKind::KnownRanges)
-      return std::nullopt;
-    std::vector<llvm::APInt> values;
-    for (const auto &write : summary->writes) {
-      if (write.base != CallMemoryRange::Base::GuestState ||
-          !rangesOverlap(write.offset, write.bytes, *slot, bytes))
-        continue;
-      if (write.offset != *slot || write.bytes != bytes)
-        return std::nullopt;
-      for (const auto &constant : summary->memoryConstants) {
-        if (constant.range.base != write.base ||
-            constant.range.offset != write.offset ||
-            constant.range.bytes != write.bytes || !constant.complete)
-          continue;
-        values.emplace_back(width, constant.value);
-      }
-    }
-    if (values.empty()) return std::nullopt;
-    for (const auto &value : values) {
+    auto proof = crossCallProof(*call, *slot, bytes);
+    if (!proof || proof->values.empty()) return std::nullopt;
+    if (proof->kind == CrossCallProofKind::Summary)
+      ++summariesConsumed;
+    else
+      ++directStoresConsumed;
+    for (const auto &value : proof->values) {
       auto *target = targetFor(switchInst, value);
       if (!chosenTarget)
         chosenTarget = target;
@@ -459,9 +543,11 @@ std::optional<llvm::BasicBlock *> crossCallTarget(
     }
     ++consumed;
   }
-  if (!chosenTarget || chosenTarget == &dispatch || consumed != calls.size())
+  if (!chosenTarget || chosenTarget == &dispatch || hasAnyPHI(*chosenTarget) ||
+      consumed != calls.size())
     return std::nullopt;
-  summariesConsumed = consumed;
+  if (summariesConsumed + directStoresConsumed != consumed)
+    return std::nullopt;
   return chosenTarget;
 }
 
@@ -582,13 +668,16 @@ DeflatteningStats runProvableDeflattening(
       }
       std::vector<EdgePlan> plans;
       if (!planDispatcher(block, *switchInst, options, plans)) {
-        std::size_t consumed = 0;
+        std::size_t summariesConsumed = 0;
+        std::size_t directStoresConsumed = 0;
         if (auto target = crossCallTarget(function, block, *switchInst,
-                                          options, consumed)) {
+                                          options, summariesConsumed,
+                                          directStoresConsumed)) {
           replaceSwitchWithBranch(block, *switchInst, **target);
           ++stats.dispatchersRewritten;
           ++stats.crossCallDispatchersRewritten;
-          stats.crossCallSummariesConsumed += consumed;
+          stats.crossCallSummariesConsumed += summariesConsumed;
+          stats.crossCallDirectStoresConsumed += directStoresConsumed;
           stats.changed = true;
           continue;
         }

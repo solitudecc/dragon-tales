@@ -149,6 +149,7 @@ PassPipeline::PassPipeline(bool builtins) {
       {"edges_rewritten",stats.edgesRewritten},
       {"cross_call_dispatchers_rewritten",stats.crossCallDispatchersRewritten},
       {"cross_call_summaries_consumed",stats.crossCallSummariesConsumed},
+      {"cross_call_direct_stores_consumed",stats.crossCallDirectStoresConsumed},
       {"unresolved_dispatchers",stats.unresolvedDispatchers},
       {"budget_exhausted",stats.budgetExhausted}};
     return r;

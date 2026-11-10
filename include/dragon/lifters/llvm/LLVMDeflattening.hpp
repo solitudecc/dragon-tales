@@ -19,9 +19,10 @@ struct DeflatteningOptions {
   std::size_t maxIncomingEdges = 512;
   std::size_t maxExpressionNodes = 128;
   std::size_t maxValues = 16;
-  /// Consume only complete, proven CallEffectSummary metadata when a
-  /// load-backed dispatcher is entered through another lifted function.
-  /// Missing, malformed, incomplete or ambiguous summaries remain explicit.
+  /// Consume complete, proven cross-call state facts when a load-backed
+  /// dispatcher is entered through another lifted function. This includes
+  /// CallEffectSummary metadata and a directly dominating constant GuestState
+  /// store; missing, malformed, incomplete or ambiguous facts remain explicit.
   bool consumeCallEffectSummaries = true;
   std::size_t maxCrossCallSites = 256;
 };
@@ -35,6 +36,7 @@ struct DeflatteningStats {
   std::size_t edgesRewritten = 0;
   std::size_t crossCallDispatchersRewritten = 0;
   std::size_t crossCallSummariesConsumed = 0;
+  std::size_t crossCallDirectStoresConsumed = 0;
   std::size_t unresolvedDispatchers = 0;
   std::size_t budgetExhausted = 0;
 };
