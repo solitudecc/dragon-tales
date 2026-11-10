@@ -348,9 +348,8 @@ std::optional<std::uint64_t> stateSlotOffset(
   };
   auto *value = pointer->stripPointerCasts();
   if (value != pointer) return done(stateSlotOffset(value, function, layout, active));
-  if (function.arg_size() == 0 || value == function.getArg(0))
-    return done(value == function.getArg(0) ? std::optional<std::uint64_t>(0)
-                                            : std::nullopt);
+  if (function.arg_size() == 0) return done(std::nullopt);
+  if (value == function.getArg(0)) return done(std::uint64_t{0});
   if (const auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(value)) {
     auto base = stateSlotOffset(gep->getPointerOperand(), function, layout, active);
     if (!base) return done(std::nullopt);
