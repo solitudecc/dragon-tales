@@ -109,8 +109,7 @@ std::optional<std::uint64_t> integer(const llvm::MDOperand &operand) {
   return constant->getZExtValue();
 }
 
-std::optional<CallMemoryRange> parseRange(const llvm::MDOperand &operand) {
-  const auto *node = llvm::dyn_cast<llvm::MDNode>(operand);
+std::optional<CallMemoryRange> parseRangeNode(const llvm::MDNode *node) {
   if (!node || node->getNumOperands() != 3) return std::nullopt;
   const auto base = integer(node->getOperand(0));
   const auto offset = integer(node->getOperand(1));
@@ -122,6 +121,10 @@ std::optional<CallMemoryRange> parseRange(const llvm::MDOperand &operand) {
   return validRange(range) ? std::optional<CallMemoryRange>(range) : std::nullopt;
 }
 
+std::optional<CallMemoryRange> parseRange(const llvm::MDOperand &operand) {
+  return parseRangeNode(llvm::dyn_cast<llvm::MDNode>(operand));
+}
+
 std::optional<CallMemoryConstant>
 parseMemoryConstant(const llvm::MDOperand &operand) {
   const auto *node = llvm::dyn_cast<llvm::MDNode>(operand);
@@ -130,7 +133,7 @@ parseMemoryConstant(const llvm::MDOperand &operand) {
   const auto value = integer(node->getOperand(1));
   const auto complete = integer(node->getOperand(2));
   if (!range || !value || !complete || *complete > 1) return std::nullopt;
-  auto parsedRange = parseRange(range);
+  auto parsedRange = parseRangeNode(range);
   if (!parsedRange) return std::nullopt;
   CallMemoryConstant constant{*parsedRange, *value, *complete != 0};
   return validMemoryConstant(constant)
