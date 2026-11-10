@@ -32,6 +32,12 @@ bool validSummary(const CallEffectSummary &summary) {
        summary.memory == CallMemoryEffectKind::ReadOnly) &&
       !summary.writes.empty())
     return false;
+  // KnownRanges is a complete write footprint, not a promise that an
+  // unlisted write range is harmless. An empty footprint must use NoMemory or
+  // ReadOnly explicitly; otherwise the consumer would silently under-invalidate.
+  if (summary.memory == CallMemoryEffectKind::KnownRanges &&
+      summary.writes.empty())
+    return false;
   for (const auto &range : summary.reads)
     if (!validRange(range)) return false;
   for (const auto &range : summary.writes)

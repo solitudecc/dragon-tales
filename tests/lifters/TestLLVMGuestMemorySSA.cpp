@@ -290,8 +290,29 @@ TEST_CASE("S4 consumes explicit read-only call summaries but rejects writes",
     options.runMem2Reg = false;
     options.consumeCallEffectSummaries = true;
     const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
-    CHECK(stats.summaryCallsRejected >= 1);
+    CHECK(stats.summaryCallsPreserved >= 1);
+    CHECK(stats.summaryCallsRejected == 0);
     CHECK(stats.loadsForwarded == 0);
+    verify(*module);
+    delete module;
+    delete context;
+  }
+
+  {
+    CallEffectSummary summary;
+    summary.proven = true;
+    summary.memory = CallMemoryEffectKind::KnownRanges;
+    summary.writes.push_back(
+        {CallMemoryRange::Base::GuestMemory, 0x5000, 8});
+    auto [module, context] = makeModule(summary);
+    MemoryForwardOptions options;
+    options.runMem2Reg = false;
+    options.consumeCallEffectSummaries = true;
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
+    CHECK(stats.summaryCallsPreserved >= 1);
+    CHECK(stats.summaryCallsRejected == 0);
+    CHECK(stats.loadsForwarded >= 1);
+    CHECK(integerLoads(*module) == 0);
     verify(*module);
     delete module;
     delete context;

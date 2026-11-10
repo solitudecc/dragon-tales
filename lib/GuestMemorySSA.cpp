@@ -302,11 +302,15 @@ bool provenLeafNoMemoryWrite(const llvm::CallBase &call, const Graph *graph,
   return safe;
 }
 
+void invalidate(std::vector<Fact> &, const Access &, MemoryForwardStats &);
+
 enum class CallMemoryEffect {
   Barrier,
   ReadOnly,
   ProvenLeafNoWrite,
   ProvenSummaryNoWrite,
+  ProvenSummaryWrites,
+  SummaryRejected,
 };
 
 bool hasCallEffectSummary(const llvm::CallBase &call) {
@@ -324,10 +328,43 @@ CallMemoryEffect callMemoryEffect(const llvm::CallBase &call,
     if (summary && (summary->memory == CallMemoryEffectKind::NoMemory ||
                     summary->memory == CallMemoryEffectKind::ReadOnly))
       return CallMemoryEffect::ProvenSummaryNoWrite;
+    if (summary && summary->memory == CallMemoryEffectKind::KnownRanges) {
+      const bool guestRanges = std::all_of(
+          summary->writes.begin(), summary->writes.end(), [](const auto &range) {
+            return range.base == CallMemoryRange::Base::GuestMemory;
+          });
+      return guestRanges ? CallMemoryEffect::ProvenSummaryWrites
+                         : CallMemoryEffect::SummaryRejected;
+    }
+    if (hasCallEffectSummary(call))
+      return CallMemoryEffect::SummaryRejected;
   }
   if (provenLeafNoMemoryWrite(call, graph, options, cache))
     return CallMemoryEffect::ProvenLeafNoWrite;
   return CallMemoryEffect::Barrier;
+}
+
+bool invalidateSummaryWrites(std::vector<Fact> &facts,
+                             const CallEffectSummary &summary,
+                             MemoryForwardStats &stats) {
+  if (summary.memory != CallMemoryEffectKind::KnownRanges ||
+      !std::all_of(summary.writes.begin(), summary.writes.end(),
+                   [](const auto &range) {
+                     return range.base == CallMemoryRange::Base::GuestMemory;
+                   }))
+    return false;
+  std::vector<llvm::Value *> bases;
+  for (const auto &fact : facts)
+    if (fact.access.address.base &&
+        std::find(bases.begin(), bases.end(), fact.access.address.base) == bases.end())
+      bases.push_back(fact.access.address.base);
+  for (const auto &range : summary.writes)
+    for (auto *base : bases)
+      invalidate(facts,
+                 Access{nullptr, AddressKey{base, nullptr, range.offset, true},
+                        range.bytes, true, nullptr},
+                 stats);
+  return true;
 }
 
 bool isKnownLocalStore(const llvm::StoreInst &store,
@@ -388,6 +425,35 @@ struct BytePart {
 };
 
 using ByteFacts = std::map<llvm::Value *, std::map<std::uint64_t, BytePart>>;
+
+bool invalidateByteSummaryWrites(ByteFacts &facts,
+                                 const CallEffectSummary &summary) {
+  if (summary.memory != CallMemoryEffectKind::KnownRanges ||
+      !std::all_of(summary.writes.begin(), summary.writes.end(),
+                   [](const auto &range) {
+                     return range.base == CallMemoryRange::Base::GuestMemory;
+                   }))
+    return false;
+  for (const auto &range : summary.writes) {
+    if (range.offset > std::numeric_limits<std::uint64_t>::max() - range.bytes) {
+      facts.clear();
+      continue;
+    }
+    const auto end = range.offset + range.bytes;
+    for (auto base = facts.begin(); base != facts.end();) {
+      auto &bytes = base->second;
+      for (auto it = bytes.begin(); it != bytes.end();) {
+        if (it->first >= range.offset && it->first < end)
+          it = bytes.erase(it);
+        else
+          ++it;
+      }
+      if (bytes.empty()) base = facts.erase(base);
+      else ++base;
+    }
+  }
+  return true;
+}
 
 std::optional<std::uint64_t> byteOffset(const Access &access, unsigned index) {
   if (!access.address.constant ||
@@ -531,12 +597,21 @@ void runByteForwarding(llvm::Function &function,
             call->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
         if (!lifetimeStart) {
           const auto effect = callMemoryEffect(*call, graph, options, leafCallCache);
-          if (effect == CallMemoryEffect::Barrier) {
+          if (effect == CallMemoryEffect::Barrier ||
+              effect == CallMemoryEffect::SummaryRejected) {
             facts.clear();
             if (options.consumeCallEffectSummaries && hasCallEffectSummary(*call))
               ++stats.summaryCallsRejected;
           } else if (effect == CallMemoryEffect::ProvenSummaryNoWrite) {
             ++stats.summaryCallsPreserved;
+          } else if (effect == CallMemoryEffect::ProvenSummaryWrites) {
+            const auto summary = getCallEffectSummary(*call);
+            if (summary && invalidateByteSummaryWrites(facts, *summary))
+              ++stats.summaryCallsPreserved;
+            else {
+              facts.clear();
+              ++stats.summaryCallsRejected;
+            }
           }
         }
         continue;
@@ -773,7 +848,9 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             const auto effect = lifetimeStart
                 ? CallMemoryEffect::ReadOnly
                 : callMemoryEffect(*call, graph, options, leafCallCache);
-            if (!lifetimeStart && effect == CallMemoryEffect::Barrier) {
+            if (!lifetimeStart &&
+                (effect == CallMemoryEffect::Barrier ||
+                 effect == CallMemoryEffect::SummaryRejected)) {
               facts.clear();
               ++stats.callBarriers;
               if (options.consumeCallEffectSummaries && hasCallEffectSummary(*call))
@@ -784,6 +861,16 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             } else if (!lifetimeStart &&
                        effect == CallMemoryEffect::ProvenSummaryNoWrite) {
               ++stats.summaryCallsPreserved;
+            } else if (!lifetimeStart &&
+                       effect == CallMemoryEffect::ProvenSummaryWrites) {
+              const auto summary = getCallEffectSummary(*call);
+              if (summary && invalidateSummaryWrites(facts, *summary, stats))
+                ++stats.summaryCallsPreserved;
+              else {
+                facts.clear();
+                ++stats.summaryCallsRejected;
+                ++stats.callBarriers;
+              }
             }
             continue;
           }
