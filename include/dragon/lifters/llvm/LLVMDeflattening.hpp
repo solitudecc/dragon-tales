@@ -10,13 +10,15 @@ namespace dragon::llvmlifter {
 
 /// Bounds for the opt-in, proof-only flattened-dispatch rewrite.
 ///
-/// The pass only rewrites predecessor edges whose state value is proven to be
-/// one concrete switch value.  A missing/unknown value, a PHI-bearing target,
-/// or a dispatcher with side effects leaves that dispatcher unchanged.
+/// The pass rewrites predecessor edges whose state value is proven to be one
+/// concrete switch value, or a bounded finite set whose values all select the
+/// same destination. A missing/unknown value, a PHI-bearing target, or a
+/// dispatcher with side effects leaves that dispatcher unchanged.
 struct DeflatteningOptions {
   std::size_t maxDispatchers = 64;
   std::size_t maxIncomingEdges = 512;
   std::size_t maxExpressionNodes = 128;
+  std::size_t maxValues = 16;
 };
 
 struct DeflatteningStats {

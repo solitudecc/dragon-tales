@@ -38,7 +38,7 @@ flowchart LR
 | `mem2reg` / `instcombine` / `gvn` / `dce` | LLVM | 无 |
 | `control-flow` | LLVM，显式选择 | 无；SCCP、状态机/普通跳转穿线、CFG 与死代码清理。详见 [控制流清理](llvm-control-flow-cleanup.md) |
 | `dispatch-specialize` | LLVM，显式选择 | `max_conditions=256, max_expression_nodes=128`；唯一常量条件才改写，未知/多值保持原样 |
-| `dispatch-deflatten` | LLVM，显式选择 | `max_dispatchers=64, max_incoming_edges=512, max_expression_nodes=128`；只改写状态 PHI 到完备 switch 目标的可证明边 |
+| `dispatch-deflatten` | LLVM，显式选择 | `max_dispatchers=64, max_incoming_edges=512, max_expression_nodes=128, max_values=16`；只改写状态 PHI 的有限值集合全部指向同一 switch 目标的可证明边 |
 | `mba` | LLVM | `timeout_ms=100, max_queries=16, max_expression_nodes=128, max_variables=3, resource_limit=1000000` |
 | `predicates` | LLVM | `timeout_ms=25, max_queries=64, max_expression_nodes=256, resource_limit=200000` |
 

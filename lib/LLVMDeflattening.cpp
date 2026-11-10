@@ -14,6 +14,135 @@ namespace dragon::llvmlifter {
 namespace {
 
 using Active = std::unordered_set<const llvm::Value *>;
+using FiniteConstants = std::vector<llvm::APInt>;
+
+bool appendFinite(FiniteConstants &values, const llvm::APInt &value,
+                  std::size_t maxValues) {
+  for (const auto &existing : values)
+    if (existing == value) return true;
+  if (values.size() >= maxValues) return false;
+  values.push_back(value);
+  return true;
+}
+
+std::optional<FiniteConstants> finiteConstants(const llvm::Value *value,
+                                               std::size_t &nodes,
+                                               std::size_t maxNodes,
+                                               std::size_t maxValues,
+                                               Active &active) {
+  if (!value || ++nodes > maxNodes || !maxValues) return std::nullopt;
+  if (const auto *constant = llvm::dyn_cast<llvm::ConstantInt>(value))
+    return FiniteConstants{constant->getValue()};
+  if (!active.insert(value).second) return std::nullopt;
+  auto done = [&](std::optional<FiniteConstants> result) {
+    active.erase(value);
+    return result;
+  };
+  std::optional<FiniteConstants> result;
+  if (const auto *freeze = llvm::dyn_cast<llvm::FreezeInst>(value)) {
+    result = finiteConstants(freeze->getOperand(0), nodes, maxNodes,
+                              maxValues, active);
+  } else if (const auto *cast = llvm::dyn_cast<llvm::CastInst>(value)) {
+    if (!cast->getType()->isIntegerTy() ||
+        !cast->getOperand(0)->getType()->isIntegerTy())
+      return done(std::nullopt);
+    auto operand = finiteConstants(cast->getOperand(0), nodes, maxNodes,
+                                   maxValues, active);
+    if (operand) {
+      const unsigned width = cast->getType()->getIntegerBitWidth();
+      FiniteConstants converted;
+      for (const auto &item : *operand) {
+        llvm::APInt convertedItem(width, 0);
+        switch (cast->getOpcode()) {
+          case llvm::Instruction::ZExt:
+          case llvm::Instruction::Trunc:
+            convertedItem = item.zextOrTrunc(width);
+            break;
+          case llvm::Instruction::SExt:
+            convertedItem = item.sextOrTrunc(width);
+            break;
+          case llvm::Instruction::BitCast:
+            if (item.getBitWidth() != width) return done(std::nullopt);
+            convertedItem = item;
+            break;
+          default:
+            return done(std::nullopt);
+        }
+        if (!appendFinite(converted, convertedItem, maxValues))
+          return done(std::nullopt);
+      }
+      result = std::move(converted);
+    }
+  } else if (const auto *select = llvm::dyn_cast<llvm::SelectInst>(value)) {
+    // A non-constant/poison condition can make even equal select arms poison.
+    // Only a singleton, proven i1 condition is safe to follow.
+    auto condition = finiteConstants(select->getCondition(), nodes, maxNodes,
+                                     maxValues, active);
+    if (condition && condition->size() == 1 &&
+        condition->front().getBitWidth() == 1) {
+      const auto *chosen = condition->front().isZero()
+                               ? select->getFalseValue()
+                               : select->getTrueValue();
+      result = finiteConstants(chosen, nodes, maxNodes, maxValues, active);
+    }
+  } else if (const auto *phi = llvm::dyn_cast<llvm::PHINode>(value)) {
+    if (!phi->getNumIncomingValues()) return done(std::nullopt);
+    FiniteConstants merged;
+    for (unsigned index = 0; index < phi->getNumIncomingValues(); ++index) {
+      auto incoming = finiteConstants(phi->getIncomingValue(index), nodes,
+                                     maxNodes, maxValues, active);
+      if (!incoming) return done(std::nullopt);
+      for (const auto &item : *incoming)
+        if (!appendFinite(merged, item, maxValues)) return done(std::nullopt);
+    }
+    result = std::move(merged);
+  } else if (const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value)) {
+    auto left = finiteConstants(binary->getOperand(0), nodes, maxNodes,
+                                maxValues, active);
+    auto right = finiteConstants(binary->getOperand(1), nodes, maxNodes,
+                                 maxValues, active);
+    if (left && right && !left->empty() && !right->empty() &&
+        left->front().getBitWidth() == right->front().getBitWidth()) {
+      const auto width = left->front().getBitWidth();
+      FiniteConstants evaluated;
+      for (const auto &lhs : *left) {
+        for (const auto &rhs : *right) {
+          std::optional<llvm::APInt> item;
+          switch (binary->getOpcode()) {
+            case llvm::Instruction::Add:
+              if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+                item = lhs + rhs;
+              break;
+            case llvm::Instruction::Sub:
+              if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+                item = lhs - rhs;
+              break;
+            case llvm::Instruction::Mul:
+              if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+                item = lhs * rhs;
+              break;
+            case llvm::Instruction::And: item = lhs & rhs; break;
+            case llvm::Instruction::Or: item = lhs | rhs; break;
+            case llvm::Instruction::Xor: item = lhs ^ rhs; break;
+            case llvm::Instruction::Shl:
+              if (!binary->hasNoUnsignedWrap() &&
+                  !binary->hasNoSignedWrap() && !rhs.uge(width))
+                item = lhs.shl(rhs);
+              break;
+            case llvm::Instruction::LShr:
+              if (!binary->isExact() && !rhs.uge(width)) item = lhs.lshr(rhs);
+              break;
+            default: break;
+          }
+          if (!item || !appendFinite(evaluated, *item, maxValues))
+            return done(std::nullopt);
+        }
+      }
+      result = std::move(evaluated);
+    }
+  }
+  return done(std::move(result));
+}
 
 std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
                                           std::size_t &nodes,
@@ -188,11 +317,18 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
 
     std::size_t nodes = 0;
     Active active;
-    auto value = uniqueConstant(state->getIncomingValue(index), nodes,
-                                options.maxExpressionNodes, active);
-    if (!value || value->getBitWidth() != switchInst.getCondition()->getType()->getIntegerBitWidth())
+    auto values = finiteConstants(state->getIncomingValue(index), nodes,
+                                  options.maxExpressionNodes,
+                                  options.maxValues, active);
+    if (!values || values->empty() ||
+        values->front().getBitWidth() !=
+            switchInst.getCondition()->getType()->getIntegerBitWidth())
       return false;
-    auto *target = targetFor(switchInst, *value);
+    auto *target = targetFor(switchInst, values->front());
+    for (std::size_t valueIndex = 1; valueIndex < values->size();
+         ++valueIndex) {
+      if (targetFor(switchInst, (*values)[valueIndex]) != target) return false;
+    }
     if (target == &dispatch) continue; // a self-dispatch edge already is direct
     if (hasAnyPHI(*target)) return false;
     candidate.push_back({predecessor, terminator, *edge, target});

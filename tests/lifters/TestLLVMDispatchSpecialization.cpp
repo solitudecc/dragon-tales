@@ -158,6 +158,56 @@ TEST_CASE("LLVM deflattening rewrites proven state edges",
   verify(lifter.module());
 }
 
+TEST_CASE("LLVM deflattening rewrites finite states with one destination",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *i32 = llvm::Type::getInt32Ty(context);
+  auto *i1 = llvm::Type::getInt1Ty(context);
+  auto *function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i1}, false),
+      llvm::GlobalValue::ExternalLinkage, "flat_finite", lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *left = llvm::BasicBlock::Create(context, "left", function);
+  auto *right = llvm::BasicBlock::Create(context, "right", function);
+  auto *incoming = llvm::BasicBlock::Create(context, "incoming", function);
+  auto *dispatch = llvm::BasicBlock::Create(context, "dispatch", function);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", function);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", function);
+  llvm::IRBuilder<> builder(entry);
+  builder.CreateCondBr(function->getArg(0), left, right);
+  builder.SetInsertPoint(left);
+  builder.CreateBr(incoming);
+  builder.SetInsertPoint(right);
+  builder.CreateBr(incoming);
+  builder.SetInsertPoint(incoming);
+  auto *finite = builder.CreatePHI(i32, 2, "finite.state");
+  finite->addIncoming(llvm::ConstantInt::get(i32, 10), left);
+  finite->addIncoming(llvm::ConstantInt::get(i32, 11), right);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(dispatch);
+  auto *state = builder.CreatePHI(i32, 1, "state");
+  state->addIncoming(finite, incoming);
+  auto *switchInst = builder.CreateSwitch(state, fallback, 2);
+  switchInst->addCase(llvm::ConstantInt::get(i32, 10), taken);
+  switchInst->addCase(llvm::ConstantInt::get(i32, 11), taken);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK(report.changed);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("edges_rewritten") == 1);
+  CHECK(incoming->getTerminator()->getSuccessor(0) == taken);
+  verify(lifter.module());
+}
+
 TEST_CASE("LLVM deflattening keeps unknown state paths explicit",
           "[llvm][dispatch-deflatten]") {
   llvmlifter::LLVMLifter lifter{Architecture::X86_64};

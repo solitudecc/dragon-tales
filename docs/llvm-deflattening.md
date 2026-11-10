@@ -1,9 +1,9 @@
 # 可证明的 LLVM 去平坦化
 
 `dispatch-deflatten` 是一个显式选择的 LLVM Pass。它识别只含 PHI 和 switch 的分发块，
-要求 switch selector 是该块的状态 PHI，并对每条入边证明状态值为一个有限的具体常量。
-每个常量按照 LLVM switch 的完整语义（显式 case 或 default）映射到目标块，然后把原入边
-直接改到目标块。
+要求 switch selector 是该块的状态 PHI，并对每条入边证明状态值为一个有限的常量集合。
+当集合中的所有值按照 LLVM switch 的完整语义（显式 case 或 default）都映射到同一个目标块
+时，Pass 把原入边直接改到该目标块；集合超出 `max_values` 或映射到多个目标时保留原边。
 
 改写有严格边界：未知或不同宽度的状态值、重复入边、分发块中的其它指令、目标块中的 PHI、
 预算耗尽以及无法证明的表达式都会保留原分发 CFG。目标块暂不接受 PHI，是因为新增前驱时
