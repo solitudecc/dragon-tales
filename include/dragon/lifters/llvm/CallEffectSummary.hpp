@@ -26,10 +26,24 @@ enum class CallMemoryEffectKind : std::uint8_t {
 };
 
 struct CallMemoryRange {
-  enum class Base : std::uint8_t { GuestMemory = 0, Stack = 1, Absolute = 2 };
+  enum class Base : std::uint8_t {
+    GuestMemory = 0,
+    Stack = 1,
+    Absolute = 2,
+    GuestState = 3,
+  };
   Base base = Base::GuestMemory;
   std::uint64_t offset = 0;
   std::uint32_t bytes = 0;
+};
+
+/// A precise constant write made by a call.  The value is the little-endian
+/// raw bits for the complete range (at most 64 bits); incomplete facts are
+/// retained in metadata but are never consumed by an analysis.
+struct CallMemoryConstant {
+  CallMemoryRange range;
+  std::uint64_t value = 0;
+  bool complete = false;
 };
 
 /// A bounded scalar result effect. The value is optional because a summary may
@@ -53,6 +67,7 @@ struct CallEffectSummary {
   CallMemoryEffectKind memory = CallMemoryEffectKind::Unknown;
   std::vector<CallMemoryRange> reads;
   std::vector<CallMemoryRange> writes;
+  std::vector<CallMemoryConstant> memoryConstants;
   std::vector<CallValueEffect> values;
 };
 
