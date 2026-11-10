@@ -12,7 +12,8 @@ namespace dragon::llvmlifter {
 /// Acyclic CFG edges may carry facts; calls and unknown aliases are barriers.
 /// Loop edges require an exact invariant check; a canonical two-block loop may
 /// use a PHI for a loop-carried value, and other loops remain barriers.
-/// Conflicting join values may use PHIs when enabled.
+/// Conflicting join values may use PHIs when enabled. Little-endian constant
+/// GEP ranges may also be rebuilt byte-wise after the fact path is proven.
 struct MemoryForwardOptions {
   std::size_t maxRewrites = 65536;
   bool runMem2Reg = true;
@@ -36,6 +37,7 @@ struct MemoryForwardStats {
   std::size_t joinBarriers = 0;
   std::size_t loopBarriers = 0;
   std::size_t budgetExhausted = 0;
+  std::size_t byteRebuilds = 0;
 };
 
 namespace detail {

@@ -115,18 +115,34 @@ TEST_CASE("S2 does not forward across a call or an overlapping partial write",
   verify(lifter.module());
 }
 
-TEST_CASE("S2 treats overlapping concrete slots as an alias barrier",
+TEST_CASE("S2 keeps a partially uncovered concrete slot conservative",
           "[llvm][guest-memory-ssa]") {
   // mov rbx, 0x4000; mov rax, 7; mov [rbx], rax;
-  // mov ecx, [rbx+4]; ret
+  // mov rcx, [rbx+4]; ret (bytes 4..11 are only partially covered)
   auto graph = decode({0x48,0xc7,0xc3,0x00,0x40,0x00,0x00,
                        0x48,0xc7,0xc0,0x07,0x00,0x00,0x00,
-                       0x48,0x89,0x03,0x8b,0x4b,0x04,0xc3});
+                       0x48,0x89,0x03,0x48,0x8b,0x4b,0x04,0xc3});
   auto lifter = lift(graph);
   const auto stats = lifter.runGuestMemorySSA();
   CHECK(stats.available);
   CHECK(stats.partialOverlaps >= 1);
   CHECK(stats.loadsForwarded == 0);
+  verify(lifter.module());
+}
+
+TEST_CASE("S2 rebuilds a fully-covered narrower Guest load by bytes",
+          "[llvm][guest-memory-ssa]") {
+  // mov rbx, 0x4000; mov rax, 7; mov [rbx], rax;
+  // mov ecx, [rbx+4]; ret (bytes 4..7 are fully covered)
+  auto graph = decode({0x48,0xc7,0xc3,0x00,0x40,0x00,0x00,
+                       0x48,0xc7,0xc0,0x07,0x00,0x00,0x00,
+                       0x48,0x89,0x03,0x8b,0x4b,0x04,0xc3});
+  auto lifter = lift(graph);
+  const auto before = integerLoads(lifter.module());
+  const auto stats = lifter.runGuestMemorySSA();
+  CHECK(stats.available);
+  CHECK(stats.loadsForwarded >= 1);
+  CHECK(integerLoads(lifter.module()) < before);
   verify(lifter.module());
 }
 

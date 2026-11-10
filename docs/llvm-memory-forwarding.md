@@ -9,6 +9,8 @@
 - 同一成功检查链上的精确 STORE→LOAD 转发，以及没有中间写入的 LOAD 复用；
 - 无回边的 CFG 边传播。汇合点要求每条有效入边都提供同一地址和宽度的事实；值相同
   时直接保留，值不同则在汇合块入口插入 LLVM PHI，再转发后续 LOAD。
+- 小端常量 GEP 的字节级重建。已知 STORE 覆盖 LOAD 的全部字节时，按真实字节序拼回
+  整数；只覆盖一部分的读仍保留原 LOAD。
 
 调用、未知别名、易失/原子访问和部分重叠写都是保守屏障。自然循环只有在入口事实与所有
 回边事实逐项相同后才允许把不变事实传出；循环内 LOAD 的替换会延迟到该检查通过之后。
@@ -19,17 +21,17 @@
 
 `MemoryForwardOptions` 的 `enableCrossBlock` 和 `enablePhi` 允许 C++ 调用者分别关闭
 跨块传播或冲突值 PHI；C shim/Python 使用完整的默认 S2 行为，并返回
-`phis_inserted`、`join_barriers`、`loop_barriers` 统计。
+`phis_inserted`、`join_barriers`、`loop_barriers` 和 `byte_rebuilds` 统计。
 
 ## 验证
 
-S2 新增菱形、循环不变槽和规范循环 PHI 回归；旧实现保留循环 LOAD，规范循环 PHI 回归有
-3 个关键断言失败。当前聚焦组为 **7/7 测试、50 条断言**；主 CTest **834/834**，无 Z3
-CTest **699/699**。循环不变阶段的已验证基线为 833/833 和 698/698。
+S2 新增菱形、循环不变槽、规范循环 PHI 和完全覆盖窄读回归；旧实现对窄读没有转发。
+当前聚焦组为 **8/8 测试、58 条断言**；主 CTest **835/835**，无 Z3 CTest **700/700**。
+规范循环 PHI 阶段的已验证基线为 834/834 和 699/699。
 Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，并可读到三个
 新增统计字段。
 
 证据和可复现 patch 位于
-`validation-artifacts/llvm-memory-forwarding-20261110/s2-loop-phi/`；VM 工作树使用
+`validation-artifacts/llvm-memory-forwarding-20261110/s2-bytes/`；VM 工作树使用
 `~/dragon-tales-overlap`。这些结果证明模块生成、验证和本组件的局部语义，不构成一般堆
 分析、未知外部调用摘要、字节级重组或完整循环内存分析的证明。

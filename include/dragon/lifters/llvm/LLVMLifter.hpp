@@ -176,8 +176,8 @@ class LLVMLifter {
   /// create PHIs for differing values. Loop facts are carried only after an
   /// exact entry/backedge check; canonical two-block loops may create a
   /// loop-carried PHI, while calls, unknown aliases and partial overlaps remain
-  /// barriers otherwise. The default optimization pipeline is unchanged;
-  /// callers opt into this stage explicitly.
+  /// barriers otherwise. Little-endian constant ranges may be rebuilt byte-wise.
+  /// The default optimization pipeline is unchanged; callers opt into this stage.
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const MemoryForwardOptions &options = {});
 

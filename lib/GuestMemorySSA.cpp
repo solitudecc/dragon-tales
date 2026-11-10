@@ -48,6 +48,31 @@ llvm::Value *stripPointerCasts(llvm::Value *value) {
   return value ? value->stripPointerCasts() : nullptr;
 }
 
+std::optional<std::uint64_t> constantInteger(const llvm::Value *value) {
+  const auto *constant = llvm::dyn_cast<llvm::ConstantInt>(value);
+  if (constant)
+    return constant->getBitWidth() <= 64
+        ? std::optional<std::uint64_t>(constant->getZExtValue()) : std::nullopt;
+  const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value);
+  if (!binary) return std::nullopt;
+  const auto left = constantInteger(binary->getOperand(0));
+  const auto right = constantInteger(binary->getOperand(1));
+  if (!left || !right) return std::nullopt;
+  switch (binary->getOpcode()) {
+    case llvm::Instruction::Add: return *left + *right;
+    case llvm::Instruction::Sub: return *left - *right;
+    case llvm::Instruction::Mul: return *left * *right;
+    case llvm::Instruction::And: return *left & *right;
+    case llvm::Instruction::Or: return *left | *right;
+    case llvm::Instruction::Xor: return *left ^ *right;
+    case llvm::Instruction::Shl:
+      return *right < 64 ? *left << *right : 0;
+    case llvm::Instruction::LShr:
+      return *right < 64 ? *left >> *right : 0;
+    default: return std::nullopt;
+  }
+}
+
 std::optional<AddressKey> addressKey(const llvm::Value *pointer,
                                      const std::unordered_set<llvm::Value *> &memoryBases) {
   auto *stripped = stripPointerCasts(const_cast<llvm::Value *>(pointer));
@@ -58,8 +83,8 @@ std::optional<AddressKey> addressKey(const llvm::Value *pointer,
   if (!memoryBases.contains(base))
     return std::nullopt;
   auto *index = gep->getOperand(gep->getNumOperands() - 1);
-  if (auto *constant = llvm::dyn_cast<llvm::ConstantInt>(index))
-    return AddressKey{base, nullptr, constant->getZExtValue(), true};
+  if (const auto constant = constantInteger(index))
+    return AddressKey{base, nullptr, *constant, true};
   return AddressKey{base, index, 0, false};
 }
 
@@ -207,6 +232,225 @@ std::optional<Access> classifyStore(llvm::StoreInst &store,
   if (!address || !bytes)
     return std::nullopt;
   return Access{&store, *address, bytes, true, store.getValueOperand()};
+}
+
+struct BytePart {
+  llvm::Value *value = nullptr;
+  unsigned byteIndex = 0;
+  unsigned valueBytes = 0;
+  bool fromLoad = false;
+};
+
+using ByteFacts = std::map<llvm::Value *, std::map<std::uint64_t, BytePart>>;
+
+std::optional<std::uint64_t> byteOffset(const Access &access, unsigned index) {
+  if (!access.address.constant ||
+      access.address.offset > std::numeric_limits<std::uint64_t>::max() - index)
+    return std::nullopt;
+  return access.address.offset + index;
+}
+
+llvm::Value *extractByte(llvm::IRBuilder<> &builder, const BytePart &part) {
+  if (!isDefinedValue(part.value) || !part.value->getType()->isIntegerTy())
+    return nullptr;
+  const unsigned sourceBytes = accessBytes(part.value->getType());
+  if (!sourceBytes || part.valueBytes != sourceBytes || part.byteIndex >= sourceBytes)
+    return nullptr;
+  llvm::Value *shifted = part.value;
+  if (part.byteIndex) {
+    auto *type = part.value->getType();
+    shifted = builder.CreateLShr(
+        shifted, llvm::ConstantInt::get(type, part.byteIndex * 8), "guest.mem.byte");
+  }
+  auto *byteType = builder.getInt8Ty();
+  return sourceBytes == 1 ? shifted : builder.CreateTrunc(shifted, byteType,
+                                                           "guest.mem.byte");
+}
+
+llvm::Value *rebuildBytes(llvm::LoadInst &load, const std::vector<BytePart> &parts,
+                          const llvm::DataLayout &layout) {
+  const unsigned bytes = accessBytes(load.getType());
+  if (!bytes || parts.size() != bytes || !layout.isLittleEndian())
+    return nullptr;
+  llvm::IRBuilder<> builder(&load);
+  auto *type = load.getType();
+  llvm::Value *result = nullptr;
+  for (unsigned index = 0; index < bytes; ++index) {
+    auto *byte = extractByte(builder, parts[index]);
+    if (!byte) return nullptr;
+    llvm::Value *part = byte;
+    if (bytes > 1) {
+      part = builder.CreateZExt(byte, type, "guest.mem.zext");
+      if (index)
+        part = builder.CreateShl(
+            part, llvm::ConstantInt::get(type, index * 8), "guest.mem.shl");
+    }
+    result = result ? builder.CreateOr(result, part, "guest.mem.or") : part;
+  }
+  return result;
+}
+
+bool sameBytePart(const BytePart &left, const BytePart &right) {
+  return left.byteIndex == right.byteIndex &&
+         left.valueBytes == right.valueBytes &&
+         equivalentValue(left.value, right.value);
+}
+
+void runByteForwarding(llvm::Function &function,
+                       const std::unordered_set<llvm::Value *> &memoryBases,
+                       const llvm::DataLayout &layout,
+                       const MemoryForwardOptions &options,
+                       MemoryForwardStats &stats) {
+  if (!layout.isLittleEndian()) return;
+  llvm::DominatorTree dom(function);
+  std::unordered_set<llvm::BasicBlock *> reachable;
+  std::deque<llvm::BasicBlock *> reachQueue{&function.getEntryBlock()};
+  while (!reachQueue.empty()) {
+    auto *block = reachQueue.front(); reachQueue.pop_front();
+    if (!reachable.insert(block).second) continue;
+    for (auto *successor : llvm::successors(block)) reachQueue.push_back(successor);
+  }
+  std::unordered_set<llvm::BasicBlock *> loopBlocks;
+  for (auto *header : reachable) {
+    for (auto *pred : llvm::predecessors(header)) {
+      if (!reachable.contains(pred) || !dom.dominates(header, pred)) continue;
+      std::deque<llvm::BasicBlock *> loopQueue{pred};
+      loopBlocks.insert(header);
+      while (!loopQueue.empty()) {
+        auto *member = loopQueue.front(); loopQueue.pop_front();
+        if (!loopBlocks.insert(member).second) continue;
+        for (auto *memberPred : llvm::predecessors(member))
+          if (reachable.contains(memberPred) && memberPred != header)
+            loopQueue.push_back(memberPred);
+      }
+    }
+  }
+
+  std::map<llvm::BasicBlock *, ByteFacts> incoming;
+  std::map<llvm::BasicBlock *, std::map<llvm::BasicBlock *, ByteFacts>> edgeFacts;
+  std::map<llvm::BasicBlock *, std::size_t> pending;
+  std::deque<llvm::BasicBlock *> work;
+  std::unordered_set<llvm::BasicBlock *> visited;
+  incoming[&function.getEntryBlock()] = {};
+  work.push_back(&function.getEntryBlock());
+  for (auto *block : reachable) {
+    if (block == &function.getEntryBlock()) continue;
+    pending[block] = 0;
+    for (auto *pred : llvm::predecessors(block))
+      if (reachable.contains(pred) && !dom.dominates(block, pred)) ++pending[block];
+  }
+  auto mergeIncoming = [&](llvm::BasicBlock *successor) {
+    ByteFacts merged;
+    const auto &edges = edgeFacts[successor];
+    if (!edges.empty()) {
+      const auto &first = edges.begin()->second;
+      for (const auto &[base, baseFacts] : first) {
+        for (const auto &[offset, part] : baseFacts) {
+          bool present = true;
+          for (const auto &[pred, predFacts] : edges) {
+            (void)pred;
+            auto baseIt = predFacts.find(base);
+            auto partIt = baseIt == predFacts.end()
+                ? std::map<std::uint64_t, BytePart>::const_iterator{}
+                : baseIt->second.find(offset);
+            if (baseIt == predFacts.end() || partIt == baseIt->second.end() ||
+                !sameBytePart(part, partIt->second)) {
+              present = false;
+              break;
+            }
+          }
+          if (present) merged[base][offset] = part;
+        }
+      }
+    }
+    incoming[successor] = std::move(merged);
+    work.push_back(successor);
+  };
+  auto acceptEdge = [&](llvm::BasicBlock *pred, llvm::BasicBlock *successor,
+                        ByteFacts facts) {
+    edgeFacts[successor][pred] = std::move(facts);
+    if (pending[successor] > 0) --pending[successor];
+    if (pending[successor] == 0) mergeIncoming(successor);
+  };
+  while (!work.empty()) {
+    auto *block = work.front(); work.pop_front();
+    if (!visited.insert(block).second) continue;
+    ByteFacts facts = incoming[block];
+    for (auto it = block->begin(); it != block->end();) {
+      auto &instruction = *it++;
+      if (auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+        if (!call->getCalledFunction() ||
+            !call->getCalledFunction()->isIntrinsic() ||
+            call->getCalledFunction()->getIntrinsicID() != llvm::Intrinsic::lifetime_start)
+          facts.clear();
+        continue;
+      }
+      if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+        auto access = classifyStore(*store, memoryBases);
+        if (!access) {
+          if (!isKnownLocalStore(*store, memoryBases, layout)) facts.clear();
+          continue;
+        }
+        if (!access->address.constant || !isDefinedValue(access->value)) {
+          facts.clear();
+          continue;
+        }
+        auto &baseFacts = facts[access->address.base];
+        for (unsigned index = 0; index < access->bytes; ++index) {
+          const auto offset = byteOffset(*access, index);
+          if (!offset) { facts.clear(); break; }
+          baseFacts[*offset] = BytePart{access->value, index, access->bytes, false};
+        }
+        continue;
+      }
+
+      auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+      if (!load) continue;
+      auto access = classifyLoad(*load, memoryBases);
+      if (!access || !access->address.constant) continue;
+      auto base = facts.find(access->address.base);
+      if (base != facts.end()) {
+        std::vector<BytePart> parts;
+        parts.reserve(access->bytes);
+        bool complete = true;
+        for (unsigned index = 0; index < access->bytes; ++index) {
+          const auto offset = byteOffset(*access, index);
+          if (!offset) { complete = false; break; }
+          auto part = base->second.find(*offset);
+          if (part == base->second.end()) { complete = false; break; }
+          parts.push_back(part->second);
+        }
+        if (complete && stats.loadsForwarded < options.maxRewrites) {
+          if (auto *value = rebuildBytes(*load, parts, layout)) {
+            load->replaceAllUsesWith(value);
+            load->eraseFromParent();
+            ++stats.loadsForwarded;
+            ++stats.byteRebuilds;
+            if (std::all_of(parts.begin(), parts.end(),
+                            [](const BytePart &part) { return part.fromLoad; }))
+              ++stats.loadsReused;
+            stats.changed = true;
+            continue;
+          }
+        }
+      }
+      if (!isDefinedValue(load)) continue;
+      auto &baseFacts = facts[access->address.base];
+      for (unsigned index = 0; index < access->bytes; ++index) {
+        const auto offset = byteOffset(*access, index);
+        if (!offset) { facts.clear(); break; }
+        if (!baseFacts.contains(*offset))
+          baseFacts[*offset] = BytePart{load, index, access->bytes, true};
+      }
+    }
+    for (auto *successor : llvm::successors(block)) {
+      if (!reachable.contains(successor) || dom.dominates(successor, block)) continue;
+      auto nextFacts = (loopBlocks.contains(block) || loopBlocks.contains(successor))
+          ? ByteFacts{} : facts;
+      acceptEdge(block, successor, std::move(nextFacts));
+    }
+    if (stats.loadsForwarded >= options.maxRewrites) return;
+  }
 }
 
 } // namespace
@@ -595,6 +839,8 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
         stats.changed = true;
       }
     }
+    if (stats.loadsForwarded < options.maxRewrites)
+      runByteForwarding(function, memoryBases, module.getDataLayout(), options, stats);
     if (stats.loadsForwarded >= options.maxRewrites) {
       stats.complete = false;
       ++stats.budgetExhausted;

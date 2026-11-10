@@ -1782,9 +1782,9 @@ class LLVMLifter:
     def run_guest_memory_ssa(self, max_rewrites=65536, run_mem2reg=True):
         """Run the conservative S2 Guest-memory forwarding stage.
 
-        Register promotion is optional. Exact-width facts cross acyclic CFG
-        edges; differing values at a join use a Guest-memory PHI. Loop facts
-        cross a backedge only after an exact invariant check. Calls, unknown
+        Register promotion is optional. Exact-width and proven little-endian
+        byte facts cross acyclic CFG edges; differing values at a join use a
+        Guest-memory PHI. Loop facts cross a backedge only after an exact invariant check. Calls, unknown
         aliases and partial overlaps remain barriers otherwise. The default
         optimization pipeline does not invoke this stage.
         """
@@ -1857,7 +1857,8 @@ class MemoryForwardStats:
         for name in ('blocks_visited', 'guest_loads', 'guest_stores',
                      'loads_forwarded', 'loads_reused', 'call_barriers',
                      'alias_barriers', 'partial_overlaps', 'phis_inserted',
-                     'join_barriers', 'loop_barriers', 'budget_exhausted'):
+                     'join_barriers', 'loop_barriers', 'budget_exhausted',
+                     'byte_rebuilds'):
             setattr(self, name, int(getattr(stats, name)))
 
     def __repr__(self):

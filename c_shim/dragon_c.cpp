@@ -1421,6 +1421,7 @@ int dragon_llvm_lifter_run_guest_memory_ssa(
   out->join_barriers = stats.joinBarriers;
   out->loop_barriers = stats.loopBarriers;
   out->budget_exhausted = stats.budgetExhausted;
+  out->byte_rebuilds = stats.byteRebuilds;
   return 1;
 }
 

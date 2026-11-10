@@ -259,18 +259,18 @@ Details: docs/deobfuscation-progress-20261109.md. S2 first-stage exact Guest
 memory forwarding is now implemented; see docs/llvm-memory-forwarding.md.
 
 S2 Guest-memory SSA (2026-11-10): `LLVMLifter::runGuestMemorySSA` and C/Python
-mirrors optionally promote registers, then forward exact-width Guest LOADs from
-prior LOAD/STORE facts. Acyclic CFG edges carry facts; joins keep facts present
+mirrors optionally promote registers, then forward exact-width and proven byte
+Guest LOADs from prior LOAD/STORE facts. Acyclic CFG edges carry facts; joins keep facts present
 on every edge and insert PHIs for differing values. Calls, unknown aliases,
 volatile/atomic accesses and partial overlaps remain conservative barriers.
 Loop facts cross a backedge only after an exact entry/backedge check; a canonical
 two-block loop may use a loop-carried PHI when its backedge value is loop-independent.
 Unknown loop effects and other shapes remain barriers; no general loop fixed point is guessed. Default
 optimize() is unchanged. The first-stage four cases/34 assertions remain green;
-the cross-block/loop focused group is 7/7 cases/50 assertions; main/no-Z3 CTest
-834/834 and 699/699. The old implementation fails three canonical-loop-PHI
-assertions. This is not byte reconstruction, heap analysis or external-call
-effect summarization.
+the cross-block/loop/byte focused group is 8/8 cases/58 assertions; main/no-Z3
+CTest 835/835 and 700/700. The old implementation fails the narrow-load
+byte-forwarding assertion. This is not heap analysis, general loop fixed points
+or external-call effect summarization.
 
 Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
 LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and
