@@ -405,6 +405,10 @@ std::optional<llvm::BasicBlock *> crossCallTarget(
     llvm::Function &callee, llvm::BasicBlock &dispatch,
     llvm::SwitchInst &switchInst, const DeflatteningOptions &options,
     std::size_t &summariesConsumed) {
+  // An externally visible function may have callers outside this module.  A
+  // module-local summary cannot prove those entries, so keep the dispatcher
+  // explicit unless linkage itself closes the call graph.
+  if (!callee.hasLocalLinkage()) return std::nullopt;
   auto *stateLoad = llvm::dyn_cast<llvm::LoadInst>(switchInst.getCondition());
   if (!options.consumeCallEffectSummaries || !options.maxCrossCallSites ||
       !stateLoad || !onlyPureInstructionsAndLoad(dispatch, *stateLoad))
