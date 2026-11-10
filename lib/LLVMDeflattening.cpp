@@ -258,6 +258,17 @@ bool hasAnyPHI(const llvm::BasicBlock &block) {
   return llvm::isa<llvm::PHINode>(block.begin());
 }
 
+bool hasEscapingDefinitions(const llvm::BasicBlock &block) {
+  for (const auto &instruction : block) {
+    if (&instruction == block.getTerminator()) break;
+    for (const auto *user : instruction.users()) {
+      const auto *use = llvm::dyn_cast<llvm::Instruction>(user);
+      if (!use || use->getParent() != &block) return true;
+    }
+  }
+  return false;
+}
+
 bool onlyPHIsAndTerminator(const llvm::BasicBlock &block) {
   for (const auto &instruction : block) {
     if (&instruction == block.getTerminator()) break;
@@ -566,6 +577,11 @@ void replaceSwitchWithBranch(llvm::BasicBlock &block,
 bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
                     const DeflatteningOptions &options,
                     std::vector<EdgePlan> &plans) {
+  // Threading skips this block. Even an otherwise pure PHI can carry a
+  // business value to a successor; removing one incoming edge would change
+  // that value (or make it cease to dominate its uses). Keep such blocks until
+  // we can rebuild every live-out definition for the new CFG.
+  if (hasEscapingDefinitions(dispatch)) return false;
   auto *state = llvm::dyn_cast<llvm::PHINode>(switchInst.getCondition());
   auto *stateLoad = llvm::dyn_cast<llvm::LoadInst>(switchInst.getCondition());
   if (state) {
@@ -578,6 +594,7 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
     // in the exact store feeding the load. We do not chase aliases, calls or
     // stores in other functions; those remain unresolved.
     if (stateLoad->getParent() != &dispatch || !stateLoad->hasOneUse() ||
+        !stateLoad->isSimple() ||
         !onlyPHIsAndOneLoad(dispatch, *stateLoad))
       return false;
   } else {
@@ -605,7 +622,11 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
         !seen.insert(predecessor).second)
       return false;
     auto *terminator = predecessor->getTerminator();
-    if (!terminator || successorCount(terminator, &dispatch) != 1)
+    // Updating the destination list of indirectbr/callbr does not update its
+    // computed address or exceptional control-transfer semantics.
+    if (!terminator ||
+        !llvm::isa<llvm::BranchInst, llvm::SwitchInst>(terminator) ||
+        successorCount(terminator, &dispatch) != 1)
       return false;
     auto edge = soleSuccessorIndex(terminator, &dispatch);
     if (!edge) return false;

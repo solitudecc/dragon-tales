@@ -11,6 +11,11 @@
 状态写入和未知调用仍保留原 dispatcher。该 Pass 不读取镜像、函数名或 Tigress/OLLVM 特征，
 也不宣称能处理间接内存读取或 VM 分发器。
 
+分发块中向后续块传递业务值的 PHI 也必须保留：直接绕过该块会丢失对应入边的值，
+即使 LLVM verify 恰好仍然通过，也可能算出错误结果。load-backed selector 只接受普通的
+非 volatile、非 atomic LOAD。入边只改写普通 branch/switch；`indirectbr` 的目的列表
+和实际计算地址不能通过修改其中一个来同时更新。
+
 ## 跨调用 GuestState 专门化
 
 开启默认的 `consumeCallEffectSummaries` 后，Pass 还可以处理一类封闭的跨函数入口：目标函数必须
