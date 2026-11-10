@@ -1,4 +1,5 @@
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
+#include <dragon/lifters/llvm/CallEffectSummary.hpp>
 
 #include "analysis/LeafCallEffects.hpp"
 #include <dragon/disassembler/Graph.hpp>
@@ -47,6 +48,8 @@ struct Fact {
   llvm::Value *value = nullptr;
 };
 
+bool sameAddress(const AddressKey &left, const AddressKey &right);
+
 llvm::Value *stripPointerCasts(llvm::Value *value) {
   return value ? value->stripPointerCasts() : nullptr;
 }
@@ -76,19 +79,93 @@ std::optional<std::uint64_t> constantInteger(const llvm::Value *value) {
   }
 }
 
-std::optional<AddressKey> addressKey(const llvm::Value *pointer,
-                                     const std::unordered_set<llvm::Value *> &memoryBases) {
+std::optional<AddressKey> addressKey(
+    const llvm::Value *pointer,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout,
+    std::unordered_set<const llvm::Value *> &active) {
+  if (!pointer || !active.insert(pointer).second)
+    return std::nullopt;
+
   auto *stripped = stripPointerCasts(const_cast<llvm::Value *>(pointer));
-  auto *gep = llvm::dyn_cast_or_null<llvm::GetElementPtrInst>(stripped);
-  if (!gep || gep->getNumIndices() != 1)
-    return std::nullopt;
-  auto *base = stripPointerCasts(gep->getPointerOperand());
-  if (!memoryBases.contains(base))
-    return std::nullopt;
-  auto *index = gep->getOperand(gep->getNumOperands() - 1);
-  if (const auto constant = constantInteger(index))
-    return AddressKey{base, nullptr, *constant, true};
-  return AddressKey{base, index, 0, false};
+  if (stripped != pointer) {
+    auto result = addressKey(stripped, memoryBases, layout, active);
+    active.erase(pointer);
+    return result;
+  }
+
+  if (memoryBases.contains(stripped)) {
+    active.erase(pointer);
+    return AddressKey{stripped, nullptr, 0, true};
+  }
+
+  std::optional<AddressKey> result;
+  if (const auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(stripped)) {
+    auto base = addressKey(gep->getPointerOperand(), memoryBases, layout, active);
+    if (base) {
+      llvm::APInt offset(64, 0);
+      bool constantOffset = gep->accumulateConstantOffset(layout, offset);
+      // LLVM's opaque-pointer GEPs normally provide the complete DataLayout
+      // information above. Keep a bounded one-index fallback for lifted
+      // Guest byte GEPs whose source type is already explicit; this preserves
+      // the old x86 lifter form without treating an unknown index as a byte
+      // offset.
+      if (!constantOffset && gep->getNumIndices() == 1) {
+        const auto *sourceType = gep->getSourceElementType();
+        const auto *index = gep->getOperand(gep->getNumOperands() - 1);
+        if (const auto value = constantInteger(index)) {
+          const auto scale = layout
+                                 .getTypeAllocSize(
+                                     const_cast<llvm::Type *>(sourceType))
+                                 .getKnownMinValue();
+          if (scale != 0) {
+            offset = llvm::APInt(64, *value) * llvm::APInt(64, scale);
+            constantOffset = true;
+          }
+        }
+      }
+      if (constantOffset) {
+        const auto delta = offset.zextOrTrunc(64).getZExtValue();
+        if (base->constant)
+          result = AddressKey{base->base, nullptr, base->offset + delta, true};
+        else
+          result = AddressKey{base->base, base->dynamic,
+                              base->offset + delta, false};
+      } else {
+        // Preserve the exact dynamic GEP identity.  This is intentionally
+        // less aggressive than constructing an algebraic pointer expression:
+        // separately computed but merely similar dynamic addresses remain
+        // potentially aliased and therefore conservative.
+        result = AddressKey{base->base, stripped, 0, false};
+      }
+    }
+  } else if (const auto *phi = llvm::dyn_cast<llvm::PHINode>(stripped)) {
+    for (unsigned index = 0; index < phi->getNumIncomingValues(); ++index) {
+      auto incoming = addressKey(phi->getIncomingValue(index), memoryBases,
+                                 layout, active);
+      if (!incoming || (result && !sameAddress(*result, *incoming))) {
+        result.reset();
+        break;
+      }
+      result = incoming;
+    }
+  } else if (const auto *select = llvm::dyn_cast<llvm::SelectInst>(stripped)) {
+    auto left = addressKey(select->getTrueValue(), memoryBases, layout, active);
+    auto right = addressKey(select->getFalseValue(), memoryBases, layout, active);
+    if (left && right && sameAddress(*left, *right))
+      result = left;
+  }
+
+  active.erase(pointer);
+  return result;
+}
+
+std::optional<AddressKey> addressKey(
+    const llvm::Value *pointer,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout) {
+  std::unordered_set<const llvm::Value *> active;
+  return addressKey(pointer, memoryBases, layout, active);
 }
 
 unsigned accessBytes(const llvm::Type *type) {
@@ -103,7 +180,7 @@ unsigned accessBytes(const llvm::Type *type) {
 bool sameAddress(const AddressKey &left, const AddressKey &right) {
   if (left.base != right.base || left.constant != right.constant)
     return false;
-  return left.constant ? left.offset == right.offset : left.dynamic == right.dynamic;
+  return left.dynamic == right.dynamic && left.offset == right.offset;
 }
 
 // Return true only when two concrete byte ranges are definitely disjoint.
@@ -225,7 +302,16 @@ bool provenLeafNoMemoryWrite(const llvm::CallBase &call, const Graph *graph,
   return safe;
 }
 
-enum class CallMemoryEffect { Barrier, ReadOnly, ProvenLeafNoWrite };
+enum class CallMemoryEffect {
+  Barrier,
+  ReadOnly,
+  ProvenLeafNoWrite,
+  ProvenSummaryNoWrite,
+};
+
+bool hasCallEffectSummary(const llvm::CallBase &call) {
+  return call.getMetadata("dragon.call.effect") != nullptr;
+}
 
 CallMemoryEffect callMemoryEffect(const llvm::CallBase &call,
                                   const Graph *graph,
@@ -233,6 +319,12 @@ CallMemoryEffect callMemoryEffect(const llvm::CallBase &call,
                                   LeafCallCache &cache) {
   if (callPreservesMemory(call))
     return CallMemoryEffect::ReadOnly;
+  if (options.consumeCallEffectSummaries) {
+    const auto summary = getCallEffectSummary(call);
+    if (summary && (summary->memory == CallMemoryEffectKind::NoMemory ||
+                    summary->memory == CallMemoryEffectKind::ReadOnly))
+      return CallMemoryEffect::ProvenSummaryNoWrite;
+  }
   if (provenLeafNoMemoryWrite(call, graph, options, cache))
     return CallMemoryEffect::ProvenLeafNoWrite;
   return CallMemoryEffect::Barrier;
@@ -241,7 +333,7 @@ CallMemoryEffect callMemoryEffect(const llvm::CallBase &call,
 bool isKnownLocalStore(const llvm::StoreInst &store,
                        const std::unordered_set<llvm::Value *> &memoryBases,
                        const llvm::DataLayout &layout) {
-  if (addressKey(store.getPointerOperand(), memoryBases))
+  if (addressKey(store.getPointerOperand(), memoryBases, layout))
     return false;
   const auto *underlying = llvm::getUnderlyingObject(store.getPointerOperand(), 32);
   if (llvm::isa<llvm::AllocaInst>(underlying))
@@ -265,10 +357,11 @@ void invalidate(std::vector<Fact> &facts, const Access &store,
 }
 
 std::optional<Access> classifyLoad(llvm::LoadInst &load,
-                                   const std::unordered_set<llvm::Value *> &memoryBases) {
+                                   const std::unordered_set<llvm::Value *> &memoryBases,
+                                   const llvm::DataLayout &layout) {
   if (load.isVolatile() || load.isAtomic())
     return std::nullopt;
-  auto address = addressKey(load.getPointerOperand(), memoryBases);
+  auto address = addressKey(load.getPointerOperand(), memoryBases, layout);
   const auto bytes = accessBytes(load.getType());
   if (!address || !bytes)
     return std::nullopt;
@@ -276,10 +369,11 @@ std::optional<Access> classifyLoad(llvm::LoadInst &load,
 }
 
 std::optional<Access> classifyStore(llvm::StoreInst &store,
-                                    const std::unordered_set<llvm::Value *> &memoryBases) {
+                                    const std::unordered_set<llvm::Value *> &memoryBases,
+                                    const llvm::DataLayout &layout) {
   if (store.isVolatile() || store.isAtomic())
     return std::nullopt;
-  auto address = addressKey(store.getPointerOperand(), memoryBases);
+  auto address = addressKey(store.getPointerOperand(), memoryBases, layout);
   const auto bytes = accessBytes(store.getValueOperand()->getType());
   if (!address || !bytes)
     return std::nullopt;
@@ -435,14 +529,20 @@ void runByteForwarding(llvm::Function &function,
         const bool lifetimeStart = call->getCalledFunction() &&
             call->getCalledFunction()->isIntrinsic() &&
             call->getCalledFunction()->getIntrinsicID() == llvm::Intrinsic::lifetime_start;
-        if (!lifetimeStart && callMemoryEffect(*call, graph, options,
-                                               leafCallCache) ==
-                                CallMemoryEffect::Barrier)
-          facts.clear();
+        if (!lifetimeStart) {
+          const auto effect = callMemoryEffect(*call, graph, options, leafCallCache);
+          if (effect == CallMemoryEffect::Barrier) {
+            facts.clear();
+            if (options.consumeCallEffectSummaries && hasCallEffectSummary(*call))
+              ++stats.summaryCallsRejected;
+          } else if (effect == CallMemoryEffect::ProvenSummaryNoWrite) {
+            ++stats.summaryCallsPreserved;
+          }
+        }
         continue;
       }
       if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
-        auto access = classifyStore(*store, memoryBases);
+        auto access = classifyStore(*store, memoryBases, layout);
         if (!access) {
           if (!isKnownLocalStore(*store, memoryBases, layout)) facts.clear();
           continue;
@@ -462,7 +562,7 @@ void runByteForwarding(llvm::Function &function,
 
       auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
       if (!load) continue;
-      auto access = classifyLoad(*load, memoryBases);
+        auto access = classifyLoad(*load, memoryBases, layout);
       if (!access || !access->address.constant) continue;
       auto base = facts.find(access->address.base);
       if (base != facts.end()) {
@@ -676,15 +776,20 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             if (!lifetimeStart && effect == CallMemoryEffect::Barrier) {
               facts.clear();
               ++stats.callBarriers;
+              if (options.consumeCallEffectSummaries && hasCallEffectSummary(*call))
+                ++stats.summaryCallsRejected;
             } else if (!lifetimeStart &&
                        effect == CallMemoryEffect::ProvenLeafNoWrite) {
               ++stats.leafCallsPreserved;
+            } else if (!lifetimeStart &&
+                       effect == CallMemoryEffect::ProvenSummaryNoWrite) {
+              ++stats.summaryCallsPreserved;
             }
             continue;
           }
 
           if (auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
-            auto access = classifyLoad(*load, memoryBases);
+            auto access = classifyLoad(*load, memoryBases, module.getDataLayout());
             if (!access)
               continue;
             ++stats.guestLoads;
@@ -721,7 +826,7 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
           }
 
           if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
-            auto access = classifyStore(*store, memoryBases);
+            auto access = classifyStore(*store, memoryBases, module.getDataLayout());
             if (!access) {
               if (!isKnownLocalStore(*store, memoryBases, module.getDataLayout())) {
                 facts.clear();
@@ -816,7 +921,8 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
           header->begin(), header->end(), [&](const llvm::Instruction &instruction) {
             const auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
             return store && classifyStore(
-                *const_cast<llvm::StoreInst *>(store), memoryBases).has_value();
+                *const_cast<llvm::StoreInst *>(store), memoryBases,
+                module.getDataLayout()).has_value();
           });
       bool valid = outsidePreds.size() == 1 && headerExits.size() == 1 &&
                    bodyExits.size() <= 1 && !loopBlocks.contains(outsidePreds.front()) &&

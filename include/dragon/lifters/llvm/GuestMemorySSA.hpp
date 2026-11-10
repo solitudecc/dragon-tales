@@ -30,6 +30,9 @@ struct MemoryForwardOptions {
   std::uint32_t maxCallBlocks = 32;
   std::uint32_t maxCallOperations = 4096;
   std::uint32_t maxCallFacts = 8192;
+  /// Consume only validated CallEffectSummary metadata. Unknown or malformed
+  /// summaries remain CALL barriers. The default is false for compatibility.
+  bool consumeCallEffectSummaries = false;
 };
 
 struct MemoryForwardStats {
@@ -50,6 +53,8 @@ struct MemoryForwardStats {
   std::size_t budgetExhausted = 0;
   std::size_t byteRebuilds = 0;
   std::size_t leafCallsPreserved = 0;
+  std::size_t summaryCallsPreserved = 0;
+  std::size_t summaryCallsRejected = 0;
 };
 
 namespace detail {

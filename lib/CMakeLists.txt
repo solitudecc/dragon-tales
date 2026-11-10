@@ -11,6 +11,7 @@ add_library(libdragon SHARED
         LLVMLifter.cpp
         LLVMDispatchSpecialization.cpp
         LLVMDeflattening.cpp
+        CallEffectSummary.cpp
         GuestMemorySSA.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp

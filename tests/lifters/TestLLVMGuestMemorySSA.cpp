@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <dragon/disassembler/Disassembler.hpp>
+#include <dragon/lifters/llvm/CallEffectSummary.hpp>
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <llvm/IR/Instructions.h>
@@ -11,7 +12,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace dragon;
@@ -149,6 +153,229 @@ TEST_CASE("S3 preserves Guest facts across an IR readnone call",
   CHECK(stats.loadsForwarded >= 1);
   CHECK(integerLoads(module) == 0);
   verify(module);
+}
+
+TEST_CASE("S2 canonicalizes nested typed and selected Guest addresses",
+          "[llvm][guest-memory-ssa]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"guest-memory-address-keys", context};
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *i1 = llvm::Type::getInt1Ty(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                       {i1, ptr, ptr, ptr}, false);
+  auto *function = llvm::Function::Create(type, llvm::GlobalValue::ExternalLinkage,
+                                          "address_keys", module);
+  auto args = function->arg_begin();
+  ++args;
+  auto *memory = &*args++;
+  auto *condition = &*function->arg_begin();
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  llvm::IRBuilder<> builder(entry);
+  auto *data = builder.CreateLoad(ptr, memory);
+
+  // The first store uses a typed GEP. Its index is in i64 elements, so the
+  // actual Guest byte offset is 8, not the literal index 1.
+  auto *typedStore = builder.CreateGEP(builder.getInt64Ty(), data,
+                                       builder.getInt64(1));
+  builder.CreateStore(builder.getInt64(9), typedStore);
+  auto *byteLoad = builder.CreateGEP(builder.getInt8Ty(), data,
+                                     builder.getInt64(8));
+  builder.CreateLoad(builder.getInt64Ty(), byteLoad);
+
+  // The second store is behind a nested constant GEP. Both paths name the
+  // same Guest slot after recursively accumulating their byte offsets.
+  auto *nestedBase = builder.CreateGEP(builder.getInt8Ty(), data,
+                                       builder.getInt64(0x4000));
+  auto *nestedStore = builder.CreateGEP(builder.getInt64Ty(), nestedBase,
+                                        builder.getInt64(0));
+  builder.CreateStore(builder.getInt64(11), nestedStore);
+  auto *directLoad = builder.CreateGEP(builder.getInt8Ty(), data,
+                                       builder.getInt64(0x4000));
+  builder.CreateLoad(builder.getInt64Ty(), directLoad);
+
+  // Both select arms are the same proven Guest address. The condition itself
+  // remains unknown; only the address relation is used.
+  auto *left = builder.CreateGEP(builder.getInt8Ty(), data,
+                                 builder.getInt64(0x5000));
+  auto *right = builder.CreateGEP(builder.getInt8Ty(), data,
+                                  builder.getInt64(0x5000));
+  auto *selected = builder.CreateSelect(condition, left, right);
+  builder.CreateStore(builder.getInt64(13), selected);
+  auto *selectedLoad = builder.CreateGEP(builder.getInt8Ty(), data,
+                                         builder.getInt64(0x5000));
+  builder.CreateLoad(builder.getInt64Ty(), selectedLoad);
+  builder.CreateRetVoid();
+
+  const auto before = integerLoads(module);
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(
+      module, MemoryForwardOptions{65536, false});
+  CHECK(stats.available);
+  CHECK(stats.complete);
+  CHECK(stats.loadsForwarded >= 3);
+  CHECK(integerLoads(module) < before);
+  CHECK(stats.aliasBarriers == 0);
+  verify(module);
+}
+
+TEST_CASE("S4 consumes explicit read-only call summaries but rejects writes",
+          "[llvm][guest-memory-ssa][call-effects]") {
+  auto makeModule = [](std::optional<llvmlifter::CallEffectSummary> summary) {
+    auto *context = new llvm::LLVMContext();
+    auto *module = new llvm::Module{"guest-memory-summary", *context};
+    auto *ptr = llvm::PointerType::getUnqual(*context);
+    auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(*context),
+                                         {ptr, ptr, ptr, ptr}, false);
+    auto *function = llvm::Function::Create(
+        type, llvm::GlobalValue::ExternalLinkage, "summary_case", *module);
+    auto *callee = llvm::Function::Create(
+        type, llvm::GlobalValue::ExternalLinkage, "unknown_summary_target", *module);
+    auto args = function->arg_begin();
+    ++args;
+    auto *memory = &*args++;
+    auto *entry = llvm::BasicBlock::Create(*context, "entry", function);
+    llvm::IRBuilder<> builder(entry);
+    auto *data = builder.CreateLoad(ptr, memory);
+    auto *slot = builder.CreateGEP(builder.getInt8Ty(), data,
+                                   builder.getInt64(0x4000));
+    builder.CreateStore(builder.getInt64(7), slot);
+    auto *call = builder.CreateCall(
+        callee, {function->getArg(0), function->getArg(1), function->getArg(2),
+                 function->getArg(3)});
+    if (summary) REQUIRE(attachCallEffectSummary(*call, *summary));
+    builder.CreateLoad(builder.getInt64Ty(), slot);
+    builder.CreateRetVoid();
+    return std::pair{module, context};
+  };
+
+  {
+    auto [module, context] = makeModule(std::nullopt);
+    MemoryForwardOptions options;
+    options.runMem2Reg = false;
+    options.consumeCallEffectSummaries = true;
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
+    CHECK(stats.callBarriers >= 1);
+    CHECK(stats.summaryCallsRejected == 0);
+    CHECK(stats.loadsForwarded == 0);
+    verify(*module);
+    delete module;
+    delete context;
+  }
+
+  {
+    CallEffectSummary summary;
+    summary.proven = true;
+    summary.memory = CallMemoryEffectKind::ReadOnly;
+    auto [module, context] = makeModule(summary);
+    MemoryForwardOptions options;
+    options.runMem2Reg = false;
+    options.consumeCallEffectSummaries = true;
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
+    CHECK(stats.summaryCallsPreserved >= 1);
+    CHECK(stats.summaryCallsRejected == 0);
+    CHECK(stats.loadsForwarded >= 1);
+    CHECK(integerLoads(*module) == 0);
+    verify(*module);
+    delete module;
+    delete context;
+  }
+
+  {
+    CallEffectSummary summary;
+    summary.proven = true;
+    summary.memory = CallMemoryEffectKind::KnownRanges;
+    summary.writes.push_back(
+        {CallMemoryRange::Base::GuestMemory, 0x4000, 8});
+    auto [module, context] = makeModule(summary);
+    MemoryForwardOptions options;
+    options.runMem2Reg = false;
+    options.consumeCallEffectSummaries = true;
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
+    CHECK(stats.summaryCallsRejected >= 1);
+    CHECK(stats.loadsForwarded == 0);
+    verify(*module);
+    delete module;
+    delete context;
+  }
+}
+
+TEST_CASE("S4 records syscall ABI summaries without trusting unknown syscalls",
+          "[llvm][guest-memory-ssa][call-effects]") {
+  auto makeModule = [](bool attachSummary) {
+    auto *context = new llvm::LLVMContext();
+    auto *module = new llvm::Module{"guest-syscall-summary", *context};
+    auto *ptr = llvm::PointerType::getUnqual(*context);
+    auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(*context),
+                                         {ptr, ptr, ptr, ptr}, false);
+    auto *function = llvm::Function::Create(
+        type, llvm::GlobalValue::ExternalLinkage, "syscall_case", *module);
+    auto *callee = llvm::Function::Create(
+        type, llvm::GlobalValue::ExternalLinkage, "unknown_syscall", *module);
+    auto args = function->arg_begin();
+    ++args;
+    auto *memory = &*args++;
+    auto *entry = llvm::BasicBlock::Create(*context, "entry", function);
+    llvm::IRBuilder<> builder(entry);
+    auto *data = builder.CreateLoad(ptr, memory);
+    auto *slot = builder.CreateGEP(builder.getInt8Ty(), data,
+                                   builder.getInt64(0x5000));
+    builder.CreateStore(builder.getInt64(9), slot);
+    auto *call = builder.CreateCall(
+        callee, {function->getArg(0), function->getArg(1), function->getArg(2),
+                 function->getArg(3)});
+    if (attachSummary) {
+      CallEffectSummary summary;
+      summary.boundary = CallBoundaryKind::SystemCall;
+      summary.hasSyscallNumber = true;
+      summary.syscallNumber = 0; // Linux x86-64 read; number zero is valid metadata.
+      summary.proven = true;
+      summary.memory = CallMemoryEffectKind::NoMemory;
+      summary.values.push_back({CallValueEffect::Location::ReturnRegister, 0,
+                                64, true, 123});
+      REQUIRE(attachCallEffectSummary(*call, summary));
+    }
+    builder.CreateLoad(builder.getInt64Ty(), slot);
+    builder.CreateRetVoid();
+    return std::pair{module, context};
+  };
+
+  {
+    auto [module, context] = makeModule(false);
+    MemoryForwardOptions options;
+    options.runMem2Reg = false;
+    options.consumeCallEffectSummaries = true;
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
+    CHECK(stats.callBarriers >= 1);
+    CHECK(stats.loadsForwarded == 0);
+    verify(*module);
+    delete module;
+    delete context;
+  }
+
+  {
+    auto [module, context] = makeModule(true);
+    auto &function = *module->getFunction("syscall_case");
+    const auto *call = llvm::dyn_cast<llvm::CallBase>(
+        &*std::next(function.front().begin(), 3));
+    REQUIRE(call != nullptr);
+    const auto parsed = getCallEffectSummary(*call);
+    REQUIRE(parsed.has_value());
+    CHECK(parsed->boundary == CallBoundaryKind::SystemCall);
+    CHECK(parsed->hasSyscallNumber);
+    CHECK(parsed->syscallNumber == 0);
+    CHECK(parsed->values.size() == 1);
+
+    MemoryForwardOptions options;
+    options.runMem2Reg = false;
+    options.consumeCallEffectSummaries = true;
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(*module, options);
+    CHECK(stats.summaryCallsPreserved >= 1);
+    CHECK(stats.callBarriers == 0);
+    CHECK(stats.loadsForwarded >= 1);
+    CHECK(integerLoads(*module) == 0);
+    verify(*module);
+    delete module;
+    delete context;
+  }
 }
 
 TEST_CASE("S3 preserves Guest facts across a proven internal leaf call",
