@@ -105,6 +105,28 @@ bool equivalentValue(const llvm::Value *left, const llvm::Value *right) {
          a->getValue() == b->getValue();
 }
 
+bool sameFact(const Fact &left, const Fact &right) {
+  return left.access.bytes == right.access.bytes &&
+         sameAddress(left.access.address, right.access.address) &&
+         equivalentValue(left.value, right.value);
+}
+
+bool sameFacts(const std::vector<Fact> &left, const std::vector<Fact> &right) {
+  if (left.size() != right.size()) return false;
+  std::vector<bool> matched(right.size(), false);
+  for (const auto &fact : left) {
+    std::size_t match = right.size();
+    for (std::size_t index = 0; index < right.size(); ++index)
+      if (!matched[index] && sameFact(fact, right[index])) {
+        match = index;
+        break;
+      }
+    if (match == right.size()) return false;
+    matched[match] = true;
+  }
+  return true;
+}
+
 bool isMemoryBaseLoad(const llvm::LoadInst &load, const llvm::Function &function) {
   if (!load.getType()->isPointerTy() || load.isVolatile() || load.isAtomic() ||
       function.arg_size() < 2)
@@ -194,10 +216,12 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
       for (auto *successor : llvm::successors(block)) reachQueue.push_back(successor);
     }
     std::unordered_set<llvm::BasicBlock *> loopBlocks;
+    std::map<llvm::BasicBlock *, std::unordered_set<llvm::BasicBlock *>> backedgePreds;
     for (auto *header : reachable) {
       for (auto *pred : llvm::predecessors(header)) {
         if (!reachable.contains(pred) || !dom.dominates(header, pred))
           continue;
+        backedgePreds[header].insert(pred);
         std::deque<llvm::BasicBlock *> loopQueue{pred};
         loopBlocks.insert(header);
         while (!loopQueue.empty()) {
@@ -219,6 +243,19 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     incoming[&function.getEntryBlock()] = {};
     work.push_back(&function.getEntryBlock());
     std::unordered_set<llvm::BasicBlock *> visited;
+    struct DeferredEdge {
+      llvm::BasicBlock *pred = nullptr;
+      llvm::BasicBlock *successor = nullptr;
+      std::vector<Fact> facts;
+    };
+    std::vector<DeferredEdge> deferredEdges;
+    struct PendingRewrite {
+      llvm::LoadInst *load = nullptr;
+      llvm::Value *value = nullptr;
+      bool reused = false;
+    };
+    std::vector<PendingRewrite> pendingRewrites;
+    std::size_t plannedRewrites = stats.loadsForwarded;
     for (auto *block : reachable) {
       if (block == &function.getEntryBlock()) continue;
       pending[block] = 0;
@@ -226,131 +263,195 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
         if (reachable.contains(pred) && !dom.dominates(block, pred))
           ++pending[block];
     }
-    while (!work.empty()) {
-      auto *block = work.front(); work.pop_front();
-      if (!visited.insert(block).second) continue;
-      ++stats.blocksVisited;
-      auto facts = incoming[block];
-      for (auto it = block->begin(); it != block->end();) {
-        auto &instruction = *it++;
-        if (auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
-          if (!call->getCalledFunction() ||
-              !call->getCalledFunction()->isIntrinsic() ||
-              call->getCalledFunction()->getIntrinsicID() != llvm::Intrinsic::lifetime_start) {
-            facts.clear();
-            ++stats.callBarriers;
-          }
-          continue;
-        }
+    auto mergeIncoming = [&](llvm::BasicBlock *successor) {
+      std::vector<std::pair<llvm::BasicBlock *, const std::vector<Fact> *>> edges;
+      for (const auto &[pred, predFacts] : edgeFacts[successor])
+        if (const auto backedges = backedgePreds.find(successor);
+            backedges == backedgePreds.end() || !backedges->second.contains(pred))
+          edges.emplace_back(pred, &predFacts);
 
-        if (auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
-          auto access = classifyLoad(*load, memoryBases);
-          if (!access)
-            continue;
-          ++stats.guestLoads;
-          auto fact = std::find_if(facts.rbegin(), facts.rend(), [&](const Fact &candidate) {
-            return candidate.access.bytes == access->bytes &&
-                   sameAddress(candidate.access.address, access->address);
-          });
-          if (fact != facts.rend() && stats.loadsForwarded < options.maxRewrites) {
-            load->replaceAllUsesWith(fact->value);
-            load->eraseFromParent();
-            ++stats.loadsForwarded;
-            if (!fact->access.store)
-              ++stats.loadsReused;
-            stats.changed = true;
-            continue;
+      std::vector<Fact> merged;
+      if (!edges.empty()) {
+        const auto &first = *edges.front().second;
+        for (const auto &candidate : first) {
+          bool presentEverywhere = true;
+          std::vector<llvm::Value *> values;
+          for (const auto &[pred, predFacts] : edges) {
+            (void)pred;
+            auto it = std::find_if(predFacts->begin(), predFacts->end(),
+                [&](const Fact &fact) {
+                  return fact.access.bytes == candidate.access.bytes &&
+                         sameAddress(fact.access.address, candidate.access.address);
+                });
+            if (it == predFacts->end()) { presentEverywhere = false; break; }
+            values.push_back(it->value);
           }
-          if (fact == facts.rend())
-            for (const auto &candidate : facts)
-              if (!sameAddress(candidate.access.address, access->address) &&
-                  mayOverlap(candidate.access.address, candidate.access.bytes,
-                             access->address, access->bytes)) {
-                ++stats.partialOverlaps;
-                break;
-              }
-          if (fact == facts.rend())
-            facts.push_back(Fact{*access, load});
-          else
-            facts.push_back(Fact{*access, load});
-          continue;
-        }
-
-        if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
-          auto access = classifyStore(*store, memoryBases);
-          if (!access) {
-            if (!isKnownLocalStore(*store, memoryBases, module.getDataLayout())) {
-              facts.clear();
-              ++stats.aliasBarriers;
+          if (!presentEverywhere) { ++stats.joinBarriers; continue; }
+          const bool equal = std::all_of(values.begin() + 1, values.end(),
+              [&](llvm::Value *value) { return equivalentValue(value, values.front()); });
+          llvm::Value *value = values.front();
+          if (!equal && options.enablePhi) {
+            llvm::IRBuilder<> builder(successor, successor->getFirstInsertionPt());
+            auto *phi = builder.CreatePHI(value->getType(), values.size(), "guest.mem.phi");
+            std::size_t index = 0;
+            for (const auto &[pred, predFacts] : edges) {
+              (void)predFacts;
+              phi->addIncoming(values[index++], pred);
             }
+            value = phi;
+            ++stats.phisInserted;
+          } else if (!equal) {
+            ++stats.joinBarriers;
             continue;
           }
-          ++stats.guestStores;
-          invalidate(facts, *access, stats);
-          facts.push_back(Fact{*access, access->value});
+          auto fact = candidate;
+          fact.value = value;
+          merged.push_back(fact);
         }
       }
-      for (auto *successor : llvm::successors(block)) {
-        if (!reachable.contains(successor)) continue;
-        const bool crossesLoop = loopBlocks.contains(block) ||
-                                 loopBlocks.contains(successor);
-        if (crossesLoop)
-          ++stats.loopBarriers;
-        if (dom.dominates(successor, block)) {
-          continue;
-        }
-        auto nextFacts = options.enableCrossBlock && !crossesLoop
-            ? facts : std::vector<Fact>{};
-        edgeFacts[successor][block] = nextFacts;
-        if (pending[successor] > 0) --pending[successor];
-        if (pending[successor] != 0) continue;
-
-        std::vector<Fact> merged;
-        auto &edges = edgeFacts[successor];
-        if (!edges.empty()) {
-          const auto &first = edges.begin()->second;
-          for (const auto &candidate : first) {
-            bool presentEverywhere = true;
-            std::vector<llvm::Value *> values;
-            for (const auto &[pred, predFacts] : edges) {
-              auto it = std::find_if(predFacts.begin(), predFacts.end(),
-                  [&](const Fact &fact) {
-                    return fact.access.bytes == candidate.access.bytes &&
-                           sameAddress(fact.access.address, candidate.access.address);
-                  });
-              if (it == predFacts.end()) { presentEverywhere = false; break; }
-              values.push_back(it->value);
+      incoming[successor] = std::move(merged);
+      work.push_back(successor);
+    };
+    auto acceptEdge = [&](llvm::BasicBlock *pred, llvm::BasicBlock *successor,
+                          std::vector<Fact> facts) {
+      edgeFacts[successor][pred] = std::move(facts);
+      if (pending[successor] > 0) --pending[successor];
+      if (pending[successor] == 0)
+        mergeIncoming(successor);
+    };
+    auto processWork = [&]() {
+      while (!work.empty()) {
+        auto *block = work.front(); work.pop_front();
+        if (!visited.insert(block).second) continue;
+        ++stats.blocksVisited;
+        auto facts = incoming[block];
+        for (auto it = block->begin(); it != block->end();) {
+          auto &instruction = *it++;
+          if (auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+            if (!call->getCalledFunction() ||
+                !call->getCalledFunction()->isIntrinsic() ||
+                call->getCalledFunction()->getIntrinsicID() != llvm::Intrinsic::lifetime_start) {
+              facts.clear();
+              ++stats.callBarriers;
             }
-            if (!presentEverywhere) { ++stats.joinBarriers; continue; }
-            bool equal = std::all_of(values.begin() + 1, values.end(),
-                                     [&](llvm::Value *v) { return equivalentValue(v, values.front()); });
-            llvm::Value *value = values.front();
-            if (!equal && options.enablePhi) {
-              auto *type = value->getType();
-              llvm::IRBuilder<> builder(successor, successor->getFirstInsertionPt());
-              auto *phi = builder.CreatePHI(type, values.size(), "guest.mem.phi");
-              std::size_t index = 0;
-              for (const auto &[pred, predFacts] : edges) {
-                auto it = std::find_if(predFacts.begin(), predFacts.end(),
-                    [&](const Fact &fact) {
-                      return fact.access.bytes == candidate.access.bytes &&
-                             sameAddress(fact.access.address, candidate.access.address);
-                    });
-                phi->addIncoming(values[index++], pred);
+            continue;
+          }
+
+          if (auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+            auto access = classifyLoad(*load, memoryBases);
+            if (!access)
+              continue;
+            ++stats.guestLoads;
+            auto fact = std::find_if(facts.rbegin(), facts.rend(), [&](const Fact &candidate) {
+              return candidate.access.bytes == access->bytes &&
+                     sameAddress(candidate.access.address, access->address);
+            });
+            if (fact != facts.rend() && plannedRewrites < options.maxRewrites) {
+              ++plannedRewrites;
+              if (loopBlocks.contains(block)) {
+                pendingRewrites.push_back({load, fact->value, !fact->access.store});
+              } else {
+                load->replaceAllUsesWith(fact->value);
+                load->eraseFromParent();
+                ++stats.loadsForwarded;
+                if (!fact->access.store)
+                  ++stats.loadsReused;
+                stats.changed = true;
               }
-              value = phi;
-              ++stats.phisInserted;
-            } else if (!equal) {
-              ++stats.joinBarriers;
               continue;
             }
-            auto fact = candidate;
-            fact.value = value;
-            merged.push_back(fact);
+            if (fact == facts.rend())
+              for (const auto &candidate : facts)
+                if (!sameAddress(candidate.access.address, access->address) &&
+                    mayOverlap(candidate.access.address, candidate.access.bytes,
+                               access->address, access->bytes)) {
+                  ++stats.partialOverlaps;
+                  break;
+                }
+            facts.push_back(Fact{*access, load});
+            continue;
+          }
+
+          if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+            auto access = classifyStore(*store, memoryBases);
+            if (!access) {
+              if (!isKnownLocalStore(*store, memoryBases, module.getDataLayout())) {
+                facts.clear();
+                ++stats.aliasBarriers;
+              }
+              continue;
+            }
+            ++stats.guestStores;
+            invalidate(facts, *access, stats);
+            facts.push_back(Fact{*access, access->value});
           }
         }
-        incoming[successor] = std::move(merged);
-        work.push_back(successor);
+        for (auto *successor : llvm::successors(block)) {
+          if (!reachable.contains(successor)) continue;
+          if (dom.dominates(successor, block)) {
+            ++stats.loopBarriers;
+            edgeFacts[successor][block] = facts;
+            continue;
+          }
+          const bool leavesLoop = loopBlocks.contains(block) &&
+                                  !loopBlocks.contains(successor);
+          if (leavesLoop) {
+            ++stats.loopBarriers;
+            deferredEdges.push_back({block, successor, facts});
+            continue;
+          }
+          auto nextFacts = options.enableCrossBlock ? facts : std::vector<Fact>{};
+          acceptEdge(block, successor, std::move(nextFacts));
+        }
+      }
+    };
+    processWork();
+
+    // A loop is admitted only when its memory fact set is an exact invariant:
+    // the state entering the header must match every recorded backedge. This
+    // is deliberately narrower than a general loop dataflow fixed point.
+    bool loopsStable = true;
+    for (const auto &[header, backedges] : backedgePreds) {
+      const auto input = incoming.find(header);
+      if (input == incoming.end() || backedges.empty()) {
+        loopsStable = false;
+        break;
+      }
+      for (auto *pred : backedges) {
+        const auto edges = edgeFacts.find(header);
+        if (edges == edgeFacts.end()) {
+          loopsStable = false;
+          break;
+        }
+        const auto value = edges->second.find(pred);
+        if (value == edges->second.end() ||
+            !sameFacts(input->second, value->second)) {
+          loopsStable = false;
+          break;
+        }
+      }
+      if (!loopsStable) break;
+    }
+    if (!loopsStable) {
+      pendingRewrites.clear();
+      plannedRewrites = stats.loadsForwarded;
+    }
+    for (auto &edge : deferredEdges) {
+      auto facts = loopsStable && options.enableCrossBlock
+          ? std::move(edge.facts) : std::vector<Fact>{};
+      acceptEdge(edge.pred, edge.successor, std::move(facts));
+    }
+    processWork();
+    if (loopsStable) {
+      for (const auto &rewrite : pendingRewrites) {
+        if (!rewrite.load || !rewrite.load->getParent() ||
+            stats.loadsForwarded >= options.maxRewrites)
+          continue;
+        rewrite.load->replaceAllUsesWith(rewrite.value);
+        rewrite.load->eraseFromParent();
+        ++stats.loadsForwarded;
+        if (rewrite.reused) ++stats.loadsReused;
+        stats.changed = true;
       }
     }
     if (stats.loadsForwarded >= options.maxRewrites) {

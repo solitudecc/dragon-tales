@@ -1783,9 +1783,10 @@ class LLVMLifter:
         """Run the conservative S2 Guest-memory forwarding stage.
 
         Register promotion is optional. Exact-width facts cross acyclic CFG
-        edges; differing values at a join use a Guest-memory PHI. Calls,
-        unknown aliases, natural loops and partial overlaps remain barriers.
-        The default optimization pipeline does not invoke this stage.
+        edges; differing values at a join use a Guest-memory PHI. Loop facts
+        cross a backedge only after an exact invariant check. Calls, unknown
+        aliases and partial overlaps remain barriers otherwise. The default
+        optimization pipeline does not invoke this stage.
         """
         if type(max_rewrites) is not int or not 0 <= max_rewrites <= 0xffffffffffffffff:
             raise ValueError('max_rewrites must be a non-negative integer')
