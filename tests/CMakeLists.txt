@@ -58,6 +58,7 @@ add_executable(dragon_tests
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
         lifters/TestLLVMGuestMemorySSA.cpp
+        lifters/TestLLVMCallStateBarriers.cpp
         loader/TestLoader.cpp
 )
 
