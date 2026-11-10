@@ -37,10 +37,14 @@ load-backed selector，以及受摘要约束的跨函数 GuestState selector。�
 新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、非法摘要、外部可见
 callee 和未知地址关系都保持保守。
 
-复杂 Tigress 的主要剩余缺口已经收窄为摘要来源和调用点专门化：前一函数在 CALL continuation
-前写入 Guest state，下一函数在入口读取 state 并进入 dispatcher。当前 Pass 已消费可信的
-`GuestState` 完整常量摘要，但不会自动从未知外部调用、堆链表或动态轨迹生成摘要；不同调用点
-需要不同目标时也不会全局改写共享 callee，后续应由可信插件提供 clone/入口上下文。
+2026-11-11 对真实 kernel 的重新定位纠正了此前的跨调用 blocker 描述：`regs+128` 的入口
+switch 是 Dragon RIP 路由，不是 CFF 状态。f-cff 的 next 完全在同一机器函数内，O0 是
+Guest 栈槽、O2 是 RCX；普通 lift 在真实表 LOAD/JMP 处退出，首先缺少包含 case/回边的
+执行覆盖。现有 `liftStaticRegion` 已能在不假定表内容不变的前提下安全展开这些块；展开后
+真实 target switch 仍读取未知表项，需继续补同函数状态关系和保留实际 LOAD/检查/default
+的按边线程化。跨调用摘要只解决其自身的受限契约，不能据此宣称复杂 CFF 已经消除。
+四个冻结 ELF 的定位、原始表跳转与 RIP switch 区分、16 次完整状态重放见
+[真实 CFF 状态恢复验证](same-function-cff-validation-20261111.md)。
 
 ## 1. 对当前问题的重新定位
 

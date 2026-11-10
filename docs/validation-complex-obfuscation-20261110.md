@@ -23,8 +23,12 @@ revision 2128，seed `20261110`，8 个边界输入，O0/O2，两种反汇编策
 `mem2reg → instcombine → gvn → mba → predicates → dispatch-specialize →
 dispatch-deflatten → control-flow → dce`，16/16 个 LLVM pipeline 报告和 IR verify
 通过。MBA/谓词阶段在可证明位置发生改写，例如 `f-mba-O0` 的 IR 行数由 `14021` 降到
-`3094`，`f-combo-O2` 由 `4109` 降到 `1775`。这些复杂样本的 dispatcher 状态仍然是
-未知或多值，因此两个分发 Pass 都报告 unresolved、改写边为零；这是正确的保守结果。
+`3094`，`f-combo-O2` 由 `4109` 降到 `1775`。两个分发 Pass 的历史报告均为 unresolved、
+改写边为零；该统计没有区分框架的 RIP entry switch 和真正的 CFF，不能据此推断混淆状态
+恢复进度。2026-11-11 的冻结 seed 4242 复核已区分二者：普通 lift 在真实表 LOAD/JMP
+处保留 Transfer，尚无 case CFG；显式静态区域提升后能完整执行，真实表目标 switch 仍在。
+不同种子的数据不能合并；详细定位与本轮 16 次完整状态对照见
+[真实 CFF 状态恢复验证](same-function-cff-validation-20261111.md)。
 
 同一批 16 个 ELF 单独运行 Guest memory SSA，16/16 次分析完成且没有错误改写；复杂
 函数中的动态指针和调用使其报告 `alias_barriers`，而不是猜测 Guest 槽关系。
