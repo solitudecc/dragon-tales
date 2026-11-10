@@ -211,6 +211,29 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Same-function dispatcher hardening (2026-11-11, baseline `9020c70`):
+`dispatch-deflatten` now threads each proved predecessor independently; unknown
+CALL/state edges retain the original dispatcher. A dispatcher can count as both
+rewritten and unresolved. Never bypass live-out PHIs or volatile/atomic selector
+loads, and never update only the destination list of an `indirectbr`.
+The experimental cross-call entry fallback was removed: `CallMemoryConstant`
+describes a normal-return postcondition, not a callee-entry fact. Distinct nested
+pointer objects and intervening callee writes were also unsoundly conflated.
+Compatibility fields remain, but even explicit `consumeCallEffectSummaries=true`
+does not activate that path; all three cross-call counters remain zero.
+GuestMemorySSA still consumes valid normal-return GuestMemory write effects.
+Rare cross-function state transformations belong in a separate, proved pass.
+See `docs/same-function-dispatch-fixes-20261111.md` and
+`docs/same-function-cff-validation-20261111.md` for controls and final counts.
+Final CTest: Z3 867/867, no Z3 732/732; dispatcher/call focus 20 cases / 403
+assertions in each build. Native same-function 160, CALL 336 and isolated-entry
+24 comparisons match; old live-out PHIs and cross-call entry assumptions both
+have actual native wrong-result controls, not only structural/verify failures.
+On real Tigress, regs+128 switches are RIP entry routers, never CFF gains.
+Actual next state is a Guest stack slot at O0 or RCX at O2; decoded-region
+coverage retains real table LOADs, target checks and default exits. Do not turn
+`.rodata`, file table bytes, or a successful replay into immutability proof.
+
 System/exception boundaries (2026-11-10, baseline `d0fab8d`): see
 docs/system-transition-boundaries.md. Appended IGNIL UNSUPPORTED=72 (C/Python
 mirrors) stops before an unmodelled environment/exception transition, including

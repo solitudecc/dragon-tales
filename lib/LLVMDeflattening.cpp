@@ -1,16 +1,12 @@
 #include <dragon/lifters/llvm/LLVMDeflattening.hpp>
-#include <dragon/lifters/llvm/CallEffectSummary.hpp>
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/Operator.h>
-#include <llvm/Analysis/ValueTracking.h>
 
 #include <algorithm>
-#include <limits>
 #include <optional>
 #include <unordered_set>
 #include <vector>
@@ -292,22 +288,6 @@ bool onlyPHIsAndOneLoad(const llvm::BasicBlock &block,
   return sawLoad;
 }
 
-bool onlyPureInstructionsAndLoad(const llvm::BasicBlock &block,
-                                 const llvm::LoadInst &load) {
-  bool sawLoad = false;
-  for (const auto &instruction : block) {
-    if (&instruction == block.getTerminator()) break;
-    if (&instruction == &load) {
-      if (sawLoad) return false;
-      sawLoad = true;
-      continue;
-    }
-    if (llvm::isa<llvm::PHINode>(&instruction)) continue;
-    if (instruction.mayHaveSideEffects()) return false;
-  }
-  return sawLoad;
-}
-
 llvm::StoreInst *immediateStateStore(llvm::BasicBlock &block,
                                      const llvm::Value *pointer) {
   auto iterator = block.getTerminator()->getIterator();
@@ -349,234 +329,10 @@ llvm::BasicBlock *targetFor(llvm::SwitchInst &switchInst,
   return target;
 }
 
-std::optional<std::uint64_t> stateSlotOffset(
-    const llvm::Value *pointer, const llvm::Function &function,
-    const llvm::DataLayout &layout,
-    std::unordered_set<const llvm::Value *> &active) {
-  if (!pointer || !active.insert(pointer).second) return std::nullopt;
-  auto done = [&](std::optional<std::uint64_t> result) {
-    active.erase(pointer);
-    return result;
-  };
-  auto *value = pointer->stripPointerCasts();
-  if (value != pointer) return done(stateSlotOffset(value, function, layout, active));
-  if (function.arg_size() == 0) return done(std::nullopt);
-  if (value == function.getArg(0)) return done(std::uint64_t{0});
-  if (const auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(value)) {
-    auto base = stateSlotOffset(gep->getPointerOperand(), function, layout, active);
-    if (!base) return done(std::nullopt);
-    llvm::APInt offset(64, 0);
-    if (!gep->accumulateConstantOffset(layout, offset) || offset.isNegative())
-      return done(std::nullopt);
-    const auto delta = offset.getZExtValue();
-    if (*base > std::numeric_limits<std::uint64_t>::max() - delta)
-      return done(std::nullopt);
-    return done(*base + delta);
-  }
-  // The lifted state object is commonly loaded from state+24 before register
-  // slots are addressed.  Once that load is proven to originate at arg0, it
-  // becomes the zero point for subsequent state GEPs.
-  if (const auto *load = llvm::dyn_cast<llvm::LoadInst>(value)) {
-    if (load->getType()->isPointerTy() &&
-        stateSlotOffset(load->getPointerOperand(), function, layout, active))
-      return done(std::uint64_t{0});
-  }
-  return done(std::nullopt);
-}
-
-std::optional<std::uint64_t> stateSlotOffset(const llvm::Value *pointer,
-                                             const llvm::Function &function,
-                                             const llvm::DataLayout &layout) {
-  std::unordered_set<const llvm::Value *> active;
-  return stateSlotOffset(pointer, function, layout, active);
-}
-
-bool rangesOverlap(std::uint64_t leftOffset, std::uint32_t leftBytes,
-                   std::uint64_t rightOffset, std::uint32_t rightBytes) {
-  if (!leftBytes || !rightBytes) return false;
-  if (leftOffset > std::numeric_limits<std::uint64_t>::max() - leftBytes ||
-      rightOffset > std::numeric_limits<std::uint64_t>::max() - rightBytes)
-    return true;
-  return leftOffset < rightOffset + rightBytes &&
-         rightOffset < leftOffset + leftBytes;
-}
-
-std::optional<unsigned> integerBytes(const llvm::Type *type) {
-  if (!type || !type->isIntegerTy()) return std::nullopt;
-  const unsigned bits = type->getIntegerBitWidth();
-  if (!bits || bits % 8 || bits > 64) return std::nullopt;
-  return bits / 8;
-}
-
-std::optional<llvm::APInt> directCallerStateConstant(
-    const llvm::CallBase &call, std::uint64_t slot, unsigned bytes) {
-  const auto *caller = call.getFunction();
-  if (!caller || caller->arg_size() == 0 || !call.arg_size())
-    return std::nullopt;
-  // The direct-store proof is relative to the caller's outer GuestState
-  // argument. Do not normalize a separately loaded pointer to the same zero
-  // point: two nested state objects could otherwise be confused.
-  if (call.getArgOperand(0)->stripPointerCasts() != caller->getArg(0))
-    return std::nullopt;
-
-  auto *block = call.getParent();
-  for (auto iterator = call.getIterator(); iterator != block->begin();) {
-    --iterator;
-    auto &instruction = *iterator;
-    if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
-      if (store->isVolatile() || store->isAtomic()) return std::nullopt;
-      const auto storeOffset = stateSlotOffset(
-          store->getPointerOperand(), *caller,
-          caller->getParent()->getDataLayout());
-      const auto storeBytes = integerBytes(store->getValueOperand()->getType());
-      if (!storeOffset || !storeBytes) {
-        const auto *underlying = llvm::getUnderlyingObject(
-            store->getPointerOperand(), 32);
-        if (llvm::isa<llvm::AllocaInst>(underlying)) continue;
-        return std::nullopt;
-      }
-      if (!rangesOverlap(*storeOffset, *storeBytes, slot, bytes)) continue;
-      if (*storeOffset != slot || *storeBytes != bytes) return std::nullopt;
-      const auto *constant = llvm::dyn_cast<llvm::ConstantInt>(
-          store->getValueOperand());
-      if (!constant || constant->getBitWidth() != bytes * 8)
-        return std::nullopt;
-      return constant->getValue();
-    }
-    if (auto *otherCall = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
-      if (!otherCall->doesNotAccessMemory() && !otherCall->onlyReadsMemory())
-        return std::nullopt;
-      continue;
-    }
-    if (instruction.mayWriteToMemory()) return std::nullopt;
-  }
-  return std::nullopt;
-}
-
-bool directCallUsersOnly(const llvm::Function &callee,
-                         std::size_t maxCallSites,
-                         std::vector<const llvm::CallBase *> &calls) {
-  for (const auto &use : callee.uses()) {
-    const auto *call = llvm::dyn_cast<llvm::CallBase>(use.getUser());
-    if (!call || call->getCalledFunction() != &callee) return false;
-    calls.push_back(call);
-    if (calls.size() > maxCallSites) return false;
-  }
-  return !calls.empty();
-}
-
-enum class CrossCallProofKind { Summary, DirectStore };
-
-struct CrossCallProof {
-  FiniteConstants values;
-  CrossCallProofKind kind = CrossCallProofKind::Summary;
-};
-
-std::optional<CrossCallProof> crossCallProof(
-    const llvm::CallBase &call, std::uint64_t slot, unsigned bytes) {
-  if (call.getMetadata("dragon.call.effect")) {
-    const auto summary = getCallEffectSummary(call);
-    if (!summary || !summary->proven ||
-        summary->memory != CallMemoryEffectKind::KnownRanges)
-      return std::nullopt;
-    std::size_t selectorWrites = 0;
-    for (const auto &write : summary->writes) {
-      if (write.base != CallMemoryRange::Base::GuestState ||
-          !rangesOverlap(write.offset, write.bytes, slot, bytes))
-        continue;
-      ++selectorWrites;
-      if (write.offset != slot || write.bytes != bytes) return std::nullopt;
-    }
-    if (selectorWrites != 1) return std::nullopt;
-
-    CrossCallProof proof;
-    proof.kind = CrossCallProofKind::Summary;
-    for (const auto &constant : summary->memoryConstants) {
-      if (constant.range.base != CallMemoryRange::Base::GuestState ||
-          constant.range.offset != slot || constant.range.bytes != bytes)
-        continue;
-      if (!constant.complete) return std::nullopt;
-      if (!appendFinite(proof.values,
-                        llvm::APInt(bytes * 8, constant.value), 2))
-        return std::nullopt;
-    }
-    if (proof.values.size() != 1) return std::nullopt;
-    return proof;
-  }
-
-  auto constant = directCallerStateConstant(call, slot, bytes);
-  if (!constant) return std::nullopt;
-  return CrossCallProof{FiniteConstants{*constant},
-                        CrossCallProofKind::DirectStore};
-}
-
-std::optional<llvm::BasicBlock *> crossCallTarget(
-    llvm::Function &callee, llvm::BasicBlock &dispatch,
-    llvm::SwitchInst &switchInst, const DeflatteningOptions &options,
-    std::size_t &summariesConsumed, std::size_t &directStoresConsumed) {
-  // An externally visible function may have callers outside this module.  A
-  // module-local summary cannot prove those entries, so keep the dispatcher
-  // explicit unless linkage itself closes the call graph.
-  if (!callee.hasLocalLinkage()) return std::nullopt;
-  auto *stateLoad = llvm::dyn_cast<llvm::LoadInst>(switchInst.getCondition());
-  if (!options.consumeCallEffectSummaries || !options.maxCrossCallSites ||
-      !stateLoad || !onlyPureInstructionsAndLoad(dispatch, *stateLoad))
-    return std::nullopt;
-  if (!stateLoad || !stateLoad->hasOneUse() ||
-      !stateLoad->getType()->isIntegerTy())
-    return std::nullopt;
-  const auto slot = stateSlotOffset(stateLoad->getPointerOperand(), callee,
-                                    callee.getParent()->getDataLayout());
-  if (!slot) return std::nullopt;
-  const unsigned width = stateLoad->getType()->getIntegerBitWidth();
-  if (!width || width % 8) return std::nullopt;
-  const auto bytes = width / 8;
-
-  std::vector<const llvm::CallBase *> calls;
-  if (!directCallUsersOnly(callee, options.maxCrossCallSites, calls))
-    return std::nullopt;
-
-  llvm::BasicBlock *chosenTarget = nullptr;
-  std::size_t consumed = 0;
-  for (const auto *call : calls) {
-    auto proof = crossCallProof(*call, *slot, bytes);
-    if (!proof || proof->values.empty()) return std::nullopt;
-    if (proof->kind == CrossCallProofKind::Summary)
-      ++summariesConsumed;
-    else
-      ++directStoresConsumed;
-    for (const auto &value : proof->values) {
-      auto *target = targetFor(switchInst, value);
-      if (!chosenTarget)
-        chosenTarget = target;
-      else if (chosenTarget != target)
-        return std::nullopt;
-    }
-    ++consumed;
-  }
-  if (!chosenTarget || chosenTarget == &dispatch || hasAnyPHI(*chosenTarget) ||
-      consumed != calls.size())
-    return std::nullopt;
-  if (summariesConsumed + directStoresConsumed != consumed)
-    return std::nullopt;
-  return chosenTarget;
-}
-
-void replaceSwitchWithBranch(llvm::BasicBlock &block,
-                             llvm::SwitchInst &switchInst,
-                             llvm::BasicBlock &target) {
-  std::unordered_set<llvm::BasicBlock *> successors;
-  for (unsigned index = 0; index < switchInst.getNumSuccessors(); ++index)
-    successors.insert(switchInst.getSuccessor(index));
-  for (auto *successor : successors)
-    if (successor != &target) successor->removePredecessor(&block);
-  llvm::BranchInst::Create(&target, &switchInst);
-  switchInst.eraseFromParent();
-}
-
 bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
                     const DeflatteningOptions &options,
-                    std::vector<EdgePlan> &plans) {
+                    std::vector<EdgePlan> &plans, bool &unresolved) {
+  unresolved = true;
   // Threading skips this block. Even an otherwise pure PHI can carry a
   // business value to a successor; removing one incoming edge would change
   // that value (or make it cease to dominate its uses). Keep such blocks until
@@ -616,20 +372,28 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
   std::unordered_set<const llvm::BasicBlock *> seen;
   std::vector<EdgePlan> candidate;
   candidate.reserve(predecessors.size());
+  bool blocked = false;
   for (unsigned index = 0; index < predecessors.size(); ++index) {
     auto *predecessor = predecessors[index];
     if (!predecessor || predecessor == &dispatch ||
-        !seen.insert(predecessor).second)
-      return false;
+        !seen.insert(predecessor).second) {
+      blocked = true;
+      continue;
+    }
     auto *terminator = predecessor->getTerminator();
     // Updating the destination list of indirectbr/callbr does not update its
     // computed address or exceptional control-transfer semantics.
     if (!terminator ||
         !llvm::isa<llvm::BranchInst, llvm::SwitchInst>(terminator) ||
-        successorCount(terminator, &dispatch) != 1)
-      return false;
+        successorCount(terminator, &dispatch) != 1) {
+      blocked = true;
+      continue;
+    }
     auto edge = soleSuccessorIndex(terminator, &dispatch);
-    if (!edge) return false;
+    if (!edge) {
+      blocked = true;
+      continue;
+    }
 
     const llvm::Value *incomingValue = nullptr;
     if (state) {
@@ -637,7 +401,10 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
     } else {
       auto *store = immediateStateStore(*predecessor,
                                         stateLoad->getPointerOperand());
-      if (!store) return false;
+      if (!store) {
+        blocked = true;
+        continue;
+      }
       incomingValue = store->getValueOperand();
     }
 
@@ -648,18 +415,31 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
                                   options.maxValues, active);
     if (!values || values->empty() ||
         values->front().getBitWidth() !=
-            switchInst.getCondition()->getType()->getIntegerBitWidth())
-      return false;
+            switchInst.getCondition()->getType()->getIntegerBitWidth()) {
+      blocked = true;
+      continue;
+    }
     auto *target = targetFor(switchInst, values->front());
+    bool oneTarget = true;
     for (std::size_t valueIndex = 1; valueIndex < values->size();
          ++valueIndex) {
-      if (targetFor(switchInst, (*values)[valueIndex]) != target) return false;
+      if (targetFor(switchInst, (*values)[valueIndex]) != target) {
+        oneTarget = false;
+        break;
+      }
+    }
+    if (!oneTarget || hasAnyPHI(*target)) {
+      blocked = true;
+      continue;
     }
     if (target == &dispatch) continue; // a self-dispatch edge already is direct
-    if (hasAnyPHI(*target)) return false;
     candidate.push_back({predecessor, terminator, *edge, target});
   }
+  // A fact authorizes only its own edge. Unknown CALL results, unknown values
+  // or unsupported incoming paths continue through the original dispatcher;
+  // they do not invalidate independent proofs on other predecessors.
   plans = std::move(candidate);
+  unresolved = blocked;
   return !plans.empty();
 }
 
@@ -688,20 +468,8 @@ DeflatteningStats runProvableDeflattening(
         return stats;
       }
       std::vector<EdgePlan> plans;
-      if (!planDispatcher(block, *switchInst, options, plans)) {
-        std::size_t summariesConsumed = 0;
-        std::size_t directStoresConsumed = 0;
-        if (auto target = crossCallTarget(function, block, *switchInst,
-                                          options, summariesConsumed,
-                                          directStoresConsumed)) {
-          replaceSwitchWithBranch(block, *switchInst, **target);
-          ++stats.dispatchersRewritten;
-          ++stats.crossCallDispatchersRewritten;
-          stats.crossCallSummariesConsumed += summariesConsumed;
-          stats.crossCallDirectStoresConsumed += directStoresConsumed;
-          stats.changed = true;
-          continue;
-        }
+      bool unresolved = false;
+      if (!planDispatcher(block, *switchInst, options, plans, unresolved)) {
         ++stats.unresolvedDispatchers;
         continue;
       }
@@ -712,6 +480,7 @@ DeflatteningStats runProvableDeflattening(
         ++stats.edgesRewritten;
       }
       ++stats.dispatchersRewritten;
+      if (unresolved) ++stats.unresolvedDispatchers;
       stats.changed = true;
     }
   }

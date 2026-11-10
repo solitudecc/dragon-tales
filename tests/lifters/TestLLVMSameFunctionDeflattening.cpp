@@ -146,3 +146,63 @@ TEST_CASE("Same-function deflattening retains indirect branch destinations",
   CHECK(branch->getSuccessor(0) == dispatch);
   verifySameFunction(module);
 }
+
+TEST_CASE("Same-function deflattening threads proved edges beside unknown states",
+          "[llvm][dispatch-deflatten][same-function]") {
+  for (const bool loadBacked : {false, true}) {
+    INFO("loadBacked=" << loadBacked);
+    llvm::LLVMContext context;
+    llvm::Module module("mixed-state-edges", context);
+    auto *i32 = llvm::Type::getInt32Ty(context);
+    auto *type = llvm::FunctionType::get(
+        i32, {llvm::Type::getInt1Ty(context), i32}, false);
+    auto *function = llvm::Function::Create(
+        type, llvm::GlobalValue::ExternalLinkage, "mixed", module);
+    auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+    auto *known = llvm::BasicBlock::Create(context, "known", function);
+    auto *unknown = llvm::BasicBlock::Create(context, "unknown", function);
+    auto *dispatch = llvm::BasicBlock::Create(context, "dispatch", function);
+    auto *taken = llvm::BasicBlock::Create(context, "taken", function);
+    auto *fallback = llvm::BasicBlock::Create(context, "fallback", function);
+    llvm::IRBuilder<> builder(entry);
+    auto *slot = loadBacked ? builder.CreateAlloca(i32) : nullptr;
+    builder.CreateCondBr(function->getArg(0), known, unknown);
+    builder.SetInsertPoint(known);
+    if (slot) builder.CreateStore(builder.getInt32(1), slot);
+    builder.CreateBr(dispatch);
+    builder.SetInsertPoint(unknown);
+    if (slot) builder.CreateStore(function->getArg(1), slot);
+    builder.CreateBr(dispatch);
+    builder.SetInsertPoint(dispatch);
+    llvm::Value *state;
+    if (slot) state = builder.CreateLoad(i32, slot);
+    else {
+      auto *phi = builder.CreatePHI(i32, 2, "state");
+      phi->addIncoming(builder.getInt32(1), known);
+      phi->addIncoming(function->getArg(1), unknown);
+      state = phi;
+    }
+    auto *switchInst = builder.CreateSwitch(state, fallback, 1);
+    switchInst->addCase(builder.getInt32(1), taken);
+    builder.SetInsertPoint(taken);
+    builder.CreateRet(builder.getInt32(10));
+    builder.SetInsertPoint(fallback);
+    builder.CreateRet(builder.getInt32(20));
+    verifySameFunction(module);
+
+    const auto stats = runProvableDeflattening(module);
+    CHECK(stats.changed);
+    CHECK(stats.edgesRewritten == 1);
+    CHECK(stats.dispatchersRewritten == 1);
+    CHECK(stats.unresolvedDispatchers == 1);
+    CHECK(known->getTerminator()->getSuccessor(0) == taken);
+    CHECK(unknown->getTerminator()->getSuccessor(0) == dispatch);
+    CHECK(llvm::isa<llvm::SwitchInst>(dispatch->getTerminator()));
+    verifySameFunction(module);
+    const auto repeat = runProvableDeflattening(module);
+    CHECK_FALSE(repeat.changed);
+    CHECK(repeat.edgesRewritten == 0);
+    CHECK(repeat.unresolvedDispatchers == 1);
+    verifySameFunction(module);
+  }
+}

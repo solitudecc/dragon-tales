@@ -16,9 +16,10 @@ namespace dragon::llvmlifter {
 enum class CallBoundaryKind : std::uint8_t { ExternalFunction = 0, SystemCall = 1 };
 
 /// Memory precision supplied by a trusted summary. KnownRanges is a complete
-/// write footprint. Guest-memory SSA consumes GuestMemory ranges and complete
-/// constants; the deflattening pass consumes complete GuestState constants.
-/// Other bases stay barriers until a consumer proves their address relation.
+/// write footprint after a normal return. Guest-memory SSA consumes
+/// GuestMemory ranges and complete constants. Other bases stay barriers until
+/// a consumer proves their address relation. A call's postconditions never
+/// establish its callee's entry state.
 enum class CallMemoryEffectKind : std::uint8_t {
   Unknown = 0,
   NoMemory = 1,

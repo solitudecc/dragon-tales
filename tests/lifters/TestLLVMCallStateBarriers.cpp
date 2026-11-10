@@ -162,8 +162,32 @@ void runCase(Slot slot, bool after, const char *name, bool canRecover) {
     CHECK(stateLoads(*data.machine) == 1);
   }
   const auto deflat = lifter.runProvableDeflattening();
-  CHECK(deflat.changed == canRecover);
-  CHECK(deflat.edgesRewritten == (canRecover ? 3 : 0));
+  CHECK(deflat.changed);
+  CHECK(deflat.edgesRewritten == (canRecover ? 3 : 2));
+  CHECK(deflat.unresolvedDispatchers == (canRecover ? 0 : 1));
+  llvm::BasicBlock *first = nullptr;
+  llvm::BasicBlock *second = nullptr;
+  llvm::BasicBlock *done = nullptr;
+  llvm::BasicBlock *dispatch = nullptr;
+  for (auto &block : *data.machine) {
+    if (block.getName() == "cff.first") first = &block;
+    if (block.getName() == "cff.second") second = &block;
+    if (block.getName() == "cff.done") done = &block;
+    if (block.getName() == "cff.dispatch") dispatch = &block;
+  }
+  REQUIRE(first);
+  REQUIRE(second);
+  REQUIRE(done);
+  REQUIRE(dispatch);
+  CHECK(data.machine->getEntryBlock().getTerminator()->getSuccessor(0) == first);
+  CHECK(second->getTerminator()->getSuccessor(0) == done);
+  if (canRecover) CHECK(first->getTerminator()->getSuccessor(0) == second);
+  if (!canRecover) {
+    // Only the post-CALL edge remains unknown. The initial and second-block
+    // stores are independent proofs, so they may bypass the dispatcher.
+    CHECK(first->getTerminator()->getSuccessor(0) == dispatch);
+    CHECK(llvm::isa<llvm::SwitchInst>(dispatch->getTerminator()));
+  }
   CHECK(deflat.crossCallDispatchersRewritten == 0);
   CHECK(deflat.crossCallSummariesConsumed == 0);
   CHECK(deflat.crossCallDirectStoresConsumed == 0);

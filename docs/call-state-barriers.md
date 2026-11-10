@@ -10,17 +10,18 @@
 | 状态位置与写入时机 | 期望 |
 |---|---|
 | CALL 后重新写 Guest 槽或 Guest 栈 state | 最后的真实 STORE 重新建立 state，3 条 dispatcher 入边可以直连；CALL 保留 |
-| CALL 前写 Guest 槽、Guest 栈或寄存器快照 state | writer 可能修改 state，不把旧值跨 CALL 传播；dispatcher 保留 |
+| CALL 前写 Guest 槽、Guest 栈或寄存器快照 state | writer 可能修改 state，CALL 后的边保留原 dispatcher；独立的初始和第二块写入仍可直连 |
 | 未逃逸 host alloca 保存 state | mem2reg 可以提升为 SSA，未知 CALL 不能凭空获得局部指针；可以去平坦化 |
-| 把 host alloca 指针传入未知 CALL | state 已逃逸，必须保留可能被改写后的读取与 dispatcher |
+| 把 host alloca 指针传入未知 CALL | state 已逃逸，CALL 后的边必须保留可能被改写后的读取与 dispatcher |
 
 Guest 栈是 Guest 地址空间中的字节，并不因为源码声明为局部变量就成为 LLVM host alloca。
 未知 CALL 会清空 Guest-memory SSA facts；只有 CALL 后实际重新赋值才能恢复对应关系。
 寄存器 SSA 在真实调用边界需保留 snapshot 写回/重载；本组通过字节 16 的普通寄存器快照
 检查旧值不会穿过 writer，故意避开 PC/RIP 的 128 字节偏移。
 
-`tests/lifters/TestLLVMCallStateBarriers.cpp` 包含 3 cases/127 assertions。当前基线已经通过，
-所以本次没有生产语义修复，也不将“旧代码通过”伪报为新增去混淆收益。为了证明对照能发现
+初始回归在 `9020c70` 上包含 3 cases/127 assertions，已经通过。后续同函数逐边去平坦化
+把未知 CALL 情况的直连数从 0 提高到 2，并单独断言 CALL 后那条未知边仍经过 dispatcher。
+这些断言与混合前驱回归合计在前一版有 27 条失败；未知调用本身的语义约束保持不变。为了证明对照能发现
 问题，导出器额外产生一个故意错误的 readonly 模块，原生 writer 保持相同：它使 24 次
 对照中的 16 次检测到 stale-state 差异，另外 8 次输入本来就写入相同 state，仍匹配。
 

@@ -258,7 +258,7 @@ TEST_CASE("LLVM deflattening rewrites a local memory state selector",
   verify(lifter.module());
 }
 
-TEST_CASE("LLVM deflattening consumes a complete cross-call GuestState summary",
+TEST_CASE("LLVM deflattening does not use call postconditions as entry facts",
           "[llvm][dispatch-deflatten]") {
   llvmlifter::LLVMLifter lifter{Architecture::X86_64};
   auto &context = lifter.module().getContext();
@@ -282,8 +282,10 @@ TEST_CASE("LLVM deflattening consumes a complete cross-call GuestState summary",
   auto *dispatch = builder.CreateSwitch(state, fallback, 1);
   dispatch->addCase(llvm::ConstantInt::get(i64, 42), taken);
   builder.SetInsertPoint(taken);
+  builder.CreateStore(builder.getInt64(42), slot);
   builder.CreateRetVoid();
   builder.SetInsertPoint(fallback);
+  builder.CreateStore(builder.getInt64(42), slot);
   builder.CreateRetVoid();
 
   auto *callerEntry = llvm::BasicBlock::Create(context, "entry", caller);
@@ -304,17 +306,17 @@ TEST_CASE("LLVM deflattening consumes a complete cross-call GuestState summary",
   REQUIRE(pipeline.add("dispatch-deflatten"));
   const auto report = pipeline.run(lifter);
   REQUIRE(report.ok);
-  CHECK(report.changed);
+  CHECK_FALSE(report.changed);
   REQUIRE(report.runs.size() == 1);
-  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 1);
-  CHECK(report.runs[0].result.counters.at("cross_call_summaries_consumed") == 1);
-  CHECK(llvm::isa<llvm::BranchInst>(entry->getTerminator()));
-  CHECK(entry->getTerminator()->getSuccessor(0) == taken);
-  CHECK(switches(lifter.module()) == 0);
+  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 0);
+  CHECK(report.runs[0].result.counters.at("cross_call_summaries_consumed") == 0);
+  CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
+  CHECK(llvm::isa<llvm::SwitchInst>(entry->getTerminator()));
+  CHECK(switches(lifter.module()) == 1);
   verify(lifter.module());
 }
 
-TEST_CASE("LLVM deflattening consumes a direct caller GuestState store",
+TEST_CASE("LLVM same-function deflattening leaves caller entry specialization separate",
           "[llvm][dispatch-deflatten]") {
   llvmlifter::LLVMLifter lifter{Architecture::X86_64};
   auto &context = lifter.module().getContext();
@@ -354,14 +356,14 @@ TEST_CASE("LLVM deflattening consumes a direct caller GuestState store",
   REQUIRE(pipeline.add("dispatch-deflatten"));
   const auto report = pipeline.run(lifter);
   REQUIRE(report.ok);
-  CHECK(report.changed);
+  CHECK_FALSE(report.changed);
   REQUIRE(report.runs.size() == 1);
-  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 1);
+  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 0);
   CHECK(report.runs[0].result.counters.at("cross_call_summaries_consumed") == 0);
-  CHECK(report.runs[0].result.counters.at("cross_call_direct_stores_consumed") == 1);
-  CHECK(llvm::isa<llvm::BranchInst>(entry->getTerminator()));
-  CHECK(entry->getTerminator()->getSuccessor(0) == taken);
-  CHECK(switches(lifter.module()) == 0);
+  CHECK(report.runs[0].result.counters.at("cross_call_direct_stores_consumed") == 0);
+  CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
+  CHECK(llvm::isa<llvm::SwitchInst>(entry->getTerminator()));
+  CHECK(switches(lifter.module()) == 1);
   verify(lifter.module());
 }
 
@@ -571,9 +573,10 @@ TEST_CASE("LLVM deflattening keeps unknown state paths explicit",
   REQUIRE(pipeline.add("dispatch-deflatten"));
   const auto report = pipeline.run(lifter);
   REQUIRE(report.ok);
-  CHECK_FALSE(report.changed);
+  CHECK(report.changed);
   CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
-  CHECK(left->getTerminator()->getSuccessor(0) == dispatch);
+  CHECK(report.runs[0].result.counters.at("edges_rewritten") == 1);
+  CHECK(left->getTerminator()->getSuccessor(0) == taken);
   CHECK(right->getTerminator()->getSuccessor(0) == dispatch);
   verify(lifter.module());
 }

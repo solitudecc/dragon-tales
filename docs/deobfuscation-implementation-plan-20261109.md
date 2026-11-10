@@ -7,7 +7,7 @@
 现有有限值集、调用效果、MBA、谓词、区域提升和 PassPipeline 继续复用。
 第一版不建立任意全程序堆分析，也不重写整个反汇编器。
 
-## 2026-11-10 实施状态
+## 实施状态（2026-11-11）
 
 本方案中面向常见静态混淆的 1–5 项基础组件已经落地到 `main`：
 
@@ -20,20 +20,22 @@
 - `dispatch-specialize` 折叠当前 IR 中唯一可证明的常量 branch/switch 条件；
   `dispatch-deflatten` 对状态 PHI、有限状态集合和同函数 load-backed selector 做证明型直连，
   并保留未知状态和未证明分发器。
-- `CallEffectSummary v2` 可携带 `GuestState` 的完整常量写；调用点所在块的直接常量 STORE
-  也可作为同样的局部证明。对本地链接、所有直接调用点都有完整且一致事实的 callee，
-  `dispatch-deflatten` 可以把入口 load-backed dispatcher 改成直连；外部可见函数、未知/间接
-  调用、不完整摘要和多目标调用保持 unresolved。
+- `CallEffectSummary v2` 保留正常返回后的效果描述，供内存 SSA 消费；它不证明 callee
+  入口事实。此前实验性的跨调用入口改写存在前后条件和指针路径混淆，现已从通用 Pass
+  中隔离。普通控制流主线只处理同一函数；罕见跨调用状态修改以后接专用 Pass。
+- 同函数去平坦化逐条证明入边：未知 CALL 后的边继续走 dispatcher，其它有完整状态
+  定义的边独立直连；带 live-out PHI、volatile/atomic LOAD 或 computed-address 入边的
+  路径不会被错误绕过。
 
 这几个组件都是显式选择的 LLVM/分析能力，不生成新的去混淆二进制，也不按 Tigress、OLLVM、
 函数名或固定地址匹配。它们覆盖普通控制流平坦化、常量/有限状态分发、线性 MBA 和代数型
 不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
 
-截至当前跨调用直接 STORE 修复的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
+此前跨调用直接 STORE 阶段的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
 `857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
 地址关系、完整 GuestMemory 常量写和显式调用摘要；去平坦化覆盖有限状态集合、同函数
-load-backed selector，以及受摘要约束的跨函数 GuestState selector。未知调用仍然 barrier。
+load-backed selector；跨函数入口专门化已隔离，未知调用仍然 barrier。
 新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、非法摘要、外部可见
 callee 和未知地址关系都保持保守。
 
@@ -45,6 +47,12 @@ Guest 栈槽、O2 是 RCX；普通 lift 在真实表 LOAD/JMP 处退出，首先
 的按边线程化。跨调用摘要只解决其自身的受限契约，不能据此宣称复杂 CFF 已经消除。
 四个冻结 ELF 的定位、原始表跳转与 RIP switch 区分、16 次完整状态重放见
 [真实 CFF 状态恢复验证](same-function-cff-validation-20261111.md)。
+
+本轮同函数逐边恢复、PHI/observable LOAD/indirectbr 安全修补以及跨调用入口路径隔离的
+最终检查为主 CTest **867/867**、无 Z3 **732/732**，分发/调用聚焦组两构建均为
+**20 cases / 403 assertions**。正常原生比较为同函数 160、CALL 336、入口隔离 24，
+均无差异；四个真实 kernel 的 16 次完整状态重放也保持匹配，但实际 table target switch
+仍在。[本轮修补记录](same-function-dispatch-fixes-20261111.md)区分每项收益与边界。
 
 ## 1. 对当前问题的重新定位
 
@@ -250,10 +258,10 @@ LLVM MemorySSA 可用于加速查找内存依赖，但它本身不会把 Guest �
 
 ### 6.3 调用摘要先接消费者，再扩分析域
 
-当前已落地第一版消费者：`CallEffectSummary v2` 的 `GuestMemory` 完整常量写可被
-`guest-memory-ssa` 消费，`GuestState` 完整槽写和调用点直接常量 STORE 可被受限的跨调用 `dispatch-deflatten`
-消费。后者只接受本地链接且调用图闭合、所有直接调用点摘要完整并映射到同一目标的情况；
-它不自动生成外部函数模型，也不把不同调用点的值合并成一个共享 callee 结论。
+当前保留的消费者是 `guest-memory-ssa`：在正常返回后，消费具有完整地址关系的
+`CallEffectSummary v2` GuestMemory 写后常量。原实验性的跨调用 `dispatch-deflatten`
+入口消费已隔离；callee 的入口上下文与调用后效果必须分别建模，嵌套指针对象和 callee
+内部覆盖写也不能混淆。这类罕见状态修改留给独立 Pass，不再作为同函数主线的前置工作。
 
 先把 `LeafCallProof` 已证明的写集、常量和未改字节接到内存转发；保持当前 x86、调用树与循环预算。
 其次为小型实际内部函数增加有界符号结果：`返回值 = 表达式`、`内存槽 = 入参/入场快照表达式`，

@@ -122,6 +122,42 @@ Exit 字段。正常结果上的 RAX 单字段和 Guest-memory 单字节负对�
 这些是小规模路径验证与完整状态覆盖证据，不是全程序等价证明。与先前静态区域提升已知的
 完整根返回相比，它也不是新的去平坦化收益；本轮新增的是正确识别和计数真正的 dispatcher。
 
+## 最终隔离构建的独立复验
+
+前述双库快照与原始结果按历史证据保留。随后隔离旧跨调用入口 fallback 后，使用新双库
+重新运行同一实际脚本，创建全新 out；未复用先前的 LLVM/native 模块或执行输出。
+本轮实际后端来自独立 runtime 快照，`LD_LIBRARY_PATH` 明确选择同目录的后端：
+
+| 最终文件 | SHA256 |
+|---|---|
+| libdragon.so | `a33dc8c9c1b79125a2a499836d5773ef98bc81eb2cab0afddb6dfcf4a30cf699` |
+| libdragon_c.so | `4b4dc1fc6397fca9af3f50af9d39048b8d76d4544433135581eed55f5c3421b5` |
+| LLVMDeflattening.cpp 源码 | `fe70998140df61eb3595fe9b95d68f3483c6f661d5fe463bf1f55bf91cb784bb` |
+
+仍为四个冻结 ELF、每例四个相同边界输入，全部 fresh：C **16/16 match**、LLVM/Unicorn
+**16/16 完整根返回 match**，逐次 76 字段、1 MiB、调用事件和七字段 Exit；RAX 与内存
+单字段负对照各 **16/16** 检出。不同、incomplete、其它错误和新排除/跳过/归一化均为零。
+四模块的 Graph fingerprint 不变；冻结文件与实际映射双库的前后校验相同。
+
+每个 kernel 仍是 RIP entry switch **1→0**、真实 target coverage switch **2→2**，后者
+分别有 `66/49/102/74` 个覆盖 case，LOAD selector 和 default Exit 均保留。
+`dispatch-deflatten` 各为 `unresolved=2`、`rewritten=0`、`edges_rewritten=0`。
+四模块流水线前/后共八份 IR 与先前产物**逐字节相同**，未归一化或删除 ModuleID。
+这表明隔离历史入口路径未改变本组真实区域的行为；本组没有命中新的同函数改写正例，
+不能以这些 match 代替其专门回归/原生正反例的验证。
+
+最终 VM replay：`/home/cc/vmc-runs/cff-real-region-final-20261111/`，双库快照在同名前缀
+加 `-runtime/` 的独立目录。最终本地产物：
+`/Users/c/Desktop/deob/validation-artifacts/cff-real-region-final-20261111/`。
+其中保留最终双库、冻结 ELF、原始输入输出、pipeline 和逐 root switch 计数、源码 diff、
+manifest 与实际脚本。归档 `vm-final-replay-artifacts.tar.gz` SHA256 为
+`b6b96760398644537abfe8aa4310fcaf8b3600e82dea28ca4839e9457b2b97b9`。
+
+复现命令保持前文的脚本和 frozen 参数，仅将 `DRAGON_C_LIB` 指向最终 runtime 的 shim，
+设置 `LD_LIBRARY_PATH=/home/cc/vmc-runs/cff-real-region-final-20261111-runtime`，并选择
+全新的 `--out`。实际脚本 SHA256 仍为
+`2d56c71ad9cf9455dfe751a477fbf57249748c37d101f5b967076a1a769e9a16`。
+
 ## 仍需的最小通用组件
 
 1. 分析入口显式选用已有 decoded-region 覆盖，先让同一函数内真实 case/回边进入 IR。

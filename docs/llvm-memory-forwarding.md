@@ -55,9 +55,9 @@ PHI/select 地址；动态 GEP 只按精确表达式身份匹配，未知别名�
 ## 验证
 
 S2 新增菱形、循环不变槽、规范循环 PHI 和完全覆盖窄读回归；旧实现对窄读没有转发。
-跨调用摘要新增完整常量写、非重叠保留和不完整写屏障回归。当前 GuestMemorySSA 聚焦组为
-**13/13 测试、112 条断言**，跨调用去平坦化聚焦组为 **10/10 测试、98 条断言**；加入这些
-回归后，主 CTest **857/857**，无 Z3 CTest **722/722**。
+跨调用摘要新增完整常量写、非重叠保留和不完整写屏障回归。GuestMemorySSA 聚焦组为
+**13/13 测试、112 条断言**。原直接 STORE 阶段的基线为主 CTest **857/857**、
+无 Z3 CTest **722/722**；同函数逐边恢复和入口隔离的新增验证另见下文。
 Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，并可读到三个
 新增统计字段。
 
@@ -67,6 +67,11 @@ Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，
 分析、未知外部调用摘要、字节级重组或完整循环内存分析的证明。
 
 S3 调用效果证据位于 `validation-artifacts/llvm-memory-forwarding-20261110/s3-call-effects/`。
-跨调用去平坦化的 10 个回归覆盖完整摘要、直接调用点 STORE、外部可见 callee、不同调用点目标和不完整摘要；
-未知调用和非本地链接函数继续报告为 unresolved。它只证明显式摘要契约下的局部 LLVM 变换，
-不等于自动推导任意外部 API、堆链表或动态分发器效果。
+原通用去平坦化对调用摘要和调用点 STORE 的入口消费已隔离：调用后写入效果并不是
+callee 入口事实，也不能证明 callee 内部某个后续 LOAD 的值。现有相关测试继续覆盖这个
+拒绝边界。[同函数 CALL 回归](call-state-barriers.md)则验证未知 CALL 后重写状态、保留
+未知边并独立恢复已证边；写后摘要在本内存组件中的合法消费仍然保留。
+
+最终整合为主 CTest **867/867**、无 Z3 **732/732**；同函数分发/调用聚焦组均为
+**20 cases / 403 assertions**，CALL 原生对照 **336/336**。完整的旧失败控制、效果范围和
+未覆盖项见[本轮修补记录](same-function-dispatch-fixes-20261111.md)。
