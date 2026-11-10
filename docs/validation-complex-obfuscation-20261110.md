@@ -68,6 +68,9 @@ Flatten 后的外部语料 `64/64` 次执行都在到达 API 前停在未解决�
 系统转换共 `128` 次边界对照：完整 Guest 状态、PC/SP、内存和 7 个 Exit 字段全部匹配，
 `actual_root_returns_observed=0`，说明没有错误地把内核效果当成普通函数返回。
 
+同一边界矩阵在 product/线性和 static/递归两种配置各执行 `128/128`，合计 `256/256`
+精确匹配；两组都没有伪造 syscall 返回状态。
+
 当前可证明的通用处理是“保留边界并报告 incomplete”。要跨过已知 syscall，需要增加可选
 的效果摘要，键应包含架构、OS/ABI 和 syscall number，至少描述返回寄存器、读写 buffer、
 errno/flags、可能阻塞或异常；参数未知、指针可能别名、版本不明或效果不完整时仍回到
@@ -80,7 +83,8 @@ barrier。不能按导入名或一次运行结果猜测系统调用效果。
 - 基础 arithmetic/Flatten：`/home/cc/vmc-runs/obf-focus-20261110/`
 - 外部调用：`/home/cc/vmc-runs/unknown-calls-20261110/` 和
   `/home/cc/vmc-runs/external-unknown-20261110/plain/`
-- syscall 边界：`/home/cc/vmc-runs/system-transition-unknown-20261110/`
+- syscall 边界：`/home/cc/vmc-runs/system-transition-unknown-20261110/` 和
+  `/home/cc/vmc-runs/obf-focus-20261110/system-product-s0/`、`system-static-s1/`
 
 这些结果证明了静态分析的保守边界和已支持能力，不表示堆链表、VM、自修改代码或任意
 非线性 MBA 已经通用解决。
