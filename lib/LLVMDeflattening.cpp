@@ -51,9 +51,15 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
       }
     }
   } else if (const auto *select = llvm::dyn_cast<llvm::SelectInst>(value)) {
+    // A poison condition can poison the select even when both arms have the
+    // same bits.  Require a proven, non-poison i1 condition before treating
+    // the result as a unique constant.
+    auto condition = uniqueConstant(select->getCondition(), nodes, maxNodes, active);
     auto left = uniqueConstant(select->getTrueValue(), nodes, maxNodes, active);
     auto right = uniqueConstant(select->getFalseValue(), nodes, maxNodes, active);
-    if (left && right && *left == *right) result = left;
+    if (condition && condition->getBitWidth() == 1 && left && right &&
+        *left == *right)
+      result = left;
   } else if (const auto *phi = llvm::dyn_cast<llvm::PHINode>(value)) {
     if (phi->getNumIncomingValues()) {
       result = uniqueConstant(phi->getIncomingValue(0), nodes, maxNodes, active);
@@ -92,13 +98,11 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
           break;
         case llvm::Instruction::Shl:
           if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
-            result = right->uge(width) ? llvm::APInt(width, 0)
-                                       : left->shl(*right);
+            if (!right->uge(width)) result = left->shl(*right);
           break;
         case llvm::Instruction::LShr:
           if (!binary->isExact())
-            result = right->uge(width) ? llvm::APInt(width, 0)
-                                       : left->lshr(*right);
+            if (!right->uge(width)) result = left->lshr(*right);
           break;
         default:
           break;

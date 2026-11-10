@@ -238,3 +238,106 @@ TEST_CASE("LLVM dispatcher specialization rejects flagged poison arithmetic",
   CHECK(report.runs[0].result.counters.at("unresolved_switches") == 1);
   verify(lifter.module());
 }
+
+TEST_CASE("LLVM dispatcher specialization rejects poison shifts and selects",
+          "[llvm][dispatch-specialize]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *i8 = llvm::Type::getInt8Ty(context);
+  auto *i1 = llvm::Type::getInt1Ty(context);
+
+  auto *shiftFunction = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false),
+      llvm::GlobalValue::ExternalLinkage, "overshift_dispatcher",
+      lifter.module());
+  auto *shiftEntry = llvm::BasicBlock::Create(context, "entry", shiftFunction);
+  auto *shiftDispatch = llvm::BasicBlock::Create(context, "dispatch", shiftFunction);
+  auto *shiftTaken = llvm::BasicBlock::Create(context, "taken", shiftFunction);
+  auto *shiftFallback = llvm::BasicBlock::Create(context, "fallback", shiftFunction);
+  llvm::IRBuilder<> shiftBuilder(shiftEntry);
+  shiftBuilder.CreateBr(shiftDispatch);
+  shiftBuilder.SetInsertPoint(shiftDispatch);
+  auto *overshift = llvm::BinaryOperator::CreateLShr(
+      llvm::ConstantInt::get(i8, 1), llvm::ConstantInt::get(i8, 8), "state",
+      shiftDispatch);
+  auto *shiftSwitch = shiftBuilder.CreateSwitch(overshift, shiftFallback, 1);
+  shiftSwitch->addCase(llvm::ConstantInt::get(i8, 0), shiftTaken);
+  shiftBuilder.SetInsertPoint(shiftTaken);
+  shiftBuilder.CreateRetVoid();
+  shiftBuilder.SetInsertPoint(shiftFallback);
+  shiftBuilder.CreateRetVoid();
+
+  auto *selectFunction = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i1}, false),
+      llvm::GlobalValue::ExternalLinkage, "poison_select_dispatcher",
+      lifter.module());
+  auto *selectEntry = llvm::BasicBlock::Create(context, "entry", selectFunction);
+  auto *selectDispatch = llvm::BasicBlock::Create(context, "dispatch", selectFunction);
+  auto *selectTaken = llvm::BasicBlock::Create(context, "taken", selectFunction);
+  auto *selectFallback = llvm::BasicBlock::Create(context, "fallback", selectFunction);
+  llvm::IRBuilder<> selectBuilder(selectEntry);
+  selectBuilder.CreateBr(selectDispatch);
+  selectBuilder.SetInsertPoint(selectDispatch);
+  auto *sameArms = llvm::SelectInst::Create(
+      selectFunction->getArg(0), llvm::ConstantInt::get(i8, 7),
+      llvm::ConstantInt::get(i8, 7), "state", selectDispatch);
+  auto *selectSwitch = selectBuilder.CreateSwitch(sameArms, selectFallback, 1);
+  selectSwitch->addCase(llvm::ConstantInt::get(i8, 7), selectTaken);
+  selectBuilder.SetInsertPoint(selectTaken);
+  selectBuilder.CreateRetVoid();
+  selectBuilder.SetInsertPoint(selectFallback);
+  selectBuilder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-specialize"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK_FALSE(report.changed);
+  CHECK(switches(lifter.module()) == 2);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("unresolved_switches") == 2);
+  verify(lifter.module());
+}
+
+TEST_CASE("LLVM deflattening rejects poison shifts",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *i8 = llvm::Type::getInt8Ty(context);
+  auto *function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false),
+      llvm::GlobalValue::ExternalLinkage, "poison_flat", lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *incoming = llvm::BasicBlock::Create(context, "incoming", function);
+  auto *dispatch = llvm::BasicBlock::Create(context, "dispatch", function);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", function);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", function);
+  llvm::IRBuilder<> builder(entry);
+  builder.CreateBr(incoming);
+  builder.SetInsertPoint(incoming);
+  auto *overshift = llvm::BinaryOperator::CreateLShr(
+      llvm::ConstantInt::get(i8, 1), llvm::ConstantInt::get(i8, 8), "state.in",
+      incoming);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(dispatch);
+  auto *state = builder.CreatePHI(i8, 1, "state");
+  state->addIncoming(overshift, incoming);
+  auto *switchInst = builder.CreateSwitch(state, fallback, 1);
+  switchInst->addCase(llvm::ConstantInt::get(i8, 0), taken);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK_FALSE(report.changed);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
+  CHECK(incoming->getTerminator()->getSuccessor(0) == dispatch);
+  verify(lifter.module());
+}
