@@ -30,7 +30,7 @@
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
 
 截至 `c75af12` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
-`855/855`，无 Z3 构建 `720/720`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
+`856/856`，无 Z3 构建 `721/721`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
 地址关系、完整 GuestMemory 常量写和显式调用摘要；去平坦化覆盖有限状态集合、同函数
 load-backed selector，以及受摘要约束的跨函数 GuestState selector。未知调用仍然 barrier。
 新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、非法摘要、外部可见
