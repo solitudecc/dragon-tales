@@ -109,3 +109,40 @@ TEST_CASE("LLVM dispatcher specialization keeps differing PHI targets explicit",
   CHECK(report.runs[0].result.counters.at("unresolved_switches") == 1);
   verify(lifter.module());
 }
+
+TEST_CASE("LLVM dispatcher specialization rejects flagged poison arithmetic",
+          "[llvm][dispatch-specialize]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *i8 = llvm::Type::getInt8Ty(context);
+  auto *function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false),
+      llvm::GlobalValue::ExternalLinkage, "poison_dispatcher", lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *dispatch = llvm::BasicBlock::Create(context, "dispatch", function);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", function);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", function);
+  llvm::IRBuilder<> builder(entry);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(dispatch);
+  auto *state = llvm::cast<llvm::BinaryOperator>(builder.CreateAdd(
+      llvm::ConstantInt::get(i8, 255), llvm::ConstantInt::get(i8, 1), "state"));
+  state->setHasNoUnsignedWrap();
+  auto *switchInst = builder.CreateSwitch(state, fallback, 1);
+  switchInst->addCase(llvm::ConstantInt::get(i8, 0), taken);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-specialize"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK_FALSE(report.changed);
+  CHECK(switches(lifter.module()) == 1);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("unresolved_switches") == 1);
+  verify(lifter.module());
+}

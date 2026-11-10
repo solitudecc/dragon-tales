@@ -84,17 +84,33 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
     if (left && right && left->getBitWidth() == right->getBitWidth()) {
       const auto width = left->getBitWidth();
       switch (binary->getOpcode()) {
-        case llvm::Instruction::Add: result = *left + *right; break;
-        case llvm::Instruction::Sub: result = *left - *right; break;
-        case llvm::Instruction::Mul: result = *left * *right; break;
+        // A flagged arithmetic operation may produce poison on overflow;
+        // modular APInt evaluation would then claim a constant that is not
+        // valid on every defined execution. Keep those conditions explicit.
+        case llvm::Instruction::Add:
+          if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+            result = *left + *right;
+          break;
+        case llvm::Instruction::Sub:
+          if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+            result = *left - *right;
+          break;
+        case llvm::Instruction::Mul:
+          if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+            result = *left * *right;
+          break;
         case llvm::Instruction::And: result = *left & *right; break;
         case llvm::Instruction::Or: result = *left | *right; break;
         case llvm::Instruction::Xor: result = *left ^ *right; break;
         case llvm::Instruction::Shl:
-          result = right->uge(width) ? llvm::APInt(width, 0) : left->shl(*right);
+          if (!binary->hasNoUnsignedWrap() && !binary->hasNoSignedWrap())
+            result = right->uge(width) ? llvm::APInt(width, 0)
+                                       : left->shl(*right);
           break;
         case llvm::Instruction::LShr:
-          result = right->uge(width) ? llvm::APInt(width, 0) : left->lshr(*right);
+          if (!binary->isExact())
+            result = right->uge(width) ? llvm::APInt(width, 0)
+                                       : left->lshr(*right);
           break;
         default: break;
       }
