@@ -33,6 +33,11 @@ dispatch-deflatten → control-flow → dce`，16/16 个 LLVM pipeline 报告和
 每组 `128` 次 C 对照全部匹配，`768` 次 LLVM 比较中 `384` 次完整匹配、`384` 次明确
 `incomplete`，`different=0`。
 
+独立 MBA 语料 `144` modules/`1152` 次 native trials 全部匹配，条件谓词语料 `24`
+modules/`192` 次全部匹配。Tigress 的 opaque 初始化改用受控 list/arena 变体后，opaque
+`192/192` 匹配，combined `192/192` 保守 `incomplete`。原始 array opaque 变体有 Tigress
+2.1 自身的零除数生成缺陷，触发 Unicorn `idiv` 异常的样本被单独记录，未计入 Dragon 失败。
+
 ## 外部函数和未知调用
 
 真实 PLT/GOT 外部函数语料包含 writer、只读返回、函数指针、callback、varargs、浮点、
@@ -45,6 +50,10 @@ tail call 和 noreturn API。plain O2/PLT 共 `480` 次静态执行：
 
 Flatten 后的外部语料 `64/64` 次执行都在到达 API 前停在未解决分发，统一记为控制流
 `incomplete`，不把它误报成未知调用处理成功。
+
+更大的 PLT/GOT 外部矩阵共 `2304` 次执行，`1472` 次 API 边界匹配、`832` 次完整返回，
+不同、错误和未执行均为 `0`。外部 API 与 Flatten 的专项 `512/512` 次均为保守
+`incomplete`；其中 `4` 个导入 provenance 缺口属于尚未到达导入边界的控制流覆盖问题。
 
 专项回归覆盖：未知外部 writer、显式只读外部调用、未知间接调用、未知 syscall 原型，
 共 `4` cases/`16` assertions 全通过。结论是：
