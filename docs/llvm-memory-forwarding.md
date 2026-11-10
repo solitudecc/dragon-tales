@@ -27,7 +27,7 @@
 ## 验证
 
 S2 新增菱形、循环不变槽、规范循环 PHI 和完全覆盖窄读回归；旧实现对窄读没有转发。
-当前聚焦组为 **8/8 测试、58 条断言**；主 CTest **835/835**，无 Z3 CTest **700/700**。
+S2/S3 聚焦组为 **9/9 测试、62 条断言**；主 CTest **836/836**，无 Z3 CTest **701/701**。
 规范循环 PHI 阶段的已验证基线为 834/834 和 699/699。
 Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，并可读到三个
 新增统计字段。
@@ -36,3 +36,5 @@ Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，
 `validation-artifacts/llvm-memory-forwarding-20261110/s2-bytes/`；VM 工作树使用
 `~/dragon-tales-overlap`。这些结果证明模块生成、验证和本组件的局部语义，不构成一般堆
 分析、未知外部调用摘要、字节级重组或完整循环内存分析的证明。
+
+S3 调用效果证据位于 `validation-artifacts/llvm-memory-forwarding-20261110/s3-call-effects/`。

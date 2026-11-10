@@ -269,10 +269,10 @@ Loop facts cross a backedge only after an exact entry/backedge check; a canonica
 two-block loop may use a loop-carried PHI when its backedge value is loop-independent.
 Unknown loop effects and other shapes remain barriers; no general loop fixed point is guessed. Default
 optimize() is unchanged. The first-stage four cases/34 assertions remain green;
-the cross-block/loop/byte focused group is 8/8 cases/58 assertions; main/no-Z3
-CTest 835/835 and 700/700. The old implementation fails the narrow-load
-byte-forwarding assertion. This is not heap analysis, general loop fixed points
-or external-call effect summarization.
+the cross-block/loop/byte/call focused group is 9/9 cases/62 assertions;
+main/no-Z3 CTest 836/836 and 701/701. The old implementation fails the
+narrow-load and readnone-call forwarding assertions. This is not heap analysis,
+general loop fixed points or internal callee-effect summarization.
 
 Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
 LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and
