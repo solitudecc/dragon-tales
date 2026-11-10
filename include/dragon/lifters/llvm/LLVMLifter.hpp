@@ -6,6 +6,7 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
+#include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -180,6 +181,12 @@ class LLVMLifter {
   /// The default optimization pipeline is unchanged; callers opt into this stage.
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const MemoryForwardOptions &options = {});
+
+  /// Rewrite only uniquely constant branch/switch conditions in the current
+  /// LLVM module. Finite but differing dispatcher targets remain explicit and
+  /// are reported as unresolved; no entry or memory assumptions are added.
+  [[nodiscard]] DispatcherSpecializationStats runDispatcherSpecialization(
+      const DispatcherSpecializationOptions &options = {});
 
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();

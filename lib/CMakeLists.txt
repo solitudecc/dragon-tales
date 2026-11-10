@@ -9,6 +9,7 @@ add_library(libdragon SHARED
         PassPipeline.cpp
         FiniteDispatch.cpp
         LLVMLifter.cpp
+        LLVMDispatchSpecialization.cpp
         GuestMemorySSA.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp

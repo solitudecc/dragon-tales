@@ -120,6 +120,22 @@ PassPipeline::PassPipeline(bool builtins) {
     c.lifter.runControlFlowSimplification();
     r.counters.merge(controlFlowCounts(c.lifter.module(),"_after"));return r;
   },false,{},none);
+  registerLLVM("dispatch-specialize",[](LLVMContext &c,const Options &o) {
+    const auto stats=c.lifter.runDispatcherSpecialization({
+        number(o,"max_conditions",256), number(o,"max_expression_nodes",128)});
+    Result r;
+    r.status=!stats.available?Status::Unavailable:
+        (stats.complete?Status::Success:Status::Incomplete);
+    r.changed=stats.changed;
+    r.counters={{"conditions_visited",stats.conditionsVisited},
+      {"unique_conditions",stats.uniqueConditions},
+      {"switches_visited",stats.switchesVisited},
+      {"branches_rewritten",stats.branchesRewritten},
+      {"switches_rewritten",stats.switchesRewritten},
+      {"unresolved_switches",stats.unresolvedSwitches},
+      {"budget_exhausted",stats.budgetExhausted}};
+    return r;
+  },false,{},numeric({"max_conditions","max_expression_nodes"}));
   registerLLVM("mba",mba,false,{},numeric({"timeout_ms","max_queries","max_expression_nodes","max_variables","resource_limit"}));
   registerLLVM("predicates",predicates,false,{},numeric({"timeout_ms","max_queries","max_expression_nodes","resource_limit"}));
   registerGraph("graph-audit",[](GraphContext &c,const Options &) {

@@ -1352,6 +1352,13 @@ dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(const MemoryForwardOptions &op
   return detail::runGuestMemorySSA(*module_, options);
 }
 
+dragon::llvmlifter::DispatcherSpecializationStats
+dragon::llvmlifter::LLVMLifter::runDispatcherSpecialization(
+    const DispatcherSpecializationOptions &options) {
+  if (module_->empty()) return {};
+  return ::dragon::llvmlifter::runDispatcherSpecialization(*module_, options);
+}
+
 std::string dragon::llvmlifter::LLVMLifter::ir() const {
   std::string out;
   llvm::raw_string_ostream os(out);
