@@ -125,8 +125,9 @@ TEST_CASE("LLVM dispatcher specialization rejects flagged poison arithmetic",
   llvm::IRBuilder<> builder(entry);
   builder.CreateBr(dispatch);
   builder.SetInsertPoint(dispatch);
-  auto *state = llvm::cast<llvm::BinaryOperator>(builder.CreateAdd(
-      llvm::ConstantInt::get(i8, 255), llvm::ConstantInt::get(i8, 1), "state"));
+  auto *state = llvm::BinaryOperator::CreateAdd(
+      llvm::ConstantInt::get(i8, 255), llvm::ConstantInt::get(i8, 1), "state",
+      dispatch);
   state->setHasNoUnsignedWrap();
   auto *switchInst = builder.CreateSwitch(state, fallback, 1);
   switchInst->addCase(llvm::ConstantInt::get(i8, 0), taken);
