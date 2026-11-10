@@ -25,6 +25,7 @@ add_executable(dragon_tests
         analysis/TestFiniteWriteFootprints.cpp
         analysis/TestFiniteXorCost.cpp
         analysis/TestFiniteXorSpan.cpp
+        analysis/TestValueSetAccumulator.cpp
         analysis/TestFiniteMemory.cpp
         analysis/TestFiniteInitialState.cpp
         analysis/TestCallerContext.cpp
