@@ -51,7 +51,7 @@ with lift(g) as manual,lift(g) as managed:
 
 with lift(g) as l,d.PassPipeline() as p:
     names={x['name'] for x in p.passes()}
-    assert names==set(d.PassPipeline.DEFAULT_LLVM)|{'graph-audit','finite-values','control-flow'}
+    assert names==set(d.PassPipeline.DEFAULT_LLVM)|{'graph-audit','finite-values','control-flow','dispatch-specialize'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
