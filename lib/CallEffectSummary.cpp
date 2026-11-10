@@ -120,11 +120,10 @@ std::optional<CallMemoryConstant>
 parseMemoryConstant(const llvm::MDOperand &operand) {
   const auto *node = llvm::dyn_cast<llvm::MDNode>(operand);
   if (!node || node->getNumOperands() != 3) return std::nullopt;
-  const auto *range = llvm::dyn_cast<llvm::MDNode>(node->getOperand(0));
   const auto value = integer(node->getOperand(1));
   const auto complete = integer(node->getOperand(2));
-  if (!range || !value || !complete || *complete > 1) return std::nullopt;
-  auto parsedRange = parseRange(range);
+  if (!value || !complete || *complete > 1) return std::nullopt;
+  auto parsedRange = parseRange(node->getOperand(0));
   if (!parsedRange) return std::nullopt;
   CallMemoryConstant constant{*parsedRange, *value, *complete != 0};
   return validMemoryConstant(constant)
