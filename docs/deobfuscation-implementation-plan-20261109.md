@@ -7,6 +7,30 @@
 现有有限值集、调用效果、MBA、谓词、区域提升和 PassPipeline 继续复用。
 第一版不建立任意全程序堆分析，也不重写整个反汇编器。
 
+## 2026-11-10 实施状态
+
+本方案中面向常见静态混淆的 1–5 项基础组件已经落地到 `main`：
+
+- Guest 内存 SSA 已支持跨块事实、汇合 PHI、规范循环回边、按字节的小端重建，以及
+  可选的已证明无写内部调用效果；默认 CALL 屏障和未知别名仍保持保守语义。
+- LLVM MBA 化简和整数不透明谓词折叠沿用完整字长 UNSAT 证明；预算、poison、undef、
+  内存事件和不支持表达式不会被猜测改写。
+- `FiniteValueAccumulator` / `IndirectTargetAccumulator` 提供单调值集合和目标集完备性
+  契约，超预算或未知路径永久回到 Unknown，不发布部分候选。
+- `dispatch-specialize` 折叠当前 IR 中唯一可证明的常量 branch/switch 条件；
+  `dispatch-deflatten` 对状态 PHI 到纯 switch 的每条唯一常量入边做证明型直连，并保留
+  未知状态和未证明分发器。
+
+这几个组件都是显式选择的 LLVM/分析能力，不生成新的去混淆二进制，也不按 Tigress、OLLVM、
+函数名或固定地址匹配。它们覆盖普通控制流平坦化、常量/有限状态分发、线性 MBA 和代数型
+不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
+自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
+
+截至 `671dd87` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
+`845/845`，无 Z3 构建 `710/710`；Guest memory SSA 聚焦为 `10` cases/`69`
+assertions，MBA `8/320`，谓词 `10/395`，值集 `3/21`，常量分发器 `3/24`，证明型
+去平坦化 `2/17`。新增回归均在旧主线上失败后再验证新实现。
+
 ## 1. 对当前问题的重新定位
 
 当前区域提升已使冻结的两个 C O0 ELF 获得 32 次完整 LLVM 根返回匹配；这解决了已测输入的
