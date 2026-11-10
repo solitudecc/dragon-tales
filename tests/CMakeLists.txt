@@ -54,11 +54,13 @@ add_executable(dragon_tests
         lifters/TestLLVMControlFlow.cpp
         lifters/TestLLVMDispatchSpecialization.cpp
         lifters/TestLLVMSameFunctionDeflattening.cpp
+        lifters/TestLLVMConditionalState.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
         lifters/TestLLVMGuestMemorySSA.cpp
         lifters/TestLLVMCallStateBarriers.cpp
+        lifters/TestLLVMReachingStore.cpp
         lifters/TestLLVMCrossCallIsolation.cpp
         loader/TestLoader.cpp
 )

@@ -5,6 +5,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Analysis/ValueTracking.h>
 
 #include <algorithm>
 #include <optional>
@@ -44,6 +45,11 @@ std::optional<FiniteConstants> finiteConstants(const llvm::Value *value,
     result = finiteConstants(freeze->getOperand(0), nodes, maxNodes,
                               maxValues, active);
   } else if (const auto *cast = llvm::dyn_cast<llvm::CastInst>(value)) {
+    if (const auto *trunc = llvm::dyn_cast<llvm::TruncInst>(cast))
+      if (trunc->hasNoUnsignedWrap() || trunc->hasNoSignedWrap())
+        return done(std::nullopt);
+    if (const auto *zext = llvm::dyn_cast<llvm::ZExtInst>(cast))
+      if (zext->hasNonNeg()) return done(std::nullopt);
     if (!cast->getType()->isIntegerTy() ||
         !cast->getOperand(0)->getType()->isIntegerTy())
       return done(std::nullopt);
@@ -98,6 +104,8 @@ std::optional<FiniteConstants> finiteConstants(const llvm::Value *value,
     }
     result = std::move(merged);
   } else if (const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value)) {
+    if (const auto *disjoint = llvm::dyn_cast<llvm::PossiblyDisjointInst>(binary))
+      if (disjoint->isDisjoint()) return done(std::nullopt);
     auto left = finiteConstants(binary->getOperand(0), nodes, maxNodes,
                                 maxValues, active);
     auto right = finiteConstants(binary->getOperand(1), nodes, maxNodes,
@@ -157,6 +165,18 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
   if (const auto *freeze = llvm::dyn_cast<llvm::FreezeInst>(value)) {
     result = uniqueConstant(freeze->getOperand(0), nodes, maxNodes, active);
   } else if (const auto *cast = llvm::dyn_cast<llvm::CastInst>(value)) {
+    if (const auto *trunc = llvm::dyn_cast<llvm::TruncInst>(cast)) {
+      if (trunc->hasNoUnsignedWrap() || trunc->hasNoSignedWrap()) {
+        active.erase(value);
+        return std::nullopt;
+      }
+    }
+    if (const auto *zext = llvm::dyn_cast<llvm::ZExtInst>(cast)) {
+      if (zext->hasNonNeg()) {
+        active.erase(value);
+        return std::nullopt;
+      }
+    }
     if (!cast->getType()->isIntegerTy() ||
         !cast->getOperand(0)->getType()->isIntegerTy()) {
       active.erase(value);
@@ -200,6 +220,12 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
       }
     }
   } else if (const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value)) {
+    if (const auto *disjoint = llvm::dyn_cast<llvm::PossiblyDisjointInst>(binary)) {
+      if (disjoint->isDisjoint()) {
+        active.erase(value);
+        return std::nullopt;
+      }
+    }
     auto left = uniqueConstant(binary->getOperand(0), nodes, maxNodes, active);
     auto right = uniqueConstant(binary->getOperand(1), nodes, maxNodes, active);
     if (left && right && left->getBitWidth() == right->getBitWidth()) {
@@ -248,6 +274,8 @@ struct EdgePlan {
   llvm::Instruction *terminator = nullptr;
   unsigned successorIndex = 0;
   llvm::BasicBlock *target = nullptr;
+  llvm::Value *condition = nullptr;
+  llvm::BasicBlock *falseTarget = nullptr;
 };
 
 bool hasAnyPHI(const llvm::BasicBlock &block) {
@@ -288,16 +316,41 @@ bool onlyPHIsAndOneLoad(const llvm::BasicBlock &block,
   return sawLoad;
 }
 
-llvm::StoreInst *immediateStateStore(llvm::BasicBlock &block,
-                                     const llvm::Value *pointer) {
+llvm::StoreInst *reachingStateStore(llvm::BasicBlock &block,
+                                   const llvm::LoadInst &load,
+                                   std::size_t &nodes, std::size_t maxNodes) {
   auto iterator = block.getTerminator()->getIterator();
-  if (iterator == block.begin()) return nullptr;
-  --iterator;
-  auto *store = llvm::dyn_cast<llvm::StoreInst>(&*iterator);
-  if (!store || store->isVolatile() || store->isAtomic() ||
-      store->getPointerOperand() != pointer)
-    return nullptr;
-  return store;
+  while (iterator != block.begin()) {
+    if (++nodes > maxNodes) return nullptr;
+    auto &instruction = *--iterator;
+    if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+      // Stop at the nearest write. In particular a partial/unknown write must
+      // never let an older constant definition leak through the scan.
+      if (!store->isSimple() ||
+          store->getPointerOperand() != load.getPointerOperand() ||
+          store->getValueOperand()->getType() != load.getType())
+        return nullptr;
+      return store;
+    }
+    if (const auto *call = llvm::dyn_cast<llvm::CallBase>(&instruction)) {
+      if (call->isInlineAsm() || call->isConvergent() ||
+          call->hasFnAttr(llvm::Attribute::ReturnsTwice) ||
+          (!call->doesNotAccessMemory() && !call->onlyReadsMemory()))
+        return nullptr;
+      // The call still executes at its original location. These LLVM memory
+      // effects justify only retaining the prior state value on normal return.
+      continue;
+    }
+    if (const auto *otherLoad = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+      if (!otherLoad->isSimple()) return nullptr;
+      continue;
+    }
+    if (llvm::isa<llvm::FenceInst, llvm::AtomicRMWInst,
+                  llvm::AtomicCmpXchgInst>(&instruction))
+      return nullptr;
+    if (instruction.mayHaveSideEffects()) return nullptr;
+  }
+  return nullptr;
 }
 
 unsigned successorCount(const llvm::Instruction *terminator,
@@ -329,10 +382,29 @@ llvm::BasicBlock *targetFor(llvm::SwitchInst &switchInst,
   return target;
 }
 
+llvm::BasicBlock *singleTargetFor(const llvm::Value *value,
+                                 llvm::SwitchInst &switchInst,
+                                 const DeflatteningOptions &options,
+                                 std::size_t &nodes) {
+  Active active;
+  auto values = finiteConstants(value, nodes, options.maxExpressionNodes,
+                                options.maxValues, active);
+  if (!values || values->empty() ||
+      values->front().getBitWidth() !=
+          switchInst.getCondition()->getType()->getIntegerBitWidth())
+    return nullptr;
+  auto *target = targetFor(switchInst, values->front());
+  for (const auto &item : *values)
+    if (targetFor(switchInst, item) != target) return nullptr;
+  return target;
+}
+
 bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
                     const DeflatteningOptions &options,
-                    std::vector<EdgePlan> &plans, bool &unresolved) {
+                    std::vector<EdgePlan> &plans, bool &unresolved,
+                    bool &budgetExhausted) {
   unresolved = true;
+  budgetExhausted = false;
   // Threading skips this block. Even an otherwise pure PHI can carry a
   // business value to a successor; removing one incoming edge would change
   // that value (or make it cease to dominate its uses). Keep such blocks until
@@ -346,9 +418,8 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
         state->getNumIncomingValues() > options.maxIncomingEdges)
       return false;
   } else if (stateLoad) {
-    // A load-backed dispatcher is accepted only when each incoming block ends
-    // in the exact store feeding the load. We do not chase aliases, calls or
-    // stores in other functions; those remain unresolved.
+    // A load-backed dispatcher requires an exact reaching store in the same
+    // predecessor, with no intervening unknown write or observable barrier.
     if (stateLoad->getParent() != &dispatch || !stateLoad->hasOneUse() ||
         !stateLoad->isSimple() ||
         !onlyPHIsAndOneLoad(dispatch, *stateLoad))
@@ -395,45 +466,70 @@ bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
       continue;
     }
 
-    const llvm::Value *incomingValue = nullptr;
+    std::size_t nodes = 0;
+    llvm::Value *incomingValue = nullptr;
     if (state) {
       incomingValue = state->getIncomingValue(index);
     } else {
-      auto *store = immediateStateStore(*predecessor,
-                                        stateLoad->getPointerOperand());
+      auto *store = reachingStateStore(*predecessor, *stateLoad, nodes,
+                                       options.maxExpressionNodes);
       if (!store) {
+        if (nodes > options.maxExpressionNodes) budgetExhausted = true;
         blocked = true;
         continue;
       }
       incomingValue = store->getValueOperand();
     }
 
-    std::size_t nodes = 0;
-    Active active;
-    auto values = finiteConstants(incomingValue, nodes,
-                                  options.maxExpressionNodes,
-                                  options.maxValues, active);
-    if (!values || values->empty() ||
-        values->front().getBitWidth() !=
-            switchInst.getCondition()->getType()->getIntegerBitWidth()) {
+    llvm::BasicBlock *target = nullptr;
+    llvm::BasicBlock *falseTarget = nullptr;
+    llvm::Value *condition = nullptr;
+    auto *select = llvm::dyn_cast<llvm::SelectInst>(incomingValue);
+    if (select) {
+      ++nodes;
+      Active active;
+      auto choices = finiteConstants(select->getCondition(), nodes,
+                                     options.maxExpressionNodes,
+                                     options.maxValues, active);
+      if (choices && choices->size() == 1 &&
+          choices->front().getBitWidth() == 1) {
+        // A proved condition evaluates only the chosen arm, including when
+        // the unchosen arm is poison. This also keeps computed constants.
+        target = singleTargetFor(choices->front().isZero()
+                                     ? select->getFalseValue()
+                                     : select->getTrueValue(),
+                                 switchInst, options, nodes);
+      } else if (nodes <= options.maxExpressionNodes &&
+                 llvm::isGuaranteedNotToBeUndefOrPoison(select->getCondition())) {
+        // Reuse the same defined condition. Never strip a freeze on the STATE
+        // to expose a poison select, or invent a choice from only a value set.
+        target = singleTargetFor(select->getTrueValue(), switchInst, options, nodes);
+        falseTarget = singleTargetFor(select->getFalseValue(), switchInst, options, nodes);
+        if (target && falseTarget && target != falseTarget)
+          condition = select->getCondition();
+        else if (target != falseTarget)
+          target = nullptr;
+      }
+    } else {
+      target = singleTargetFor(incomingValue, switchInst, options, nodes);
+    }
+    if (nodes > options.maxExpressionNodes) budgetExhausted = true;
+    if (!target || hasAnyPHI(*target) ||
+        (condition && (!falseTarget || hasAnyPHI(*falseTarget)))) {
       blocked = true;
       continue;
     }
-    auto *target = targetFor(switchInst, values->front());
-    bool oneTarget = true;
-    for (std::size_t valueIndex = 1; valueIndex < values->size();
-         ++valueIndex) {
-      if (targetFor(switchInst, (*values)[valueIndex]) != target) {
-        oneTarget = false;
-        break;
+    if (condition) {
+      auto *branch = llvm::dyn_cast<llvm::BranchInst>(terminator);
+      if (!branch || branch->isConditional() || target == &dispatch ||
+          falseTarget == &dispatch) {
+        blocked = true;
+        continue;
       }
     }
-    if (!oneTarget || hasAnyPHI(*target)) {
-      blocked = true;
-      continue;
-    }
     if (target == &dispatch) continue; // a self-dispatch edge already is direct
-    candidate.push_back({predecessor, terminator, *edge, target});
+    candidate.push_back({predecessor, terminator, *edge, target,
+                          condition, falseTarget});
   }
   // A fact authorizes only its own edge. Unknown CALL results, unknown values
   // or unsupported incoming paths continue through the original dispatcher;
@@ -469,14 +565,28 @@ DeflatteningStats runProvableDeflattening(
       }
       std::vector<EdgePlan> plans;
       bool unresolved = false;
-      if (!planDispatcher(block, *switchInst, options, plans, unresolved)) {
+      bool expressionBudget = false;
+      const bool planned = planDispatcher(block, *switchInst, options, plans,
+                                          unresolved, expressionBudget);
+      if (expressionBudget) {
+        stats.complete = false;
+        ++stats.budgetExhausted;
+      }
+      if (!planned) {
         ++stats.unresolvedDispatchers;
         continue;
       }
       for (const auto &plan : plans) {
         // Keep the old edge while LLVM removes its PHI incoming values.
         block.removePredecessor(plan.predecessor);
-        plan.terminator->setSuccessor(plan.successorIndex, plan.target);
+        if (plan.condition) {
+          auto *branch = llvm::BranchInst::Create(
+              plan.target, plan.falseTarget, plan.condition, plan.terminator);
+          branch->setDebugLoc(plan.terminator->getDebugLoc());
+          plan.terminator->eraseFromParent();
+        } else {
+          plan.terminator->setSuccessor(plan.successorIndex, plan.target);
+        }
         ++stats.edgesRewritten;
       }
       ++stats.dispatchersRewritten;

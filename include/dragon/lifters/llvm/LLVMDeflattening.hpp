@@ -16,10 +16,14 @@ namespace dragon::llvmlifter {
 /// incoming edge through the original dispatcher; independent proved edges
 /// may still be threaded. A dispatcher with side effects or live-out values
 /// remains unchanged.
+/// A select with a proved defined condition may reuse that exact condition to
+/// branch between two independently proved targets. Memory selectors require
+/// a same-predecessor reaching store; unknown writes and synchronizing accesses
+/// stop that backward scan, without removing or moving any prefix operation.
 struct DeflatteningOptions {
   std::size_t maxDispatchers = 64;
   std::size_t maxIncomingEdges = 512;
-  std::size_t maxExpressionNodes = 128;
+  std::size_t maxExpressionNodes = 128; ///< Shared scan/value-proof budget per edge.
   std::size_t maxValues = 16;
   /// Retained for source compatibility. Cross-call entry specialization is
   /// disabled: call effects are postconditions, not callee-entry proofs.

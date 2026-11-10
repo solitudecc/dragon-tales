@@ -1,12 +1,28 @@
 # 可证明的 LLVM 去平坦化
 
 `dispatch-deflatten` 是一个显式选择的 LLVM Pass。它识别只含 PHI/load 和 switch 的分发块，
-支持状态 PHI，也支持每条前驱边在分发块前立即写入同一状态槽的 load selector，并对每条入边证明状态值为一个有限的常量集合。
+支持状态 PHI，也支持前驱块内有精确到达 STORE 的 load selector，并对每条入边证明状态值为一个有限的常量集合。
 当集合中的所有值按照 LLVM switch 的完整语义（显式 case 或 default）都映射到同一个目标块
 时，Pass 把原入边直接改到该目标块；集合超出 `max_values` 或映射到多个目标时保留原边。
 证明逐条入边消费：某条路径的 CALL 结果或 state 未知时，该边继续经过原分发器；其它
 入边的完整证明仍可用于直连。报告中的 `dispatchers_rewritten` 和 `unresolved_dispatchers`
 因此可以同时非零，表示部分入边已恢复，仍有未证明路径。
+
+状态若为 `select condition, A, B`，两臂分别能证明唯一目标，且原前驱是无条件 branch，
+则可复用同一个 condition 生成直达两个目标的条件分支。condition 必须已证明非
+undef/poison，例如原有 freeze 或 noundef 输入；不能只凭 `{A,B}` 集合随意选边，也不能
+剥掉 state 上的 freeze 去暴露一个 poison select。外层 guard、目标 PHI 和分发块的
+live-out 值继续保留。已证为常量的条件只分析实际选择的臂，未选的 poison 臂不妨碍证明。
+
+到达 STORE 的回溯只限同一个前驱块，允许跨原位执行的纯计算、普通 simple LOAD 和 LLVM
+明确 readonly/readnone 的调用。最近的其它写入、部分/未知写入、未知 CALL、convergent/
+returns-twice 调用、volatile/atomic 访问、fence 或副作用汇编都会停止扫描。扫描和表达式
+证明共享每边的 `max_expression_nodes`；预算不足保留原边并报告 incomplete，已经完整
+证明的其它边仍可改写。调用、读取和计算的顺序不变。
+
+LLVM 21 的 `trunc nuw/nsw`、`zext nneg` 和 `or disjoint` 可能产生 poison，不能按
+无标志整数运算推成常量；两个分发 Pass 都拒绝这种常量证明。原有 freeze 条件仍可保留
+其真实稳定选择。
 
 改写有严格边界：未知或不同宽度的状态值、重复入边、目标块中的 PHI 和无法证明的表达式
 保留对应入边；不支持的分发块指令和结构预算超限则保留整个分发块。目标块暂不接受 PHI，是因为新增前驱时

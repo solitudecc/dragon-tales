@@ -71,6 +71,87 @@ void verify(const llvm::Module &module) {
   INFO(error);
   CHECK_FALSE(invalid);
 }
+
+enum class IrreducibleAccess {
+  Exact, Narrow, UnknownCall, UnknownAlias, Fence, AtomicWrite,
+  VolatileLoad, VolatileStore, Partial, OtherGuestBase, CrossBlock,
+};
+
+// Both cycle headers have an independent entry edge. Neither header dominates
+// the other, so the predecessor scheduler cannot treat either edge as a natural
+// backedge. The fourth argument chooses whether to continue around the cycle.
+void irreducibleMemory(llvm::Module &module, IrreducibleAccess access) {
+  auto &context = module.getContext();
+  module.setDataLayout("e-p:64:64");
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *i1 = llvm::Type::getInt1Ty(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                      {ptr, ptr, i1, i1}, false);
+  auto *function = llvm::Function::Create(type, llvm::Function::ExternalLinkage,
+                                         "irreducible_memory", module);
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *left = llvm::BasicBlock::Create(context, "left", function);
+  auto *right = llvm::BasicBlock::Create(context, "right", function);
+  auto *exit = llvm::BasicBlock::Create(context, "exit", function);
+  llvm::IRBuilder<> builder(entry);
+  auto *data = builder.CreateLoad(ptr, function->getArg(1));
+  auto *otherData = access == IrreducibleAccess::OtherGuestBase
+      ? builder.CreateLoad(ptr, function->getArg(1)) : nullptr;
+  auto *slot = builder.CreateGEP(builder.getInt8Ty(), data, builder.getInt64(8));
+  if (access == IrreducibleAccess::CrossBlock)
+    builder.CreateStore(builder.getInt64(1), slot);
+  builder.CreateCondBr(function->getArg(2), left, right);
+  for (unsigned index = 0; index != 2; ++index) {
+    builder.SetInsertPoint(index ? right : left);
+    const auto value = index ? 0x8877665544332211ULL : 0x1122334455667788ULL;
+    if (access != IrreducibleAccess::CrossBlock || !index) {
+      auto *store = access == IrreducibleAccess::Partial
+          ? builder.CreateStore(builder.getInt8(0x88), slot)
+          : builder.CreateStore(builder.getInt64(value), slot);
+      if (access == IrreducibleAccess::VolatileStore) store->setVolatile(true);
+    }
+    switch (access) {
+    case IrreducibleAccess::UnknownCall: {
+      auto callee = module.getOrInsertFunction(
+          "unknown_writer", llvm::FunctionType::get(builder.getVoidTy(),
+                                                     {ptr}, false));
+      builder.CreateCall(callee, {data});
+      break;
+    }
+    case IrreducibleAccess::UnknownAlias:
+      builder.CreateStore(builder.getInt64(3), function->getArg(0));
+      break;
+    case IrreducibleAccess::Fence:
+      builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
+      break;
+    case IrreducibleAccess::AtomicWrite:
+      builder.CreateAtomicRMW(llvm::AtomicRMWInst::Add, slot, builder.getInt64(1),
+                              llvm::MaybeAlign(1),
+                              llvm::AtomicOrdering::SequentiallyConsistent);
+      break;
+    case IrreducibleAccess::OtherGuestBase: {
+      auto *otherSlot = builder.CreateGEP(builder.getInt8Ty(), otherData,
+                                          builder.getInt64(8));
+      builder.CreateStore(builder.getInt64(0), otherSlot);
+      break;
+    }
+    default: break;
+    }
+    if (access != IrreducibleAccess::CrossBlock || index) {
+      const bool narrow = access == IrreducibleAccess::Narrow ||
+                          access == IrreducibleAccess::OtherGuestBase;
+      auto *address = narrow
+          ? builder.CreateGEP(builder.getInt8Ty(), data, builder.getInt64(11))
+          : slot;
+      auto *load = builder.CreateLoad(narrow ? builder.getInt16Ty()
+                                             : builder.getInt64Ty(), address);
+      if (access == IrreducibleAccess::VolatileLoad) load->setVolatile(true);
+    }
+    builder.CreateCondBr(function->getArg(3), index ? left : right, exit);
+  }
+  builder.SetInsertPoint(exit);
+  builder.CreateRetVoid();
+}
 } // namespace
 
 TEST_CASE("S2 forwards exact Guest stores and reuses exact Guest loads",
@@ -613,5 +694,101 @@ TEST_CASE("S2 uses a loop PHI when a canonical loop changes a Guest slot",
   CHECK(stats.phisInserted >= 1);
   CHECK(stats.loadsForwarded >= 1);
   CHECK(integerLoads(module) == 0);
+  verify(module);
+}
+
+TEST_CASE("S2 visits irreducible cycle blocks using only local exact stores",
+          "[llvm][guest-memory-ssa][guest-memory-irreducible]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"irreducible-exact", context};
+  irreducibleMemory(module, IrreducibleAccess::Exact);
+  REQUIRE(integerLoads(module) == 2);
+  verify(module);
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {65536, false});
+  CHECK(stats.complete);
+  CHECK(stats.changed);
+  CHECK(stats.blocksVisited == 4);
+  CHECK(stats.loadsForwarded == 2);
+  CHECK(stats.loadsReused == 0);
+  CHECK(stats.phisInserted == 0);
+  CHECK(integerLoads(module) == 0);
+  verify(module);
+}
+
+TEST_CASE("S2 rebuilds local Guest bytes in irreducible cycle blocks",
+          "[llvm][guest-memory-ssa][guest-memory-irreducible]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"irreducible-bytes", context};
+  irreducibleMemory(module, IrreducibleAccess::Narrow);
+  REQUIRE(integerLoads(module) == 2);
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {65536, false});
+  CHECK(stats.complete);
+  CHECK(stats.blocksVisited == 4);
+  CHECK(stats.loadsForwarded == 2);
+  CHECK(stats.byteRebuilds == 2);
+  CHECK(stats.phisInserted == 0);
+  CHECK(integerLoads(module) == 0);
+  verify(module);
+}
+
+TEST_CASE("S2 keeps irreducible blocks independent of incomplete incoming facts",
+          "[llvm][guest-memory-ssa][guest-memory-irreducible]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"irreducible-cross-block", context};
+  irreducibleMemory(module, IrreducibleAccess::CrossBlock);
+  REQUIRE(integerLoads(module) == 1);
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {65536, false});
+  CHECK(stats.complete);
+  CHECK(stats.blocksVisited == 4);
+  CHECK_FALSE(stats.changed);
+  CHECK(stats.loadsForwarded == 0);
+  CHECK(stats.phisInserted == 0);
+  CHECK(integerLoads(module) == 1);
+  verify(module);
+}
+
+TEST_CASE("S2 retains memory barriers in conservative cycle coverage",
+          "[llvm][guest-memory-ssa][guest-memory-irreducible]") {
+  const std::pair<const char *, IrreducibleAccess> cases[] = {
+      {"unknown-call", IrreducibleAccess::UnknownCall},
+      {"unknown-alias", IrreducibleAccess::UnknownAlias},
+      {"fence", IrreducibleAccess::Fence},
+      {"atomic-write", IrreducibleAccess::AtomicWrite},
+      {"volatile-load", IrreducibleAccess::VolatileLoad},
+      {"volatile-store", IrreducibleAccess::VolatileStore},
+      {"partial-store", IrreducibleAccess::Partial},
+      {"possibly-aliasing-guest-bases", IrreducibleAccess::OtherGuestBase},
+  };
+  for (const auto &[name, access] : cases) {
+    DYNAMIC_SECTION(name) {
+      llvm::LLVMContext context;
+      llvm::Module module{name, context};
+      irreducibleMemory(module, access);
+      REQUIRE(integerLoads(module) == 2);
+      const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {65536, false});
+      CHECK(stats.complete);
+      CHECK(stats.blocksVisited == 4);
+      CHECK_FALSE(stats.changed);
+      CHECK(stats.loadsForwarded == 0);
+      CHECK(stats.byteRebuilds == 0);
+      CHECK(stats.phisInserted == 0);
+      CHECK(integerLoads(module) == 2);
+      verify(module);
+    }
+  }
+}
+
+TEST_CASE("S2 bounds rewrites in conservative cycle coverage",
+          "[llvm][guest-memory-ssa][guest-memory-irreducible]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"irreducible-budget", context};
+  irreducibleMemory(module, IrreducibleAccess::Exact);
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {1, false});
+  CHECK_FALSE(stats.complete);
+  CHECK(stats.changed);
+  CHECK(stats.loadsForwarded == 1);
+  CHECK(stats.budgetExhausted == 1);
+  CHECK(stats.phisInserted == 0);
+  CHECK(integerLoads(module) == 1);
   verify(module);
 }

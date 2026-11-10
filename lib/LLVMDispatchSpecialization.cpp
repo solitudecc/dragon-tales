@@ -43,6 +43,18 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
   if (const auto *freeze = llvm::dyn_cast<llvm::FreezeInst>(value)) {
     result = uniqueConstant(freeze->getOperand(0), nodes, maxNodes, active);
   } else if (const auto *cast = llvm::dyn_cast<llvm::CastInst>(value)) {
+    if (const auto *trunc = llvm::dyn_cast<llvm::TruncInst>(cast)) {
+      if (trunc->hasNoUnsignedWrap() || trunc->hasNoSignedWrap()) {
+        active.erase(value);
+        return std::nullopt;
+      }
+    }
+    if (const auto *zext = llvm::dyn_cast<llvm::ZExtInst>(cast)) {
+      if (zext->hasNonNeg()) {
+        active.erase(value);
+        return std::nullopt;
+      }
+    }
     if (!cast->getType()->isIntegerTy() ||
         !cast->getOperand(0)->getType()->isIntegerTy()) {
       active.erase(value);
@@ -85,6 +97,12 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
       }
     }
   } else if (const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value)) {
+    if (const auto *disjoint = llvm::dyn_cast<llvm::PossiblyDisjointInst>(binary)) {
+      if (disjoint->isDisjoint()) {
+        active.erase(value);
+        return std::nullopt;
+      }
+    }
     auto left = uniqueConstant(binary->getOperand(0), nodes, maxNodes, active);
     auto right = uniqueConstant(binary->getOperand(1), nodes, maxNodes, active);
     if (left && right && left->getBitWidth() == right->getBitWidth()) {

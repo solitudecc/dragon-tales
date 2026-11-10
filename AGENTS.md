@@ -211,6 +211,37 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Local state transfers and conservative memory coverage (2026-11-11, baseline
+`26e1fce`): see `docs/llvm-local-state-repairs-20261111.md`. Deflattening scans
+backward within one predecessor for the nearest exact state STORE, allowing
+retained pure operations, simple LOADs and explicit readonly/readnone calls.
+Unknown/partial/other writes, unknown calls and synchronization remain barriers.
+A direct select with a proved defined condition can reuse that exact condition
+to branch to two independently proved targets; outer guards, live-out values,
+target PHIs and unknown incoming paths remain. Scan and value proof share each
+edge's expression budget, with incomplete reported on exhaustion. Both dispatch
+passes reject flagged trunc/zext and disjoint OR constant proofs through freeze.
+GuestMemorySSA now locally scans reachable blocks missed by the predecessor
+scheduler, after all ordinary loop proofs and deferred rewrites. Every missed
+block starts empty; no predecessor/successor facts or PHIs, and no new alias or
+loop invariant assumptions. This is not a general SCC fixed point.
+Old-code regressions actually fail: reaching-store 15, base conditional 71,
+irreducible coverage 22, flagged casts 32, disjoint OR 10 failed assertions.
+Final main/no-Z3 focus: 20 cases / 1211 assertions; related components 54/1502.
+CTest 887/887 and 752/752. Frozen integrated native groups: reaching-store 864
+full-state matches plus two faulty-IR controls; conditional state 1024 matches
+and four specified controls; irreducible memory 1056 return/full-64-KiB matches
+and 1056 detections each for result/memory controls. No exclusions, skips or
+normalizations. Conditional fixture rewrites increase 1->14 edges; cross-call
+counters remain zero. Real frozen four-ELF replay C16/LLVM16 completes with full
+state, but real target switches remain 2->2 and all four deflat passes rewrite
+zero edges. RIP routing 1->0 is not CFF removal. Eight real-IR probes improve
+scan coverage but still forward zero loads and retain identical output. Further
+work needs edge-local Guest address/value proofs across success checks; never
+globally assume RBP=entry SP-8 or immutable image tables. No new instruction
+campaign or full 69-input corpus run is claimed. Frozen runtimes, failure logs
+and real replay are under `~/vmc-runs/llvm-local-state-20261111/`.
+
 Same-function dispatcher hardening (2026-11-11, baseline `9020c70`):
 `dispatch-deflatten` now threads each proved predecessor independently; unknown
 CALL/state edges retain the original dispatcher. A dispatcher can count as both

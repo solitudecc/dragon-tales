@@ -547,6 +547,140 @@ llvm::Value *rebuildBytes(llvm::LoadInst &load, const std::vector<BytePart> &par
   return result;
 }
 
+// A non-natural cycle can leave the predecessor-count scheduler waiting on
+// itself.  Once the ordinary worklist and its loop proofs have finished, the
+// remaining reachable blocks may still use facts established within that very
+// block.  Never import a predecessor fact, export a fact, or create a PHI here.
+void forwardConservativeBlocks(
+    llvm::Function &function,
+    const std::unordered_set<llvm::BasicBlock *> &reachable,
+    const std::unordered_set<llvm::BasicBlock *> &visited,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats) {
+  for (auto &block : function) {
+    if (!reachable.contains(&block) || visited.contains(&block)) continue;
+    if (stats.loadsForwarded >= options.maxRewrites) return;
+    ++stats.blocksVisited;
+    std::vector<Fact> facts;
+    for (auto it = block.begin(); it != block.end();) {
+      auto &instruction = *it++;
+      if (llvm::isa<llvm::CallBase, llvm::FenceInst>(instruction)) {
+        facts.clear();
+        if (llvm::isa<llvm::CallBase>(instruction)) ++stats.callBarriers;
+        continue;
+      }
+      if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+        auto access = classifyStore(*store, memoryBases, layout);
+        if (!access) {
+          // Even a store through another pointer argument may alias Guest
+          // memory.  The fallback has no external/local address assumptions.
+          facts.clear();
+          ++stats.aliasBarriers;
+          continue;
+        }
+        ++stats.guestStores;
+        invalidate(facts, *access, stats);
+        if (isDefinedValue(access->value))
+          facts.push_back(Fact{*access, access->value});
+        continue;
+      }
+      if (auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+        if (!load->isSimple()) {
+          facts.clear();
+          continue;
+        }
+        auto access = classifyLoad(*load, memoryBases, layout);
+        if (!access) continue;
+        ++stats.guestLoads;
+        const auto fact = std::find_if(facts.rbegin(), facts.rend(),
+            [&](const Fact &candidate) {
+              return candidate.access.bytes == access->bytes &&
+                     sameAddress(candidate.access.address, access->address);
+            });
+        if (fact != facts.rend()) {
+          load->replaceAllUsesWith(fact->value);
+          load->eraseFromParent();
+          ++stats.loadsForwarded;
+          stats.changed = true;
+          if (stats.loadsForwarded >= options.maxRewrites) return;
+        }
+        continue;
+      }
+      if (instruction.mayWriteToMemory()) facts.clear();
+    }
+  }
+}
+
+void forwardConservativeBytes(
+    llvm::Function &function,
+    const std::unordered_set<llvm::BasicBlock *> &reachable,
+    const std::unordered_set<llvm::BasicBlock *> &visited,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats) {
+  for (auto &block : function) {
+    if (!reachable.contains(&block) || visited.contains(&block)) continue;
+    ByteFacts facts;
+    for (auto it = block.begin(); it != block.end();) {
+      if (stats.loadsForwarded >= options.maxRewrites) return;
+      auto &instruction = *it++;
+      if (llvm::isa<llvm::CallBase, llvm::FenceInst>(instruction)) {
+        facts.clear();
+        continue;
+      }
+      if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+        auto access = classifyStore(*store, memoryBases, layout);
+        if (!access || !access->address.constant ||
+            !isDefinedValue(access->value)) {
+          facts.clear();
+          continue;
+        }
+        // Distinct loaded Guest bases are not a no-alias proof.
+        for (auto base = facts.begin(); base != facts.end();) {
+          if (base->first != access->address.base) base = facts.erase(base);
+          else ++base;
+        }
+        auto &baseFacts = facts[access->address.base];
+        for (unsigned index = 0; index < access->bytes; ++index) {
+          const auto offset = byteOffset(*access, index);
+          if (!offset) { facts.clear(); break; }
+          baseFacts[*offset] = BytePart{access->value, index, access->bytes, false};
+        }
+        continue;
+      }
+      if (auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+        if (!load->isSimple()) {
+          facts.clear();
+          continue;
+        }
+        auto access = classifyLoad(*load, memoryBases, layout);
+        if (!access || !access->address.constant) continue;
+        auto base = facts.find(access->address.base);
+        if (base == facts.end()) continue;
+        std::vector<BytePart> parts;
+        for (unsigned index = 0; index < access->bytes; ++index) {
+          const auto offset = byteOffset(*access, index);
+          if (!offset) break;
+          const auto part = base->second.find(*offset);
+          if (part == base->second.end()) break;
+          parts.push_back(part->second);
+        }
+        if (parts.size() != access->bytes) continue;
+        if (auto *value = rebuildBytes(*load, parts, layout)) {
+          load->replaceAllUsesWith(value);
+          load->eraseFromParent();
+          ++stats.loadsForwarded;
+          ++stats.byteRebuilds;
+          stats.changed = true;
+        }
+        continue;
+      }
+      if (instruction.mayWriteToMemory()) facts.clear();
+    }
+  }
+}
+
 bool sameBytePart(const BytePart &left, const BytePart &right) {
   return left.byteIndex == right.byteIndex &&
          left.valueBytes == right.valueBytes &&
@@ -728,6 +862,8 @@ void runByteForwarding(llvm::Function &function,
     }
     if (stats.loadsForwarded >= options.maxRewrites) return;
   }
+  forwardConservativeBytes(function, reachable, visited, memoryBases, layout,
+                           options, stats);
 }
 
 } // namespace
@@ -1151,6 +1287,12 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
         stats.changed = true;
       }
     }
+    // Run only after all original loop/incoming-fact decisions and pending
+    // rewrites.  These local facts must never become a new loop invariant or
+    // an incoming fact for a block already processed by the ordinary worklist.
+    if (stats.loadsForwarded < options.maxRewrites)
+      forwardConservativeBlocks(function, reachable, visited, memoryBases,
+                                module.getDataLayout(), options, stats);
     if (stats.loadsForwarded < options.maxRewrites)
       runByteForwarding(function, memoryBases, module.getDataLayout(), options,
                         stats, graph, leafCallCache);
