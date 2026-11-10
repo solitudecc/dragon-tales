@@ -147,6 +147,8 @@ PassPipeline::PassPipeline(bool builtins) {
     r.counters={{"dispatchers_visited",stats.dispatchersVisited},
       {"dispatchers_rewritten",stats.dispatchersRewritten},
       {"edges_rewritten",stats.edgesRewritten},
+      {"cross_call_dispatchers_rewritten",stats.crossCallDispatchersRewritten},
+      {"cross_call_summaries_consumed",stats.crossCallSummariesConsumed},
       {"unresolved_dispatchers",stats.unresolvedDispatchers},
       {"budget_exhausted",stats.budgetExhausted}};
     return r;

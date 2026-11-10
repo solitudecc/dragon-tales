@@ -1,11 +1,15 @@
 #include <dragon/lifters/llvm/LLVMDeflattening.hpp>
+#include <dragon/lifters/llvm/CallEffectSummary.hpp>
 
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Operator.h>
 
 #include <algorithm>
+#include <limits>
 #include <optional>
 #include <unordered_set>
 #include <vector>
@@ -276,6 +280,22 @@ bool onlyPHIsAndOneLoad(const llvm::BasicBlock &block,
   return sawLoad;
 }
 
+bool onlyPureInstructionsAndLoad(const llvm::BasicBlock &block,
+                                 const llvm::LoadInst &load) {
+  bool sawLoad = false;
+  for (const auto &instruction : block) {
+    if (&instruction == block.getTerminator()) break;
+    if (&instruction == &load) {
+      if (sawLoad) return false;
+      sawLoad = true;
+      continue;
+    }
+    if (llvm::isa<llvm::PHINode>(&instruction)) continue;
+    if (instruction.mayHaveSideEffects()) return false;
+  }
+  return sawLoad;
+}
+
 llvm::StoreInst *immediateStateStore(llvm::BasicBlock &block,
                                      const llvm::Value *pointer) {
   auto iterator = block.getTerminator()->getIterator();
@@ -315,6 +335,143 @@ llvm::BasicBlock *targetFor(llvm::SwitchInst &switchInst,
       return caseHandle.getCaseSuccessor();
   }
   return target;
+}
+
+std::optional<std::uint64_t> stateSlotOffset(
+    const llvm::Value *pointer, const llvm::Function &function,
+    const llvm::DataLayout &layout,
+    std::unordered_set<const llvm::Value *> &active) {
+  if (!pointer || !active.insert(pointer).second) return std::nullopt;
+  auto done = [&](std::optional<std::uint64_t> result) {
+    active.erase(pointer);
+    return result;
+  };
+  auto *value = pointer->stripPointerCasts();
+  if (value != pointer) return done(stateSlotOffset(value, function, layout, active));
+  if (function.arg_size() == 0 || value == function.getArg(0))
+    return done(value == function.getArg(0) ? std::optional<std::uint64_t>(0)
+                                            : std::nullopt);
+  if (const auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(value)) {
+    auto base = stateSlotOffset(gep->getPointerOperand(), function, layout, active);
+    if (!base) return done(std::nullopt);
+    llvm::APInt offset(64, 0);
+    if (!gep->accumulateConstantOffset(layout, offset) || offset.isNegative())
+      return done(std::nullopt);
+    const auto delta = offset.getZExtValue();
+    if (*base > std::numeric_limits<std::uint64_t>::max() - delta)
+      return done(std::nullopt);
+    return done(*base + delta);
+  }
+  // The lifted state object is commonly loaded from state+24 before register
+  // slots are addressed.  Once that load is proven to originate at arg0, it
+  // becomes the zero point for subsequent state GEPs.
+  if (const auto *load = llvm::dyn_cast<llvm::LoadInst>(value)) {
+    if (load->getType()->isPointerTy() &&
+        stateSlotOffset(load->getPointerOperand(), function, layout, active))
+      return done(std::uint64_t{0});
+  }
+  return done(std::nullopt);
+}
+
+std::optional<std::uint64_t> stateSlotOffset(const llvm::Value *pointer,
+                                             const llvm::Function &function,
+                                             const llvm::DataLayout &layout) {
+  std::unordered_set<const llvm::Value *> active;
+  return stateSlotOffset(pointer, function, layout, active);
+}
+
+bool rangesOverlap(std::uint64_t leftOffset, std::uint32_t leftBytes,
+                   std::uint64_t rightOffset, std::uint32_t rightBytes) {
+  if (!leftBytes || !rightBytes) return false;
+  if (leftOffset > std::numeric_limits<std::uint64_t>::max() - leftBytes ||
+      rightOffset > std::numeric_limits<std::uint64_t>::max() - rightBytes)
+    return true;
+  return leftOffset < rightOffset + rightBytes &&
+         rightOffset < leftOffset + leftBytes;
+}
+
+bool directCallUsersOnly(const llvm::Function &callee,
+                         std::size_t maxCallSites,
+                         std::vector<const llvm::CallBase *> &calls) {
+  for (const auto &use : callee.uses()) {
+    const auto *call = llvm::dyn_cast<llvm::CallBase>(use.getUser());
+    if (!call || call->getCalledFunction() != &callee) return false;
+    calls.push_back(call);
+    if (calls.size() > maxCallSites) return false;
+  }
+  return !calls.empty();
+}
+
+std::optional<llvm::BasicBlock *> crossCallTarget(
+    llvm::Function &callee, llvm::BasicBlock &dispatch,
+    llvm::SwitchInst &switchInst, const DeflatteningOptions &options,
+    std::size_t &summariesConsumed) {
+  auto *stateLoad = llvm::dyn_cast<llvm::LoadInst>(switchInst.getCondition());
+  if (!options.consumeCallEffectSummaries || !options.maxCrossCallSites ||
+      !stateLoad || !onlyPureInstructionsAndLoad(dispatch, *stateLoad))
+    return std::nullopt;
+  if (!stateLoad || !stateLoad->hasOneUse() ||
+      !stateLoad->getType()->isIntegerTy())
+    return std::nullopt;
+  const auto slot = stateSlotOffset(stateLoad->getPointerOperand(), callee,
+                                    callee.getParent()->getDataLayout());
+  if (!slot) return std::nullopt;
+  const unsigned width = stateLoad->getType()->getIntegerBitWidth();
+  if (!width || width % 8) return std::nullopt;
+  const auto bytes = width / 8;
+
+  std::vector<const llvm::CallBase *> calls;
+  if (!directCallUsersOnly(callee, options.maxCrossCallSites, calls))
+    return std::nullopt;
+
+  llvm::BasicBlock *chosenTarget = nullptr;
+  std::size_t consumed = 0;
+  for (const auto *call : calls) {
+    const auto summary = getCallEffectSummary(*call);
+    if (!summary || !summary->proven ||
+        summary->memory != CallMemoryEffectKind::KnownRanges)
+      return std::nullopt;
+    std::vector<llvm::APInt> values;
+    for (const auto &write : summary->writes) {
+      if (write.base != CallMemoryRange::Base::GuestState ||
+          !rangesOverlap(write.offset, write.bytes, *slot, bytes))
+        continue;
+      if (write.offset != *slot || write.bytes != bytes)
+        return std::nullopt;
+      for (const auto &constant : summary->memoryConstants) {
+        if (constant.range.base != write.base ||
+            constant.range.offset != write.offset ||
+            constant.range.bytes != write.bytes || !constant.complete)
+          continue;
+        values.emplace_back(width, constant.value);
+      }
+    }
+    if (values.empty()) return std::nullopt;
+    for (const auto &value : values) {
+      auto *target = targetFor(switchInst, value);
+      if (!chosenTarget)
+        chosenTarget = target;
+      else if (chosenTarget != target)
+        return std::nullopt;
+    }
+    ++consumed;
+  }
+  if (!chosenTarget || chosenTarget == &dispatch || consumed != calls.size())
+    return std::nullopt;
+  summariesConsumed = consumed;
+  return chosenTarget;
+}
+
+void replaceSwitchWithBranch(llvm::BasicBlock &block,
+                             llvm::SwitchInst &switchInst,
+                             llvm::BasicBlock &target) {
+  std::unordered_set<llvm::BasicBlock *> successors;
+  for (unsigned index = 0; index < switchInst.getNumSuccessors(); ++index)
+    successors.insert(switchInst.getSuccessor(index));
+  for (auto *successor : successors)
+    if (successor != &target) successor->removePredecessor(&block);
+  llvm::BranchInst::Create(&target, &switchInst);
+  switchInst.eraseFromParent();
 }
 
 bool planDispatcher(llvm::BasicBlock &dispatch, llvm::SwitchInst &switchInst,
@@ -422,6 +579,16 @@ DeflatteningStats runProvableDeflattening(
       }
       std::vector<EdgePlan> plans;
       if (!planDispatcher(block, *switchInst, options, plans)) {
+        std::size_t consumed = 0;
+        if (auto target = crossCallTarget(function, block, *switchInst,
+                                          options, consumed)) {
+          replaceSwitchWithBranch(block, *switchInst, **target);
+          ++stats.dispatchersRewritten;
+          ++stats.crossCallDispatchersRewritten;
+          stats.crossCallSummariesConsumed += consumed;
+          stats.changed = true;
+          continue;
+        }
         ++stats.unresolvedDispatchers;
         continue;
       }
