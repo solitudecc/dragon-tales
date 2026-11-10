@@ -1400,6 +1400,27 @@ void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t *l) {
     l->lifter.runDCE();
 }
 
+int dragon_llvm_lifter_run_guest_memory_ssa(
+    dragon_llvm_lifter_t *l, size_t max_rewrites, int run_mem2reg,
+    dragon_memory_forward_stats_t *out) {
+  if (out) *out = {};
+  if (!l || !out || (run_mem2reg != 0 && run_mem2reg != 1)) return 0;
+  const auto stats = l->lifter.runGuestMemorySSA({max_rewrites, run_mem2reg != 0});
+  out->available = stats.available;
+  out->complete = stats.complete;
+  out->changed = stats.changed;
+  out->blocks_visited = stats.blocksVisited;
+  out->guest_loads = stats.guestLoads;
+  out->guest_stores = stats.guestStores;
+  out->loads_forwarded = stats.loadsForwarded;
+  out->loads_reused = stats.loadsReused;
+  out->call_barriers = stats.callBarriers;
+  out->alias_barriers = stats.aliasBarriers;
+  out->partial_overlaps = stats.partialOverlaps;
+  out->budget_exhausted = stats.budgetExhausted;
+  return 1;
+}
+
 int dragon_llvm_lifter_fold_predicates(dragon_llvm_lifter_t *l,
     uint32_t timeout_ms, uint32_t max_queries, uint32_t max_expression_nodes,
     uint32_t resource_limit,

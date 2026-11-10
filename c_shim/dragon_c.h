@@ -795,6 +795,27 @@
   void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_dce(dragon_llvm_lifter_t* l);
 
+  typedef struct dragon_memory_forward_stats {
+      int available;
+      int complete;
+      int changed;
+      size_t blocks_visited;
+      size_t guest_loads;
+      size_t guest_stores;
+      size_t loads_forwarded;
+      size_t loads_reused;
+      size_t call_barriers;
+      size_t alias_barriers;
+      size_t partial_overlaps;
+      size_t budget_exhausted;
+  } dragon_memory_forward_stats_t;
+
+  // Explicit S2 first-stage Guest-memory SSA. It promotes registers when
+  // requested, then forwards only exact same-block facts. Calls, unknown
+  // aliases, joins and partial overlaps remain conservative barriers.
+  int dragon_llvm_lifter_run_guest_memory_ssa(dragon_llvm_lifter_t* l,
+      size_t max_rewrites, int run_mem2reg, dragon_memory_forward_stats_t* out);
+
   typedef struct dragon_predicate_fold_stats {
       int available;
       size_t conditions_visited;

@@ -1779,6 +1779,24 @@ class LLVMLifter:
         """Remove dead flag computations."""
         lib.dragon_llvm_lifter_run_dce(self._ptr)
 
+    def run_guest_memory_ssa(self, max_rewrites=65536, run_mem2reg=True):
+        """Run the conservative first S2 Guest-memory forwarding stage.
+
+        Register promotion is optional. Facts stay on successful linear
+        memory paths; calls, unknown aliases, joins, loops and partial
+        overlaps remain barriers. The default optimization pipeline does not
+        invoke this stage implicitly.
+        """
+        if type(max_rewrites) is not int or not 0 <= max_rewrites <= 0xffffffffffffffff:
+            raise ValueError('max_rewrites must be a non-negative integer')
+        if type(run_mem2reg) is not bool:
+            raise ValueError('run_mem2reg must be bool')
+        stats = ffi.new('dragon_memory_forward_stats_t *')
+        if not lib.dragon_llvm_lifter_run_guest_memory_ssa(
+                self._ptr, max_rewrites, int(run_mem2reg), stats):
+            raise ValueError('invalid LLVM lifter or unavailable Legacy mode')
+        return MemoryForwardStats(stats[0])
+
     def run_predicate_folding(self, timeout_ms=25, max_queries=64,
                               max_expression_nodes=256, resource_limit=200000):
         """Prove integer branch/select conditions constant, then clean the CFG.
@@ -1827,6 +1845,23 @@ class LLVMLifter:
 
     def __repr__(self):
         return '<LLVMLifter>'
+
+
+class MemoryForwardStats:
+    """Bounded first-stage Guest-memory forwarding results."""
+
+    def __init__(self, stats):
+        for name in ('available', 'complete', 'changed'):
+            setattr(self, name, bool(getattr(stats, name)))
+        for name in ('blocks_visited', 'guest_loads', 'guest_stores',
+                     'loads_forwarded', 'loads_reused', 'call_barriers',
+                     'alias_barriers', 'partial_overlaps', 'budget_exhausted'):
+            setattr(self, name, int(getattr(stats, name)))
+
+    def __repr__(self):
+        return (f'<MemoryForwardStats available={self.available} '
+                f'changed={self.changed} forwarded={self.loads_forwarded} '
+                f'reused={self.loads_reused}>')
 
 
 class MBASimplifyStats:

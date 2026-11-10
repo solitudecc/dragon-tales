@@ -255,7 +255,16 @@ tests cannot compile absent internal header (saved). Orchestrator Transfer enum
 mistake corrected against Execution.h (2 vs3); adopted seven raw groups and only
 ran the eighth, without checker/input/field changes. No new exclusions/skips or
 deobfuscation gain. Build9ff29d8+patch, artifact `~/vmc-runs/llvm-lift-provenance-20261109/`.
-Details: docs/deobfuscation-progress-20261109.md. S2 forwarding remains next.
+Details: docs/deobfuscation-progress-20261109.md. S2 first-stage exact Guest
+memory forwarding is now implemented; see docs/llvm-memory-forwarding.md.
+
+S2 first stage (2026-11-10): `LLVMLifter::runGuestMemorySSA` and C/Python mirrors
+optionally promote registers, then forward exact-width Guest LOADs from prior
+LOAD/STORE facts along successful linear memory-check chains. Calls, unknown
+aliases, volatile/atomic accesses, partial overlaps, joins, loops and ordinary
+basic-block edges remain barriers; default optimize() is unchanged. Four focused
+cases / 34 assertions; main CTest 831/831 and no-Z3 696/696. This is not
+cross-block PHI, loop fixed-point, byte reconstruction or heap analysis.
 
 Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
 LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and

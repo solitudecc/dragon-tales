@@ -1,0 +1,37 @@
+#pragma once
+
+#include <cstddef>
+
+namespace llvm {
+class Module;
+}
+
+namespace dragon::llvmlifter {
+
+/// Bounds for the first, deliberately local Guest-memory forwarding pass.
+/// Facts never cross a call, basic block, loop edge or unknown alias.
+struct MemoryForwardOptions {
+  std::size_t maxRewrites = 65536;
+  bool runMem2Reg = true;
+};
+
+struct MemoryForwardStats {
+  bool available = false;
+  bool complete = true;
+  bool changed = false;
+  std::size_t blocksVisited = 0;
+  std::size_t guestLoads = 0;
+  std::size_t guestStores = 0;
+  std::size_t loadsForwarded = 0;
+  std::size_t loadsReused = 0;
+  std::size_t callBarriers = 0;
+  std::size_t aliasBarriers = 0;
+  std::size_t partialOverlaps = 0;
+  std::size_t budgetExhausted = 0;
+};
+
+namespace detail {
+MemoryForwardStats runGuestMemorySSA(llvm::Module &, const MemoryForwardOptions &);
+}
+
+} // namespace dragon::llvmlifter

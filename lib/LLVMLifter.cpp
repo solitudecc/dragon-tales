@@ -11,6 +11,7 @@
 #include <utility>
 #include "utils/FloatOps.hpp"
 #include "LLVMImportMetadata.hpp"
+#include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 #include "LLVMPredicateFolding.hpp"
 #include "LLVMMBASimplification.hpp"
 #include "LLVMPreparedRegion.hpp"
@@ -1340,6 +1341,15 @@ dragon::llvmlifter::LLVMLifter::runMBASimplification(const MBASimplifyOptions &o
     runFPM(*module_, std::move(fpm));
   }
   return stats;
+}
+
+dragon::llvmlifter::MemoryForwardStats
+dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(const MemoryForwardOptions &options) {
+  if (mode_ == ExecutionMode::Legacy || module_->empty())
+    return {};
+  if (options.runMem2Reg)
+    runMem2Reg();
+  return detail::runGuestMemorySSA(*module_, options);
 }
 
 std::string dragon::llvmlifter::LLVMLifter::ir() const {
