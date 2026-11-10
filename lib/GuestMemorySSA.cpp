@@ -105,8 +105,13 @@ bool equivalentValue(const llvm::Value *left, const llvm::Value *right) {
          a->getValue() == b->getValue();
 }
 
+bool isDefinedValue(const llvm::Value *value) {
+  return value && !llvm::isa<llvm::UndefValue, llvm::PoisonValue>(value);
+}
+
 bool sameFact(const Fact &left, const Fact &right) {
-  return left.access.bytes == right.access.bytes &&
+  return isDefinedValue(left.value) && isDefinedValue(right.value) &&
+         left.access.bytes == right.access.bytes &&
          sameAddress(left.access.address, right.access.address) &&
          equivalentValue(left.value, right.value);
 }
@@ -121,6 +126,25 @@ bool sameFacts(const std::vector<Fact> &left, const std::vector<Fact> &right) {
         match = index;
         break;
       }
+    if (match == right.size()) return false;
+    matched[match] = true;
+  }
+  return true;
+}
+
+bool sameFactKeys(const std::vector<Fact> &left, const std::vector<Fact> &right) {
+  if (left.size() != right.size()) return false;
+  std::vector<bool> matched(right.size(), false);
+  for (const auto &fact : left) {
+    std::size_t match = right.size();
+    for (std::size_t index = 0; index < right.size(); ++index) {
+      const auto &candidate = right[index];
+      if (!matched[index] && candidate.access.bytes == fact.access.bytes &&
+          sameAddress(candidate.access.address, fact.access.address)) {
+        match = index;
+        break;
+      }
+    }
     if (match == right.size()) return false;
     matched[match] = true;
   }
@@ -252,6 +276,8 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     struct PendingRewrite {
       llvm::LoadInst *load = nullptr;
       llvm::Value *value = nullptr;
+      AddressKey address;
+      unsigned bytes = 0;
       bool reused = false;
     };
     std::vector<PendingRewrite> pendingRewrites;
@@ -286,7 +312,12 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             if (it == predFacts->end()) { presentEverywhere = false; break; }
             values.push_back(it->value);
           }
-          if (!presentEverywhere) { ++stats.joinBarriers; continue; }
+            if (!presentEverywhere ||
+                std::any_of(values.begin(), values.end(),
+                            [](llvm::Value *value) { return !isDefinedValue(value); })) {
+              ++stats.joinBarriers;
+              continue;
+            }
           const bool equal = std::all_of(values.begin() + 1, values.end(),
               [&](llvm::Value *value) { return equivalentValue(value, values.front()); });
           llvm::Value *value = values.front();
@@ -346,10 +377,12 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
               return candidate.access.bytes == access->bytes &&
                      sameAddress(candidate.access.address, access->address);
             });
-            if (fact != facts.rend() && plannedRewrites < options.maxRewrites) {
+            if (fact != facts.rend() && isDefinedValue(fact->value) &&
+                plannedRewrites < options.maxRewrites) {
               ++plannedRewrites;
               if (loopBlocks.contains(block)) {
-                pendingRewrites.push_back({load, fact->value, !fact->access.store});
+                pendingRewrites.push_back({load, fact->value, access->address,
+                                           access->bytes, !fact->access.store});
               } else {
                 load->replaceAllUsesWith(fact->value);
                 load->eraseFromParent();
@@ -432,17 +465,125 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
       }
       if (!loopsStable) break;
     }
-    if (!loopsStable) {
+    struct LoopPhi {
+      AddressKey address;
+      unsigned bytes = 0;
+      llvm::PHINode *phi = nullptr;
+      llvm::Value *entryValue = nullptr;
+    };
+    std::vector<LoopPhi> loopPhis;
+    llvm::BasicBlock *admittedLoopHeader = nullptr;
+    llvm::BasicBlock *admittedLoopBody = nullptr;
+    bool loopPhiAdmitted = false;
+    if (!loopsStable && options.enablePhi && backedgePreds.size() == 1 &&
+        loopBlocks.size() == 2) {
+      const auto &loop = *backedgePreds.begin();
+      auto *header = loop.first;
+      auto *body = *loop.second.begin();
+      std::vector<llvm::BasicBlock *> outsidePreds;
+      for (auto *pred : llvm::predecessors(header))
+        if (pred != body) outsidePreds.push_back(pred);
+      std::vector<llvm::BasicBlock *> headerExits;
+      for (auto *successor : llvm::successors(header))
+        if (successor != body) headerExits.push_back(successor);
+      std::vector<llvm::BasicBlock *> bodyExits;
+      for (auto *successor : llvm::successors(body))
+        if (successor != header) bodyExits.push_back(successor);
+      const auto input = incoming.find(header);
+      const auto edges = edgeFacts.find(header);
+      const std::vector<Fact> *backFacts = nullptr;
+      if (edges != edgeFacts.end()) {
+        const auto backValue = edges->second.find(body);
+        if (backValue != edges->second.end())
+          backFacts = &backValue->second;
+      }
+      const bool headerHasGuestStore = std::any_of(
+          header->begin(), header->end(), [&](const llvm::Instruction &instruction) {
+            const auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+            return store && classifyStore(
+                *const_cast<llvm::StoreInst *>(store), memoryBases).has_value();
+          });
+      bool valid = outsidePreds.size() == 1 && headerExits.size() == 1 &&
+                   bodyExits.size() <= 1 && !loopBlocks.contains(outsidePreds.front()) &&
+                   !headerHasGuestStore && input != incoming.end() &&
+                   backFacts && sameFactKeys(input->second, *backFacts);
+      if (valid) {
+        for (const auto &candidate : input->second) {
+          auto it = std::find_if(backFacts->begin(), backFacts->end(),
+              [&](const Fact &fact) {
+                return fact.access.bytes == candidate.access.bytes &&
+                       sameAddress(fact.access.address, candidate.access.address);
+              });
+          if (it == backFacts->end() ||
+              !isDefinedValue(candidate.value) || !isDefinedValue(it->value) ||
+              it->value->getType() != candidate.value->getType()) {
+            valid = false;
+            break;
+          }
+          if (equivalentValue(candidate.value, it->value))
+            continue;
+          if (const auto *instruction = llvm::dyn_cast<llvm::Instruction>(it->value);
+              instruction && loopBlocks.contains(
+                  const_cast<llvm::BasicBlock *>(instruction->getParent()))) {
+            valid = false;
+            break;
+          }
+          llvm::IRBuilder<> builder(header, header->getFirstInsertionPt());
+          auto *phi = builder.CreatePHI(candidate.value->getType(), 2,
+                                        "guest.mem.loop.phi");
+          phi->addIncoming(candidate.value, outsidePreds.front());
+          phi->addIncoming(it->value, body);
+          loopPhis.push_back({candidate.access.address, candidate.access.bytes,
+                              phi, candidate.value});
+          ++stats.phisInserted;
+        }
+        loopPhiAdmitted = valid && !loopPhis.empty();
+        if (!loopPhiAdmitted) {
+          for (const auto &loopPhi : loopPhis)
+            loopPhi.phi->eraseFromParent();
+          if (stats.phisInserted >= loopPhis.size())
+            stats.phisInserted -= loopPhis.size();
+          loopPhis.clear();
+        } else {
+          admittedLoopHeader = header;
+          admittedLoopBody = body;
+        }
+      }
+    }
+    const bool loopAdmitted = loopsStable || loopPhiAdmitted;
+    if (!loopAdmitted) {
       pendingRewrites.clear();
       plannedRewrites = stats.loadsForwarded;
+    } else if (loopPhiAdmitted) {
+      for (auto &rewrite : pendingRewrites) {
+        if (!rewrite.load) continue;
+        auto *parent = rewrite.load->getParent();
+        for (const auto &loopPhi : loopPhis) {
+          if (rewrite.bytes != loopPhi.bytes ||
+              !sameAddress(rewrite.address, loopPhi.address) ||
+              !loopBlocks.contains(parent))
+            continue;
+          if (parent == admittedLoopHeader ||
+              (parent == admittedLoopBody &&
+               equivalentValue(rewrite.value, loopPhi.entryValue)))
+            rewrite.value = loopPhi.phi;
+        }
+      }
     }
     for (auto &edge : deferredEdges) {
-      auto facts = loopsStable && options.enableCrossBlock
+      auto facts = loopAdmitted && options.enableCrossBlock
           ? std::move(edge.facts) : std::vector<Fact>{};
+      if (loopPhiAdmitted && edge.pred == admittedLoopHeader) {
+        for (auto &fact : facts)
+          for (const auto &loopPhi : loopPhis)
+            if (fact.access.bytes == loopPhi.bytes &&
+                sameAddress(fact.access.address, loopPhi.address))
+              fact.value = loopPhi.phi;
+      }
       acceptEdge(edge.pred, edge.successor, std::move(facts));
     }
     processWork();
-    if (loopsStable) {
+    if (loopAdmitted) {
       for (const auto &rewrite : pendingRewrites) {
         if (!rewrite.load || !rewrite.load->getParent() ||
             stats.loadsForwarded >= options.maxRewrites)

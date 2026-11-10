@@ -12,8 +12,10 @@
 
 调用、未知别名、易失/原子访问和部分重叠写都是保守屏障。自然循环只有在入口事实与所有
 回边事实逐项相同后才允许把不变事实传出；循环内 LOAD 的替换会延迟到该检查通过之后。
-值变化、缺失事实、宽度/地址冲突和无法证明的循环都清空相关事实，不猜测一般循环不动点。
-`maxRewrites` 到达上限时返回 `complete=false`，不伪造收敛报告。
+对单一 header、单一 body、单一回边的规范两块循环，如果地址/宽度集合一致且回边值来自循环
+外或常量，可在 header 建立 loop-carried PHI；其他形状仍清空相关事实。值变化、缺失事实、
+宽度/地址冲突和无法证明的循环都不猜测一般循环不动点。`maxRewrites` 到达上限时返回
+`complete=false`，不伪造收敛报告。
 
 `MemoryForwardOptions` 的 `enableCrossBlock` 和 `enablePhi` 允许 C++ 调用者分别关闭
 跨块传播或冲突值 PHI；C shim/Python 使用完整的默认 S2 行为，并返回
@@ -21,13 +23,13 @@
 
 ## 验证
 
-S2 新增菱形和循环不变槽回归，旧实现分别保留汇合 LOAD 和循环 LOAD；旧代码的循环回归有
-2 个关键断言失败。当前聚焦组为 **6/6 测试、45 条断言**；主 CTest **833/833**，无 Z3
-CTest **698/698**。菱形阶段的已合并基线为 832/832 和 697/697。
+S2 新增菱形、循环不变槽和规范循环 PHI 回归；旧实现保留循环 LOAD，规范循环 PHI 回归有
+3 个关键断言失败。当前聚焦组为 **7/7 测试、50 条断言**；主 CTest **834/834**，无 Z3
+CTest **699/699**。循环不变阶段的已验证基线为 833/833 和 698/698。
 Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，并可读到三个
 新增统计字段。
 
 证据和可复现 patch 位于
-`validation-artifacts/llvm-memory-forwarding-20261110/s2-joins/`；VM 工作树使用
+`validation-artifacts/llvm-memory-forwarding-20261110/s2-loop-phi/`；VM 工作树使用
 `~/dragon-tales-overlap`。这些结果证明模块生成、验证和本组件的局部语义，不构成一般堆
 分析、未知外部调用摘要、字节级重组或完整循环内存分析的证明。

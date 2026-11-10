@@ -263,13 +263,14 @@ mirrors optionally promote registers, then forward exact-width Guest LOADs from
 prior LOAD/STORE facts. Acyclic CFG edges carry facts; joins keep facts present
 on every edge and insert PHIs for differing values. Calls, unknown aliases,
 volatile/atomic accesses and partial overlaps remain conservative barriers.
-Loop facts cross a backedge only after an exact entry/backedge invariant check;
-unknown loop effects remain barriers and no general loop fixed point is guessed. Default
+Loop facts cross a backedge only after an exact entry/backedge check; a canonical
+two-block loop may use a loop-carried PHI when its backedge value is loop-independent.
+Unknown loop effects and other shapes remain barriers; no general loop fixed point is guessed. Default
 optimize() is unchanged. The first-stage four cases/34 assertions remain green;
-the cross-block/loop focused group is 6/6 cases/45 assertions; main/no-Z3 CTest
-833/833 and 698/698. The old implementation fails the two loop-invariant
-forwarding assertions. This is not byte reconstruction, heap analysis or
-external-call effect summarization.
+the cross-block/loop focused group is 7/7 cases/50 assertions; main/no-Z3 CTest
+834/834 and 699/699. The old implementation fails three canonical-loop-PHI
+assertions. This is not byte reconstruction, heap analysis or external-call
+effect summarization.
 
 Deobfuscation S1a preparation (2026-11-09, baseline `ced8210`): internal
 LLVMPreparedRegion owns a const Graph at a stable heap address. Strict and

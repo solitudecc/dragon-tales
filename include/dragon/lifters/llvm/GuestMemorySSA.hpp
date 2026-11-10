@@ -10,7 +10,8 @@ namespace dragon::llvmlifter {
 
 /// Bounds for the conservative S2 Guest-memory forwarding pass.
 /// Acyclic CFG edges may carry facts; calls and unknown aliases are barriers.
-/// Loop edges require an exact invariant check and otherwise remain barriers.
+/// Loop edges require an exact invariant check; a canonical two-block loop may
+/// use a PHI for a loop-carried value, and other loops remain barriers.
 /// Conflicting join values may use PHIs when enabled.
 struct MemoryForwardOptions {
   std::size_t maxRewrites = 65536;

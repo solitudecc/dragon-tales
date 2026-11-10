@@ -214,3 +214,47 @@ TEST_CASE("S2 forwards a loop-invariant Guest slot without guessing iterations",
   CHECK(integerLoads(module) == 0);
   verify(module);
 }
+
+TEST_CASE("S2 uses a loop PHI when a canonical loop changes a Guest slot",
+          "[llvm][guest-memory-ssa]") {
+  llvm::LLVMContext context;
+  llvm::Module module{"guest-memory-loop-phi", context};
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                       {ptr, ptr, ptr, ptr}, false);
+  auto *function = llvm::Function::Create(type, llvm::Function::ExternalLinkage,
+                                          "loop_phi_case", module);
+  auto args = function->arg_begin();
+  auto *condition = &*args++;
+  auto *memory = &*args++;
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *header = llvm::BasicBlock::Create(context, "header", function);
+  auto *body = llvm::BasicBlock::Create(context, "body", function);
+  auto *exit = llvm::BasicBlock::Create(context, "exit", function);
+  llvm::IRBuilder<> entryBuilder(entry);
+  auto *data = entryBuilder.CreateLoad(ptr, memory);
+  auto *slot = entryBuilder.CreateGEP(entryBuilder.getInt8Ty(), data,
+                                      entryBuilder.getInt64(0x4000));
+  entryBuilder.CreateStore(entryBuilder.getInt64(1), slot);
+  entryBuilder.CreateBr(header);
+  llvm::IRBuilder<> headerBuilder(header);
+  headerBuilder.CreateCondBr(headerBuilder.CreateIsNull(condition), body, exit);
+  llvm::IRBuilder<> bodyBuilder(body);
+  auto *bodySlot = bodyBuilder.CreateGEP(bodyBuilder.getInt8Ty(), data,
+                                         bodyBuilder.getInt64(0x4000));
+  bodyBuilder.CreateStore(bodyBuilder.getInt64(2), bodySlot);
+  bodyBuilder.CreateBr(header);
+  llvm::IRBuilder<> exitBuilder(exit);
+  auto *exitSlot = exitBuilder.CreateGEP(exitBuilder.getInt8Ty(), data,
+                                         exitBuilder.getInt64(0x4000));
+  exitBuilder.CreateLoad(exitBuilder.getInt64Ty(), exitSlot);
+  exitBuilder.CreateRetVoid();
+
+  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(
+      module, MemoryForwardOptions{65536, false});
+  CHECK(stats.available);
+  CHECK(stats.phisInserted >= 1);
+  CHECK(stats.loadsForwarded >= 1);
+  CHECK(integerLoads(module) == 0);
+  verify(module);
+}

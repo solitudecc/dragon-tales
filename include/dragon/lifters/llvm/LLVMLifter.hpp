@@ -174,9 +174,10 @@ class LLVMLifter {
   /// Promote register allocas and perform conservative Guest-memory forwarding.
   /// Acyclic CFG edges carry exact-width facts; joins retain common facts and
   /// create PHIs for differing values. Loop facts are carried only after an
-  /// exact entry/backedge invariant check; calls, unknown aliases and partial
-  /// overlaps remain barriers otherwise. The default optimization pipeline is
-  /// unchanged; callers opt into this stage explicitly.
+  /// exact entry/backedge check; canonical two-block loops may create a
+  /// loop-carried PHI, while calls, unknown aliases and partial overlaps remain
+  /// barriers otherwise. The default optimization pipeline is unchanged;
+  /// callers opt into this stage explicitly.
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const MemoryForwardOptions &options = {});
 
