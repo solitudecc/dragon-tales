@@ -26,6 +26,9 @@ dispatch-deflatten → control-flow → dce`，16/16 个 LLVM pipeline 报告和
 `3094`，`f-combo-O2` 由 `4109` 降到 `1775`。这些复杂样本的 dispatcher 状态仍然是
 未知或多值，因此两个分发 Pass 都报告 unresolved、改写边为零；这是正确的保守结果。
 
+同一批 16 个 ELF 单独运行 Guest memory SSA，16/16 次分析完成且没有错误改写；复杂
+函数中的动态指针和调用使其报告 `alias_barriers`，而不是猜测 Guest 槽关系。
+
 基础函数语料另用 seed `1901/1902` 测试 arithmetic 和 flatten-switch，线性/递归各一组：
 每组 `128` 次 C 对照全部匹配，`768` 次 LLVM 比较中 `384` 次完整匹配、`384` 次明确
 `incomplete`，`different=0`。
@@ -64,6 +67,7 @@ barrier。不能按导入名或一次运行结果猜测系统调用效果。
 ## 产物
 
 - 综合函数：`/home/cc/vmc-runs/complex-tigress-20261110/`
+- 显式 Dragon Pass pipeline：`/home/cc/vmc-runs/custom-pipeline-20261110/`
 - 基础 arithmetic/Flatten：`/home/cc/vmc-runs/obf-focus-20261110/`
 - 外部调用：`/home/cc/vmc-runs/unknown-calls-20261110/` 和
   `/home/cc/vmc-runs/external-unknown-20261110/plain/`
