@@ -26,11 +26,15 @@
 不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
 
-截至 `6f8bf2a` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
-`847/847`，无 Z3 构建 `712/712`；Guest memory SSA 聚焦为 `10` cases/`69`
-assertions，MBA `8/320`，谓词 `10/395`，值集 `3/21`，常量分发器 `4/32`，证明型
-去平坦化 `3/25`。新增回归均在旧主线上失败后再验证新实现；越界移位和 poison 条件
-也有旧实现反例，修复后保持为未解析表达式。
+截至 `5a25f56` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
+`852/852`，无 Z3 构建 `717/717`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
+地址关系和显式调用摘要；去平坦化覆盖有限状态集合及同函数 load-backed state selector。
+未知调用仍然 barrier。新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、
+非法摘要和未知地址关系都保持保守。
+
+复杂 Tigress 的主要剩余缺口已经定位为跨函数状态传递：前一函数在 CALL continuation 前
+写入 Guest state，下一函数在入口读取 state 并进入 dispatcher。当前 Pass 不会凭函数名、
+动态轨迹或不完整摘要猜测这条关系；需要后续的 proven 跨调用常量写摘要和有界入口专门化。
 
 ## 1. 对当前问题的重新定位
 
