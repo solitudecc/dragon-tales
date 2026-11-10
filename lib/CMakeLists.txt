@@ -10,6 +10,7 @@ add_library(libdragon SHARED
         FiniteDispatch.cpp
         LLVMLifter.cpp
         LLVMDispatchSpecialization.cpp
+        LLVMDeflattening.cpp
         GuestMemorySSA.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp

@@ -136,6 +136,21 @@ PassPipeline::PassPipeline(bool builtins) {
       {"budget_exhausted",stats.budgetExhausted}};
     return r;
   },false,{},numeric({"max_conditions","max_expression_nodes"}));
+  registerLLVM("dispatch-deflatten",[](LLVMContext &c,const Options &o) {
+    const auto stats=c.lifter.runProvableDeflattening({
+        number(o,"max_dispatchers",64), number(o,"max_incoming_edges",512),
+        number(o,"max_expression_nodes",128)});
+    Result r;
+    r.status=!stats.available?Status::Unavailable:
+        (stats.complete?Status::Success:Status::Incomplete);
+    r.changed=stats.changed;
+    r.counters={{"dispatchers_visited",stats.dispatchersVisited},
+      {"dispatchers_rewritten",stats.dispatchersRewritten},
+      {"edges_rewritten",stats.edgesRewritten},
+      {"unresolved_dispatchers",stats.unresolvedDispatchers},
+      {"budget_exhausted",stats.budgetExhausted}};
+    return r;
+  },false,{},numeric({"max_dispatchers","max_incoming_edges","max_expression_nodes"}));
   registerLLVM("mba",mba,false,{},numeric({"timeout_ms","max_queries","max_expression_nodes","max_variables","resource_limit"}));
   registerLLVM("predicates",predicates,false,{},numeric({"timeout_ms","max_queries","max_expression_nodes","resource_limit"}));
   registerGraph("graph-audit",[](GraphContext &c,const Options &) {

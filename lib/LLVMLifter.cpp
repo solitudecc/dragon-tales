@@ -1360,6 +1360,13 @@ dragon::llvmlifter::LLVMLifter::runDispatcherSpecialization(
   return ::dragon::llvmlifter::runDispatcherSpecialization(*module_, options);
 }
 
+dragon::llvmlifter::DeflatteningStats
+dragon::llvmlifter::LLVMLifter::runProvableDeflattening(
+    const DeflatteningOptions &options) {
+  if (module_->empty()) return {};
+  return ::dragon::llvmlifter::runProvableDeflattening(*module_, options);
+}
+
 dragon::llvmlifter::MemoryForwardStats
 dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(
     const Graph &graph, const MemoryForwardOptions &options) {

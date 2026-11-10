@@ -7,6 +7,7 @@
 #include <dragon/lifters/ignil/IGNIL.hpp>
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 #include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
+#include <dragon/lifters/llvm/LLVMDeflattening.hpp>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -187,6 +188,9 @@ class LLVMLifter {
   /// are reported as unresolved; no entry or memory assumptions are added.
   [[nodiscard]] DispatcherSpecializationStats runDispatcherSpecialization(
       const DispatcherSpecializationOptions &options = {});
+
+  [[nodiscard]] DeflatteningStats runProvableDeflattening(
+      const DeflatteningOptions &options = {});
 
   /// Graph-aware opt-in variant. When `proveLeafCalls` is enabled, it may
   /// consume a bounded LeafCallProof for static internal calls annotated by

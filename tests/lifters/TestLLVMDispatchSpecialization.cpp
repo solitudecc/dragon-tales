@@ -110,6 +110,97 @@ TEST_CASE("LLVM dispatcher specialization keeps differing PHI targets explicit",
   verify(lifter.module());
 }
 
+TEST_CASE("LLVM deflattening rewrites proven state edges",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *i32 = llvm::Type::getInt32Ty(context);
+  auto *function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {}, false),
+      llvm::GlobalValue::ExternalLinkage, "flat", lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *left = llvm::BasicBlock::Create(context, "left", function);
+  auto *right = llvm::BasicBlock::Create(context, "right", function);
+  auto *dispatch = llvm::BasicBlock::Create(context, "dispatch", function);
+  auto *caseLeft = llvm::BasicBlock::Create(context, "case.left", function);
+  auto *caseRight = llvm::BasicBlock::Create(context, "case.right", function);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", function);
+  llvm::IRBuilder<> builder(entry);
+  builder.CreateCondBr(llvm::ConstantInt::getTrue(context), left, right);
+  builder.SetInsertPoint(left);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(right);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(dispatch);
+  auto *state = builder.CreatePHI(i32, 2, "state");
+  auto *switchInst = builder.CreateSwitch(state, fallback, 2);
+  switchInst->addCase(llvm::ConstantInt::get(i32, 10), caseLeft);
+  switchInst->addCase(llvm::ConstantInt::get(i32, 20), caseRight);
+  state->addIncoming(llvm::ConstantInt::get(i32, 10), left);
+  state->addIncoming(llvm::ConstantInt::get(i32, 20), right);
+  builder.SetInsertPoint(caseLeft);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(caseRight);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK(report.changed);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("edges_rewritten") == 2);
+  CHECK(left->getTerminator()->getSuccessor(0) == caseLeft);
+  CHECK(right->getTerminator()->getSuccessor(0) == caseRight);
+  verify(lifter.module());
+}
+
+TEST_CASE("LLVM deflattening keeps unknown state paths explicit",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *i32 = llvm::Type::getInt32Ty(context);
+  auto *function = llvm::Function::Create(
+      llvm::FunctionType::get(llvm::Type::getVoidTy(context), {i32}, false),
+      llvm::GlobalValue::ExternalLinkage, "flat_unknown", lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", function);
+  auto *left = llvm::BasicBlock::Create(context, "left", function);
+  auto *right = llvm::BasicBlock::Create(context, "right", function);
+  auto *dispatch = llvm::BasicBlock::Create(context, "dispatch", function);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", function);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", function);
+  llvm::IRBuilder<> builder(entry);
+  builder.CreateCondBr(llvm::ConstantInt::getTrue(context), left, right);
+  builder.SetInsertPoint(left);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(right);
+  builder.CreateBr(dispatch);
+  builder.SetInsertPoint(dispatch);
+  auto *state = builder.CreatePHI(i32, 2, "state");
+  auto *switchInst = builder.CreateSwitch(state, fallback, 1);
+  switchInst->addCase(llvm::ConstantInt::get(i32, 10), taken);
+  state->addIncoming(llvm::ConstantInt::get(i32, 10), left);
+  state->addIncoming(function->getArg(0), right);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK_FALSE(report.changed);
+  CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
+  CHECK(left->getTerminator()->getSuccessor(0) == dispatch);
+  CHECK(right->getTerminator()->getSuccessor(0) == dispatch);
+  verify(lifter.module());
+}
+
 TEST_CASE("LLVM dispatcher specialization rejects flagged poison arithmetic",
           "[llvm][dispatch-specialize]") {
   llvmlifter::LLVMLifter lifter{Architecture::X86_64};
