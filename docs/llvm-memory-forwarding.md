@@ -38,6 +38,18 @@
 Guest 地址关系的摘要误当作无别名证明。`proveLeafCalls` 默认为关闭，原来的两参数
 `detail::runGuestMemorySSA` 符号也保留，C shim/Python 的默认行为不变。
 
+## 显式调用效果摘要（可选）
+
+`dragon/lifters/llvm/CallEffectSummary.hpp` 提供 `attachCallEffectSummary()`，供可信的
+C++ Pass 给单个 LLVM CALL 附加版本化摘要。摘要可以标记外部函数或 syscall、syscall number、
+内存效果和有限的返回寄存器/errno 信息；`proven`、边界类型、范围和数量都会在写入 metadata
+前检查。`MemoryForwardOptions::consumeCallEffectSummaries` 默认关闭，开启后只消费已证明的
+`NoMemory`/`ReadOnly` 摘要；未知、畸形、带写集或 `KnownRanges` 尚未建立别名证明的摘要仍是
+CALL barrier。syscall number `0` 是合法值，不能被当成缺失。
+
+Guest 地址键现在按 LLVM `DataLayout` 累积嵌套/typed GEP 的真实字节偏移，并识别两臂相同的
+PHI/select 地址；动态 GEP 只按精确表达式身份匹配，未知别名继续清空事实。
+
 ## 验证
 
 S2 新增菱形、循环不变槽、规范循环 PHI 和完全覆盖窄读回归；旧实现对窄读没有转发。
