@@ -7,9 +7,22 @@
 
 改写有严格边界：未知或不同宽度的状态值、重复入边、分发块中的其它指令、目标块中的 PHI、
 预算耗尽以及无法证明的表达式都会保留原分发 CFG。目标块暂不接受 PHI，是因为新增前驱时
-必须同时构造对应的 SSA incoming value；拒绝比猜测安全。跨函数 CALL、未知别名、堆状态和
-无法证明的状态写入仍保留原 dispatcher。该 Pass 不读取镜像、函数名或
-Tigress/OLLVM 特征，也不宣称能处理堆状态、间接内存读取或 VM 分发器。
+必须同时构造对应的 SSA incoming value；拒绝比猜测安全。未知别名、一般堆状态、无法证明的
+状态写入和未知调用仍保留原 dispatcher。该 Pass 不读取镜像、函数名或 Tigress/OLLVM 特征，
+也不宣称能处理间接内存读取或 VM 分发器。
+
+## 跨调用 GuestState 专门化
+
+开启默认的 `consumeCallEffectSummaries` 后，Pass 还可以处理一类封闭的跨函数入口：目标函数必须
+是本地链接、所有直接调用点都可枚举；每个调用点都要附带 `CallEffectSummary v2`，声明完整的
+`KnownRanges` 写集，并对与 dispatcher LOAD 完全重合的 `GuestState` 槽提供一个 `complete`
+常量。所有调用点的常量必须映射到同一个 LLVM switch 目标，之后才把 callee 入口的 switch
+改成直连。外部可见函数、未知/间接调用者、不完整摘要、部分重叠写和映射到不同目标的调用点
+都保持 unresolved。
+
+这是一种调用图闭合条件下的全局专门化，不是把一个调用点的动态值传播给共享 callee。需要不同
+调用点分别进入不同目标时，应保留通用 callee，或由可信插件先生成调用点 clone；当前 Pass 不
+自动 clone，也不推断函数原型、系统调用效果或堆对象内容。
 
 它和 `dispatch-specialize` 的关系是：后者折叠当前 IR 中唯一常量的 branch/switch selector；
 前者沿着状态 PHI 的每条已证明入边把“块 → 分发器 → 块”改成直连边。两者都默认关闭，

@@ -1,7 +1,7 @@
 # 去混淆能力补齐实施方案
 
-日期：2026-11-09。设计依据：[问题交接](deobfuscation-design-handoff-20261109.md)、实现基线
-`4cd41b7`、文档基线 `a638239`。本文为待实施方案，不表示以下组件已经开发或验证完成。
+日期：2026-11-09，状态更新至 2026-11-11。设计依据：[问题交接](deobfuscation-design-handoff-20261109.md)。
+本文保留原始方案和边界；已完成的组件在实施状态中列出，未列出的能力仍不应视为已实现。
 
 推荐路线：**先恢复内存读写之间的值关系，再将关系表达为 SSA，最后对有证明的分发路径做改写。**
 现有有限值集、调用效果、MBA、谓词、区域提升和 PassPipeline 继续复用。
@@ -18,23 +18,28 @@
 - `FiniteValueAccumulator` / `IndirectTargetAccumulator` 提供单调值集合和目标集完备性
   契约，超预算或未知路径永久回到 Unknown，不发布部分候选。
 - `dispatch-specialize` 折叠当前 IR 中唯一可证明的常量 branch/switch 条件；
-  `dispatch-deflatten` 对状态 PHI 到纯 switch 的每条唯一常量入边做证明型直连，并保留
-  未知状态和未证明分发器。
+  `dispatch-deflatten` 对状态 PHI、有限状态集合和同函数 load-backed selector 做证明型直连，
+  并保留未知状态和未证明分发器。
+- `CallEffectSummary v2` 可携带 `GuestState` 的完整常量写。对本地链接、所有直接调用点都
+  有完整且一致摘要的 callee，`dispatch-deflatten` 可以把入口 load-backed dispatcher 改成
+  直连；外部可见函数、未知/间接调用、不完整摘要和多目标调用保持 unresolved。
 
 这几个组件都是显式选择的 LLVM/分析能力，不生成新的去混淆二进制，也不按 Tigress、OLLVM、
 函数名或固定地址匹配。它们覆盖普通控制流平坦化、常量/有限状态分发、线性 MBA 和代数型
 不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
 
-截至 `5a25f56` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
-`852/852`，无 Z3 构建 `717/717`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
-地址关系和显式调用摘要；去平坦化覆盖有限状态集合及同函数 load-backed state selector。
-未知调用仍然 barrier。新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、
-非法摘要和未知地址关系都保持保守。
+截至 `c75af12` 的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
+`855/855`，无 Z3 构建 `720/720`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
+地址关系、完整 GuestMemory 常量写和显式调用摘要；去平坦化覆盖有限状态集合、同函数
+load-backed selector，以及受摘要约束的跨函数 GuestState selector。未知调用仍然 barrier。
+新增回归均在旧主线上失败后再验证新实现；越界移位、poison 条件、非法摘要、外部可见
+callee 和未知地址关系都保持保守。
 
-复杂 Tigress 的主要剩余缺口已经定位为跨函数状态传递：前一函数在 CALL continuation 前
-写入 Guest state，下一函数在入口读取 state 并进入 dispatcher。当前 Pass 不会凭函数名、
-动态轨迹或不完整摘要猜测这条关系；需要后续的 proven 跨调用常量写摘要和有界入口专门化。
+复杂 Tigress 的主要剩余缺口已经收窄为摘要来源和调用点专门化：前一函数在 CALL continuation
+前写入 Guest state，下一函数在入口读取 state 并进入 dispatcher。当前 Pass 已消费可信的
+`GuestState` 完整常量摘要，但不会自动从未知外部调用、堆链表或动态轨迹生成摘要；不同调用点
+需要不同目标时也不会全局改写共享 callee，后续应由可信插件提供 clone/入口上下文。
 
 ## 1. 对当前问题的重新定位
 
@@ -239,6 +244,11 @@ LLVM MemorySSA 可用于加速查找内存依赖，但它本身不会把 Guest �
 继续生效。[LLVM 21 UB 说明](https://releases.llvm.org/21.1.0/docs/UndefinedBehavior.html)
 
 ### 6.3 调用摘要先接消费者，再扩分析域
+
+当前已落地第一版消费者：`CallEffectSummary v2` 的 `GuestMemory` 完整常量写可被
+`guest-memory-ssa` 消费，`GuestState` 完整槽写可被受限的跨调用 `dispatch-deflatten`
+消费。后者只接受本地链接且调用图闭合、所有直接调用点摘要完整并映射到同一目标的情况；
+它不自动生成外部函数模型，也不把不同调用点的值合并成一个共享 callee 结论。
 
 先把 `LeafCallProof` 已证明的写集、常量和未改字节接到内存转发；保持当前 x86、调用树与循环预算。
 其次为小型实际内部函数增加有界符号结果：`返回值 = 表达式`、`内存槽 = 入参/入场快照表达式`，

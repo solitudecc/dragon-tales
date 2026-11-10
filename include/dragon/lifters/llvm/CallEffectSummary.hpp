@@ -15,9 +15,10 @@ namespace dragon::llvmlifter {
 /// unknown syscall or external call has no summary and remains a barrier.
 enum class CallBoundaryKind : std::uint8_t { ExternalFunction = 0, SystemCall = 1 };
 
-/// Memory precision supplied by a trusted summary. KnownRanges is retained as
-/// metadata for consumers that understand the ranges; Guest-memory SSA only
-/// crosses NoMemory and ReadOnly summaries until it can prove range aliases.
+/// Memory precision supplied by a trusted summary. KnownRanges is a complete
+/// write footprint. Guest-memory SSA consumes GuestMemory ranges and complete
+/// constants; the deflattening pass consumes complete GuestState constants.
+/// Other bases stay barriers until a consumer proves their address relation.
 enum class CallMemoryEffectKind : std::uint8_t {
   Unknown = 0,
   NoMemory = 1,

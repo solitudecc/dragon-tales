@@ -7,6 +7,8 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
 
+#include <cstdint>
+
 using namespace dragon;
 using namespace dragon::passes;
 using namespace dragon::llvmlifter;
@@ -309,6 +311,125 @@ TEST_CASE("LLVM deflattening consumes a complete cross-call GuestState summary",
   CHECK(llvm::isa<llvm::BranchInst>(entry->getTerminator()));
   CHECK(entry->getTerminator()->getSuccessor(0) == taken);
   CHECK(switches(lifter.module()) == 0);
+  verify(lifter.module());
+}
+
+TEST_CASE("LLVM deflattening keeps externally visible cross-call state explicit",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *i64 = llvm::Type::getInt64Ty(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false);
+  auto *callee = llvm::Function::Create(
+      type, llvm::GlobalValue::ExternalLinkage, "public_state_dispatch",
+      lifter.module());
+  auto *caller = llvm::Function::Create(
+      type, llvm::GlobalValue::InternalLinkage, "public_state_caller",
+      lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", callee);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", callee);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", callee);
+  llvm::IRBuilder<> builder(entry);
+  auto *slot = builder.CreateGEP(builder.getInt8Ty(), callee->getArg(0),
+                                 builder.getInt64(128));
+  auto *state = builder.CreateLoad(i64, slot, "state");
+  auto *dispatch = builder.CreateSwitch(state, fallback, 1);
+  dispatch->addCase(llvm::ConstantInt::get(i64, 42), taken);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+
+  auto *callerEntry = llvm::BasicBlock::Create(context, "entry", caller);
+  llvm::IRBuilder<> callerBuilder(callerEntry);
+  auto *call = callerBuilder.CreateCall(callee, {caller->getArg(0)});
+  CallEffectSummary summary;
+  summary.version = 2;
+  summary.proven = true;
+  summary.memory = CallMemoryEffectKind::KnownRanges;
+  const CallMemoryRange range{CallMemoryRange::Base::GuestState, 128, 8};
+  summary.writes.push_back(range);
+  summary.memoryConstants.push_back({range, 42, true});
+  REQUIRE(attachCallEffectSummary(*call, summary));
+  callerBuilder.CreateRetVoid();
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK_FALSE(report.changed);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
+  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 0);
+  CHECK(llvm::isa<llvm::SwitchInst>(entry->getTerminator()));
+  CHECK(switches(lifter.module()) == 1);
+  verify(lifter.module());
+}
+
+TEST_CASE("LLVM deflattening keeps differing cross-call targets explicit",
+          "[llvm][dispatch-deflatten]") {
+  llvmlifter::LLVMLifter lifter{Architecture::X86_64};
+  auto &context = lifter.module().getContext();
+  auto *ptr = llvm::PointerType::getUnqual(context);
+  auto *i64 = llvm::Type::getInt64Ty(context);
+  auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(context), {ptr}, false);
+  auto *callee = llvm::Function::Create(
+      type, llvm::GlobalValue::InternalLinkage, "multi_state_dispatch",
+      lifter.module());
+  auto *callerA = llvm::Function::Create(
+      type, llvm::GlobalValue::InternalLinkage, "multi_state_caller_a",
+      lifter.module());
+  auto *callerB = llvm::Function::Create(
+      type, llvm::GlobalValue::InternalLinkage, "multi_state_caller_b",
+      lifter.module());
+  auto *entry = llvm::BasicBlock::Create(context, "entry", callee);
+  auto *taken = llvm::BasicBlock::Create(context, "taken", callee);
+  auto *other = llvm::BasicBlock::Create(context, "other", callee);
+  auto *fallback = llvm::BasicBlock::Create(context, "fallback", callee);
+  llvm::IRBuilder<> builder(entry);
+  auto *slot = builder.CreateGEP(builder.getInt8Ty(), callee->getArg(0),
+                                 builder.getInt64(128));
+  auto *state = builder.CreateLoad(i64, slot, "state");
+  auto *dispatch = builder.CreateSwitch(state, fallback, 2);
+  dispatch->addCase(llvm::ConstantInt::get(i64, 42), taken);
+  dispatch->addCase(llvm::ConstantInt::get(i64, 43), other);
+  builder.SetInsertPoint(taken);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(other);
+  builder.CreateRetVoid();
+  builder.SetInsertPoint(fallback);
+  builder.CreateRetVoid();
+
+  auto attachCaller = [&](llvm::Function *caller, std::uint64_t value) {
+    auto *callerEntry = llvm::BasicBlock::Create(context, "entry", caller);
+    llvm::IRBuilder<> callerBuilder(callerEntry);
+    auto *call = callerBuilder.CreateCall(callee, {caller->getArg(0)});
+    CallEffectSummary summary;
+    summary.version = 2;
+    summary.proven = true;
+    summary.memory = CallMemoryEffectKind::KnownRanges;
+    const CallMemoryRange range{CallMemoryRange::Base::GuestState, 128, 8};
+    summary.writes.push_back(range);
+    summary.memoryConstants.push_back({range, value, true});
+    REQUIRE(attachCallEffectSummary(*call, summary));
+    callerBuilder.CreateRetVoid();
+  };
+  attachCaller(callerA, 42);
+  attachCaller(callerB, 43);
+  verify(lifter.module());
+
+  PassPipeline pipeline;
+  REQUIRE(pipeline.add("dispatch-deflatten"));
+  const auto report = pipeline.run(lifter);
+  REQUIRE(report.ok);
+  CHECK_FALSE(report.changed);
+  REQUIRE(report.runs.size() == 1);
+  CHECK(report.runs[0].result.counters.at("unresolved_dispatchers") == 1);
+  CHECK(report.runs[0].result.counters.at("cross_call_dispatchers_rewritten") == 0);
+  CHECK(llvm::isa<llvm::SwitchInst>(entry->getTerminator()));
+  CHECK(switches(lifter.module()) == 1);
   verify(lifter.module());
 }
 

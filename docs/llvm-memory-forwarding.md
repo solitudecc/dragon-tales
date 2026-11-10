@@ -43,8 +43,10 @@ Guest 地址关系的摘要误当作无别名证明。`proveLeafCalls` 默认为
 `dragon/lifters/llvm/CallEffectSummary.hpp` 提供 `attachCallEffectSummary()`，供可信的
 C++ Pass 给单个 LLVM CALL 附加版本化摘要。摘要可以标记外部函数或 syscall、syscall number、
 内存效果和有限的返回寄存器/errno 信息；`proven`、边界类型、范围和数量都会在写入 metadata
-前检查。`MemoryForwardOptions::consumeCallEffectSummaries` 默认关闭，开启后只消费已证明的
-`NoMemory`/`ReadOnly` 摘要；未知、畸形、带写集或 `KnownRanges` 尚未建立别名证明的摘要仍是
+前检查。`MemoryForwardOptions::consumeCallEffectSummaries` 默认关闭，开启后消费已证明的
+`NoMemory`/`ReadOnly` 摘要，以及只含 `GuestMemory` 写范围的 `KnownRanges` 摘要。后者先
+失效声明范围内的事实，再安装声明为 `complete`、不超过 64 位的 little-endian 常量写；不重叠
+的 Guest 事实继续保留。`GuestState`、栈、绝对地址、不完整常量、畸形摘要和未知调用仍是
 CALL barrier。syscall number `0` 是合法值，不能被当成缺失。
 
 Guest 地址键现在按 LLVM `DataLayout` 累积嵌套/typed GEP 的真实字节偏移，并识别两臂相同的
@@ -53,8 +55,9 @@ PHI/select 地址；动态 GEP 只按精确表达式身份匹配，未知别名�
 ## 验证
 
 S2 新增菱形、循环不变槽、规范循环 PHI 和完全覆盖窄读回归；旧实现对窄读没有转发。
-S2/S3 聚焦组为 **9/9 测试、62 条断言**；主 CTest **836/836**，无 Z3 CTest **701/701**。
-规范循环 PHI 阶段的已验证基线为 834/834 和 699/699。
+跨调用摘要新增完整常量写、非重叠保留和不完整写屏障回归。当前聚焦组为
+**13/13 测试、112 条断言**；加入跨调用去平坦化后，主 CTest **855/855**，无 Z3 CTest
+**720/720**。
 Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，并可读到三个
 新增统计字段。
 
@@ -64,3 +67,6 @@ Python shim 也返回 `available=True`、`changed=True`、`loads_forwarded=2`，
 分析、未知外部调用摘要、字节级重组或完整循环内存分析的证明。
 
 S3 调用效果证据位于 `validation-artifacts/llvm-memory-forwarding-20261110/s3-call-effects/`。
+跨调用去平坦化的 8 个回归覆盖完整摘要、外部可见 callee、不同调用点目标和不完整摘要；
+未知调用和非本地链接函数继续报告为 unresolved。它只证明显式摘要契约下的局部 LLVM 变换，
+不等于自动推导任意外部 API、堆链表或动态分发器效果。
