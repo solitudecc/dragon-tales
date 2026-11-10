@@ -344,26 +344,50 @@ CallMemoryEffect callMemoryEffect(const llvm::CallBase &call,
   return CallMemoryEffect::Barrier;
 }
 
-bool invalidateSummaryWrites(std::vector<Fact> &facts,
-                             const CallEffectSummary &summary,
-                             MemoryForwardStats &stats) {
+std::vector<llvm::Value *> summaryBases(
+    const std::vector<Fact> &facts,
+    const std::unordered_set<llvm::Value *> &memoryBases) {
+  std::vector<llvm::Value *> bases;
+  for (const auto &fact : facts)
+    if (fact.access.address.base &&
+        std::find(bases.begin(), bases.end(), fact.access.address.base) == bases.end())
+      bases.push_back(fact.access.address.base);
+  if (bases.empty())
+    for (auto *base : memoryBases)
+      bases.push_back(base);
+  return bases;
+}
+
+bool invalidateSummaryWrites(
+    std::vector<Fact> &facts, const CallEffectSummary &summary,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    llvm::LLVMContext &context, MemoryForwardStats &stats) {
   if (summary.memory != CallMemoryEffectKind::KnownRanges ||
       !std::all_of(summary.writes.begin(), summary.writes.end(),
                    [](const auto &range) {
                      return range.base == CallMemoryRange::Base::GuestMemory;
                    }))
     return false;
-  std::vector<llvm::Value *> bases;
-  for (const auto &fact : facts)
-    if (fact.access.address.base &&
-        std::find(bases.begin(), bases.end(), fact.access.address.base) == bases.end())
-      bases.push_back(fact.access.address.base);
+  const auto bases = summaryBases(facts, memoryBases);
   for (const auto &range : summary.writes)
     for (auto *base : bases)
       invalidate(facts,
                  Access{nullptr, AddressKey{base, nullptr, range.offset, true},
                         range.bytes, true, nullptr},
                  stats);
+  for (const auto &constant : summary.memoryConstants) {
+    if (!constant.complete || constant.range.base != CallMemoryRange::Base::GuestMemory ||
+        constant.range.bytes == 0 || constant.range.bytes > sizeof(std::uint64_t))
+      continue;
+    auto *type = llvm::IntegerType::get(context, constant.range.bytes * 8);
+    auto *value = llvm::ConstantInt::get(type, constant.value);
+    for (auto *base : bases) {
+      Access access{nullptr,
+                    AddressKey{base, nullptr, constant.range.offset, true},
+                    constant.range.bytes, true, value};
+      facts.push_back(Fact{access, value});
+    }
+  }
   return true;
 }
 
@@ -426,8 +450,10 @@ struct BytePart {
 
 using ByteFacts = std::map<llvm::Value *, std::map<std::uint64_t, BytePart>>;
 
-bool invalidateByteSummaryWrites(ByteFacts &facts,
-                                 const CallEffectSummary &summary) {
+bool invalidateByteSummaryWrites(
+    ByteFacts &facts, const CallEffectSummary &summary,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    llvm::LLVMContext &context) {
   if (summary.memory != CallMemoryEffectKind::KnownRanges ||
       !std::all_of(summary.writes.begin(), summary.writes.end(),
                    [](const auto &range) {
@@ -450,6 +476,25 @@ bool invalidateByteSummaryWrites(ByteFacts &facts,
       }
       if (bytes.empty()) base = facts.erase(base);
       else ++base;
+    }
+  }
+  std::vector<llvm::Value *> bases;
+  for (const auto &[base, bytes] : facts)
+    if (std::find(bases.begin(), bases.end(), base) == bases.end())
+      bases.push_back(base);
+  if (bases.empty())
+    for (auto *base : memoryBases) bases.push_back(base);
+  for (const auto &constant : summary.memoryConstants) {
+    if (!constant.complete || constant.range.base != CallMemoryRange::Base::GuestMemory ||
+        constant.range.bytes == 0 || constant.range.bytes > sizeof(std::uint64_t))
+      continue;
+    auto *type = llvm::IntegerType::get(context, constant.range.bytes * 8);
+    auto *value = llvm::ConstantInt::get(type, constant.value);
+    for (auto *base : bases) {
+      auto &parts = facts[base];
+      for (unsigned index = 0; index < constant.range.bytes; ++index)
+        parts[constant.range.offset + index] =
+            BytePart{value, index, constant.range.bytes, false};
     }
   }
   return true;
@@ -606,7 +651,8 @@ void runByteForwarding(llvm::Function &function,
             ++stats.summaryCallsPreserved;
           } else if (effect == CallMemoryEffect::ProvenSummaryWrites) {
             const auto summary = getCallEffectSummary(*call);
-            if (summary && invalidateByteSummaryWrites(facts, *summary))
+            if (summary && invalidateByteSummaryWrites(
+                                facts, *summary, memoryBases, function.getContext()))
               ++stats.summaryCallsPreserved;
             else {
               facts.clear();
@@ -864,7 +910,9 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             } else if (!lifetimeStart &&
                        effect == CallMemoryEffect::ProvenSummaryWrites) {
               const auto summary = getCallEffectSummary(*call);
-              if (summary && invalidateSummaryWrites(facts, *summary, stats))
+              if (summary && invalidateSummaryWrites(
+                                  facts, *summary, memoryBases,
+                                  module.getContext(), stats))
                 ++stats.summaryCallsPreserved;
               else {
                 facts.clear();
