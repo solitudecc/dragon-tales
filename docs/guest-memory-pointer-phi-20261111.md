@@ -51,4 +51,10 @@ v2 顺序为：
 - 最终完整 CTest：main 1025/1025，no-Z3 890/890。391 份构建源文件在 Mac/VM 逐项 SHA 一致。
 - v2 backend：main `fadd2d5c1b12c7db913d2279255799f6195926799582e3c46d9b1eceb2136e30`，no-Z3 `a3ec2426ffc8c6ac0c71c69ef568fb5b709e62b90e0593df8db04d0f1c979a77`。
 
-实现里程碑的聚焦及完整测试已完成。独立 native 与四真实 ELF 的最终审计和归档另行记录。中间 v1 精度失败及独立 fixture 的既有 admission 不匹配记录必须保留；不据尚未完成的验证宣称全部通过。
+实现里程碑为 `3d7c564`。独立验证见 [native 记录](guest-pointer-phi-native-validation-20261111.md) 与 [四 ELF 记录](guest-pointer-phi-real-validation-20261111.md)：最终旧/新各 6048 次完整状态匹配、796 个指定故障检出；真实 C16/LLVM16、144 个指定字段控制及原八个 switch 契约通过。三轮配方内原有逐轮索引保留，组合 O0 新增状态 32 的实际表 LOAD 索引 90376。状态 14、34 未消费，全部 Guest-memory 调用仍报告 incomplete；这不是完整去平坦化。
+
+原四个 native 正例因为 LOAD 块包含输出 STORE/RET，未满足旧 corridor 支持域，精度门槛始终为 false；追加独立 suffix 正例和历史 SCC 获得收益。原用例、门槛和失败原样保存，不能把新的成功回写成原门槛通过。
+
+主任务证据在 VM `~/vmc-runs/guest-pointer-phi-root-20261111/`，Mac `/Users/c/Desktop/deob/validation-artifacts/guest-pointer-phi-root-20261111/`。`metadata.tar.gz`（VM 文件名 `guest-pointer-phi-root-20261111-metadata.tar.gz`）SHA-256 为 `f2688956f701d503dee2fdd0f80f1ba05363dc88978e546a3cbc29c2b1e513f1`：516 份元数据/源码/测试产物、13552701 字节，两端精确文件集合、大小和 SHA 全部核验。另有 9 个 runtime 压缩分卷共 350217832 字节，`RUNTIME-PARTS.json` 记录压缩和原始 SHA，`RUNTIME-GROUPS.json` 绑定 baseline/v1/v2 的 main/no-Z3 backend 与 shim。两端均核对每份压缩及展开哈希；元数据包本身不包含这些 runtime 字节。
+
+391 份源码和 44 份验证依赖逐项 Mac/VM 对齐，源码/验证依赖完整快照已纳入元数据包。原 baseline 和 v1 展开 runtime 在双端分卷验证后退役，可按目录内 `ARCHIVED.txt` 恢复。中间 v1 全量测试通过但真实精度门槛失败的记录完整保留，说明仅看语义匹配或 CTest 不足以确认分析收益。历史空间归档另见 [storage 记录](guest-pointer-phi-storage-20261111.md)。

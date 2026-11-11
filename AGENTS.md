@@ -217,6 +217,35 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Guest STORE pointer-PHI proofs (2026-11-11, baseline `06542e7`, implementation
+`3d7c564`): see `docs/guest-memory-pointer-phi-20261111.md` and the native/real
+validation notes. Checked LOAD addresses remain direct Guest byte GEPs. STORE
+pointer/frame PHIs are paired by the same incoming block, with explicit historical
+index terms, modular i64 offsets, identical base SSA, visible undef/poison/flag
+checks and a matching GEP anchor reachable from every relation node. No guessed
+frame, immutable table, heap or external-call effects. All prior direct GEP
+searches run across the module first, then all prior hub GEP searches, then
+pointer-only searches for still-unrewritten original LOADs; shared budgets and
+one copy per original LOAD remain. v1 preempted legacy hubs and lost old real
+indices despite semantic matches; retain its failure, never relax the gate.
+Final CTest main 1025/1025 and no-Z3 890/890; related each 94/3992. New proof
+regressions fail baseline with 12 assertions in each build; two scheduling
+regressions fail v1 with four assertions and pass original/final. Source pins
+391 and harness pins 44 agree across hosts. Independent final old/new each
+6048 full-state matches and 796 specified fault detections. Original four native
+positive fixtures violate the pre-existing read-only corridor contract and their
+precision gate remains false; separately added suffix positives and historical
+SCC gain, without deleting original fixtures or weakening comparisons. Real
+four-ELF C16/LLVM16 plus 144 register/Guest/Exit controls pass; original eight
+switch contracts and all old per-round indices remain. Combo O0 now additionally
+uses actual table index 90376 (state32); states14/34 remain unconsumed under the
+fixed three-round recipe. Do not call copies complete de-flattening or assume
+those remaining edges failed the index-node cap. No new whole-corpus or machine
+instruction campaign is claimed. Native and real use separate artifact roots;
+all failures remain in their independent dual-host archives. Storage cleanup
+notes record exact verification before retiring old expanded artifacts.
+
+
 Historical checked-memory inputs (2026-11-11, fix `c958da9`, after `68c737a`):
 GuestMemoryEdges snapshots only first-block selected PHI inputs that already
 dominate the original predecessor. Fresh and historical index dependency views
