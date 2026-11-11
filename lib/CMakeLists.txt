@@ -18,6 +18,7 @@ add_library(libdragon SHARED
         GuestMemoryEdges.cpp
         GuardedTransitions.cpp
         GuardedTargetSets.cpp
+        GuardedStateCorridors.cpp
         ConstantBranches.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp
