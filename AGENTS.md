@@ -217,6 +217,24 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Historical Boolean/singleton repair I2 (2026-11-12, implementation `f16d5fe`):
+see `docs/guarded-history-singleton-native-validation-20261112.md` and
+`docs/guarded-history-singleton-real-probes-20261112.md`. Original I1 failed
+precision gates remain archived. Both I2 builds pass unchanged three-copy,
+`[1,1,1,0]` continuation and normal/resumed byte equality. Each native build:
+9216 normal full-arena/return/callcount matches, 4096 fault observations with
+1464 specified detections, 101376 comparator controls, 52 streams/13312 frames
+reaudited. Business returns2784 and checked failure paths6432 are distinct;
+no exclusions/skips/normalization. All H/H2 94 compatibility IRs per build and
+main/no-Z3 45 original/supplement IRs match. CTest1123/988, focus58/2035.
+Native archive `22ed069037aaafed81ea4f28bb9f0ee547e0d8d864a62a45e22d2786fb639ef1`
+has978 exact payloads; source/full-suite archive17990c4e has68; real probe
+archive7e211aa4 has146. Four frozen exact47 structural probes remain T/T/F/F;
+only comboO0 output changes (F2/H13/resume5), not a completed real loop.
+Actual real replay/loop observations of the later composition remain required.
+No table/heap/callee-preservation assumption or default-pipeline change.
+
+
 Checked Guest index dependency reuse (2026-11-12, base `40f733e`, implementation
 `02a71ef`): one proveStore invocation shares LOAD/STORE IndexDependencies under
 the same fixed corridor/predecessor. Fresh/history remain distinct; any failed
