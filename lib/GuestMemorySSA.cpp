@@ -1088,12 +1088,32 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
               [&](llvm::Value *value) { return equivalentValue(value, values.front()); });
           llvm::Value *value = values.front();
           if (!equal && options.enablePhi) {
+            // Facts are keyed by predecessor BLOCK, but LLVM PHIs require one
+            // incoming value per actual EDGE. This worklist intentionally has
+            // no backedge facts yet, and may omit unreachable predecessors.
+            // Do not publish a partial PHI or guess values for those edges.
+            std::vector<unsigned> multiplicities;
+            std::size_t coveredEdges = 0;
+            for (const auto &[pred, predFacts] : edges) {
+              (void)predFacts;
+              unsigned count = 0;
+              for (auto *target : llvm::successors(pred))
+                if (target == successor) ++count;
+              multiplicities.push_back(count);
+              coveredEdges += count;
+            }
+            if (coveredEdges != llvm::pred_size(successor)) {
+              ++stats.joinBarriers;
+              continue;
+            }
             llvm::IRBuilder<> builder(successor, successor->getFirstInsertionPt());
-            auto *phi = builder.CreatePHI(value->getType(), values.size(), "guest.mem.phi");
+            auto *phi = builder.CreatePHI(value->getType(), coveredEdges, "guest.mem.phi");
             std::size_t index = 0;
             for (const auto &[pred, predFacts] : edges) {
               (void)predFacts;
-              phi->addIncoming(values[index++], pred);
+              for (unsigned edge = 0; edge < multiplicities[index]; ++edge)
+                phi->addIncoming(values[index], pred);
+              ++index;
             }
             value = phi;
             ++stats.phisInserted;
@@ -1332,10 +1352,13 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             break;
           }
           llvm::IRBuilder<> builder(header, header->getFirstInsertionPt());
-          auto *phi = builder.CreatePHI(candidate.value->getType(), 2,
+          auto *phi = builder.CreatePHI(candidate.value->getType(), llvm::pred_size(header),
                                         "guest.mem.loop.phi");
-          phi->addIncoming(candidate.value, outsidePreds.front());
-          phi->addIncoming(it->value, body);
+          // The canonical body may have several successor slots returning to
+          // the header. Each carries the same proved backedge fact, and each
+          // needs its own incoming entry, including duplicate branch targets.
+          for (auto *pred : llvm::predecessors(header))
+            phi->addIncoming(pred == body ? it->value : candidate.value, pred);
           loopPhis.push_back({candidate.access.address, candidate.access.bytes,
                               phi, candidate.value});
           ++stats.phisInserted;
