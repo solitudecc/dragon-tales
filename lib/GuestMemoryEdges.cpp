@@ -14,7 +14,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -338,6 +341,204 @@ bool structurallyTranslatedIndex(
              corridor, pred, proof, depth + 1, historical);
 }
 
+// A normalized index names an already executed SSA term, plus a modular byte
+// offset. Fresh corridor LOADs/freezes/opaque instructions cannot become terms.
+struct HistoricalIndex {
+  llvm::Value *term = nullptr;
+  std::uint64_t offset = 0;
+  bool operator==(const HistoricalIndex &) const = default;
+};
+
+struct IndexView {
+  llvm::Value *value;
+  bool historical;
+  bool operator==(const IndexView &) const = default;
+};
+struct IndexViewHash {
+  std::size_t operator()(const IndexView &view) const {
+    return std::hash<llvm::Value *>{}(view.value) ^
+           (static_cast<std::size_t>(view.historical) << 1);
+  }
+};
+struct PointerRelation {
+  llvm::Value *pointer;
+  HistoricalIndex index;
+  bool operator==(const PointerRelation &) const = default;
+};
+struct PointerRelationHash {
+  std::size_t operator()(const PointerRelation &relation) const {
+    return std::hash<llvm::Value *>{}(relation.pointer) ^
+           (std::hash<llvm::Value *>{}(relation.index.term) << 1) ^
+           std::hash<std::uint64_t>{}(relation.index.offset);
+  }
+};
+
+struct PointerPHIProof {
+  const Corridor &corridor;
+  llvm::BasicBlock &pred;
+  llvm::Value *base;
+  const std::unordered_set<llvm::Value *> &memoryBases;
+  const llvm::DataLayout &layout;
+  llvm::DominatorTree &dom;
+  IndexProof &budget;
+  // Each proof owns these caches. Any failed dependency aborts the entire
+  // proof, so a partially visited failed graph is never reused as a success.
+  IndexDependencies defined;
+  std::unordered_map<IndexView, HistoricalIndex, IndexViewHash> normalized;
+  struct Node {
+    PointerRelation relation;
+    std::vector<std::size_t> children;
+    bool anchor = false;
+  };
+  std::vector<Node> nodes;
+  std::unordered_map<PointerRelation, std::size_t, PointerRelationHash> relations;
+
+  std::optional<HistoricalIndex> normalize(llvm::Value *value, bool historical,
+                                           std::size_t depth = 0) {
+    if (!value || !value->getType()->isIntegerTy(64) ||
+        llvm::isa<llvm::UndefValue, llvm::PoisonValue>(value))
+      return std::nullopt;
+    const IndexView view{value, historical};
+    if (const auto found = normalized.find(view); found != normalized.end())
+      return found->second;
+    if (!budget.visit(depth)) return std::nullopt;
+    std::optional<HistoricalIndex> result;
+    if (auto *constant = llvm::dyn_cast<llvm::ConstantInt>(value)) {
+      result = HistoricalIndex{nullptr, constant->getZExtValue()};
+    } else if (auto *phi = llvm::dyn_cast<llvm::PHINode>(value);
+               phi && !historical && corridor.members.contains(phi->getParent())) {
+      result = normalize(incomingForEdge(*phi, corridor, pred),
+          phi->getParent() == corridor.blocks.front(), depth + 1);
+    } else {
+      auto *instruction = llvm::dyn_cast<llvm::Instruction>(value);
+      if (instruction && instruction->hasPoisonGeneratingFlags())
+        return std::nullopt;
+      auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value);
+      llvm::ConstantInt *constant = nullptr;
+      llvm::Value *operand = nullptr;
+      if (binary && (binary->getOpcode() == llvm::Instruction::Add ||
+                     binary->getOpcode() == llvm::Instruction::Sub)) {
+        constant = llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(1));
+        operand = binary->getOperand(0);
+        if (!constant && binary->getOpcode() == llvm::Instruction::Add) {
+          constant = llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(0));
+          operand = binary->getOperand(1);
+        }
+      }
+      if (constant) {
+        result = normalize(operand, historical, depth + 1);
+        if (result) {
+          // Unsigned arithmetic is the i64 modular address arithmetic, also
+          // for INT64_MIN offsets. No host signed overflow or negation.
+          if (binary->getOpcode() == llvm::Instruction::Sub)
+            result->offset -= constant->getZExtValue();
+          else result->offset += constant->getZExtValue();
+        }
+      } else if (!instruction || historical ||
+                 !corridor.members.contains(instruction->getParent())) {
+        result = HistoricalIndex{value, 0};
+      }
+    }
+    if (result) normalized.emplace(view, *result);
+    return result;
+  }
+
+  bool available(llvm::Value *value, llvm::BasicBlock &edge) const {
+    const auto *instruction = llvm::dyn_cast_or_null<llvm::Instruction>(value);
+    return !instruction || dom.dominates(instruction, edge.getTerminator());
+  }
+
+  std::optional<std::size_t> build(llvm::Value *pointer, HistoricalIndex index,
+                                  std::size_t depth = 0) {
+    if (!pointer || !pointer->getType()->isPointerTy() ||
+        pointer->getType()->getPointerAddressSpace() != 0 ||
+        llvm::isa<llvm::UndefValue, llvm::PoisonValue>(pointer))
+      return std::nullopt;
+    // Every index in this graph is explicitly historical. A fresh expression
+    // is normalized before constructing its identity, never merged by SSA name.
+    const PointerRelation relation{pointer, index};
+    if (const auto found = relations.find(relation); found != relations.end())
+      return found->second; // A pending obligation, NOT a successful proof.
+    if (!budget.visit(depth)) return std::nullopt;
+    const auto number = nodes.size();
+    relations.emplace(relation, number);
+    nodes.push_back({relation, {}, false});
+    if (const auto address = byteAddress(pointer, memoryBases, layout)) {
+      if (address->base != base ||
+          !checkedIndexDependencies(address->index, corridor, pred, false,
+                                    budget, defined))
+        return std::nullopt;
+      const auto actual = normalize(address->index, true, depth + 1);
+      if (!actual || *actual != index) return std::nullopt;
+      nodes[number].anchor = true;
+      return number;
+    }
+    auto *phi = llvm::dyn_cast<llvm::PHINode>(pointer);
+    if (!phi || phi->getNumIncomingValues() == 0) return std::nullopt;
+    if (phi->getNumIncomingValues() > MaxIncomingEdges) {
+      budget.exhausted = true;
+      return std::nullopt;
+    }
+    auto *frame = llvm::dyn_cast_or_null<llvm::PHINode>(index.term);
+    const bool paired = frame && frame->getParent() == phi->getParent();
+    if (paired && frame->getNumIncomingValues() != phi->getNumIncomingValues())
+      return std::nullopt;
+    std::unordered_set<llvm::BasicBlock *> incomingBlocks;
+    for (unsigned arm = 0; arm < phi->getNumIncomingValues(); ++arm) {
+      auto *edge = phi->getIncomingBlock(arm);
+      auto *incoming = phi->getIncomingValue(arm);
+      if (!incomingBlocks.insert(edge).second || !available(incoming, *edge))
+        return std::nullopt;
+      HistoricalIndex selected = index;
+      if (paired) {
+        const auto position = frame->getBasicBlockIndex(edge);
+        if (position < 0) return std::nullopt;
+        auto *value = frame->getIncomingValue(position);
+        if (!available(value, *edge)) return std::nullopt;
+        const auto part = normalize(value, true, depth + 1);
+        if (!part) return std::nullopt;
+        selected = *part;
+        selected.offset += index.offset;
+      } else if (!available(index.term, *edge)) {
+        return std::nullopt;
+      }
+      const auto child = build(incoming, selected, depth + 1);
+      if (!child) return std::nullopt;
+      nodes[number].children.push_back(*child);
+    }
+    return number;
+  }
+
+  bool prove(llvm::Value *pointer, llvm::Value *loadedIndex) {
+    if (!available(pointer, pred)) return false;
+    const auto index = normalize(loadedIndex, false);
+    if (!index || !available(index->term, pred)) return false;
+    // Same-SSA terms are not automatically defined: inspect all visible
+    // undef/poison and unsafe flags, including cyclic frame PHI dependencies.
+    if (index->term && !checkedIndexDependencies(index->term, corridor, pred,
+                                                false, budget, defined))
+      return false;
+    if (!build(pointer, *index)) return false;
+    std::vector<std::vector<std::size_t>> parents(nodes.size());
+    std::vector<bool> grounded(nodes.size(), false);
+    std::vector<std::size_t> pending;
+    for (std::size_t number = 0; number < nodes.size(); ++number) {
+      for (auto child : nodes[number].children) parents[child].push_back(number);
+      if (nodes[number].anchor) {grounded[number] = true; pending.push_back(number);}
+    }
+    // All outgoing obligations already passed their local checks. Every SCC
+    // must also reach an actual matching GEP anchor; a separate anchored arm
+    // at the root cannot justify a child component consisting only of cycles.
+    while (!pending.empty()) {
+      const auto child = pending.back(); pending.pop_back();
+      for (auto parent : parents[child]) if (!grounded[parent]) {
+        grounded[parent] = true; pending.push_back(parent);
+      }
+    }
+    return std::all_of(grounded.begin(), grounded.end(), [](bool value) {return value;});
+  }
+};
+
 bool needsRepair(const llvm::Use &use, const Corridor &corridor,
                    const llvm::BasicBlock &origin) {
   const auto *user = llvm::dyn_cast<llvm::Instruction>(use.getUser());
@@ -400,7 +601,8 @@ llvm::StoreInst *proveStore(
     const Corridor &corridor, llvm::BasicBlock &pred,
     const std::unordered_set<llvm::Value *> &memoryBases,
     const llvm::DataLayout &layout, llvm::DominatorTree &dom,
-    bool &exhausted, CheckedMemoryEdgeBudget &budget, EntryInputs &inputs) {
+    bool &exhausted, CheckedMemoryEdgeBudget &budget, EntryInputs &inputs,
+    bool pointerOnly) {
   if (corridor.members.contains(&pred) ||
       !selectedPHIsAvailable(corridor, pred, dom, inputs))
     return nullptr;
@@ -417,8 +619,16 @@ llvm::StoreInst *proveStore(
     if (corridor.members.contains(value->getParent())) return nullptr;
   const auto storedAddress = byteAddress(store->getPointerOperand(), memoryBases,
                                         layout);
-  if (!storedAddress || loadedAddress.base != storedAddress->base)
-    return nullptr;
+  if (!storedAddress) {
+    if (!pointerOnly || !llvm::isa<llvm::PHINode>(store->getPointerOperand()))
+      return nullptr;
+    IndexProof proof{budget, exhausted};
+    PointerPHIProof relation{corridor, pred, loadedAddress.base, memoryBases,
+                             layout, dom, proof};
+    return relation.prove(store->getPointerOperand(), loadedAddress.index)
+        ? store : nullptr;
+  }
+  if (pointerOnly || loadedAddress.base != storedAddress->base) return nullptr;
   if (const auto *index = llvm::dyn_cast<llvm::Instruction>(storedAddress->index))
     if (corridor.members.contains(
             const_cast<llvm::BasicBlock *>(index->getParent())) &&
@@ -596,7 +806,8 @@ bool forwardCorridor(
     const std::unordered_set<llvm::Value *> &memoryBases,
     const llvm::DataLayout &layout, const MemoryForwardOptions &options,
     MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
-    llvm::DominatorTree &dom, bool &exhausted, bool allowHubs) {
+    llvm::DominatorTree &dom, bool &exhausted, bool allowHubs,
+    bool pointerOnly) {
   auto *join = corridor.blocks.front();
   if (llvm::pred_size(join) > MaxIncomingEdges) {
     exhausted = true;
@@ -617,7 +828,7 @@ bool forwardCorridor(
     }
     EntryInputs inputs;
     auto *store = proveStore(load, loadedAddress, corridor, *pred,
-                             memoryBases, layout, dom, exhausted, budget, inputs);
+                             memoryBases, layout, dom, exhausted, budget, inputs, pointerOnly);
     if (budget.stopped) return false;
     if (!store) {
       // Try all historical direct-store candidates before widening the
@@ -657,7 +868,7 @@ bool forwardCorridor(
     auto extended = corridor;
     if (prependHub(extended, *hub, dom, exhausted) &&
         forwardCorridor(load, loadedAddress, extended, memoryBases, layout,
-                        options, stats, budget, dom, exhausted, true))
+                        options, stats, budget, dom, exhausted, true, pointerOnly))
       return true;
   }
   return false;
@@ -708,7 +919,7 @@ void forwardCheckedMemoryEdges(
     if (!corridor) continue;
     const bool rewritten = forwardCorridor(
         *load, *loadedAddress, *corridor, memoryBases, layout,
-        options, stats, budget, dom, exhausted, false);
+        options, stats, budget, dom, exhausted, false, false);
     // Keep only unrevised original LOADs. Later functions cannot erase them,
     // and an edge copy only removes its cloned LOAD, never this original.
     if (!rewritten && !budget.stopped) pendingHubs.push_back(load);
@@ -727,7 +938,8 @@ void forwardCheckedMemoryHubs(
     const std::unordered_set<llvm::Value *> &memoryBases,
     const llvm::DataLayout &layout, const MemoryForwardOptions &options,
     MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
-    const std::vector<llvm::LoadInst *> &pendingHubs) {
+    const std::vector<llvm::LoadInst *> &pendingHubs,
+    std::vector<llvm::LoadInst *> &pendingPointers) {
   if (!options.enableCrossBlock || !options.enablePhi ||
       stats.loadsForwarded >= options.maxRewrites || budget.stopped)
     return;
@@ -742,8 +954,10 @@ void forwardCheckedMemoryHubs(
     if (!loadedAddress) continue;
     const auto corridor = findCorridor(*load, dom, exhausted);
     if (!corridor) continue;
-    forwardCorridor(*load, *loadedAddress, *corridor, memoryBases, layout,
-                    options, stats, budget, dom, exhausted, true);
+    const bool rewritten = forwardCorridor(
+        *load, *loadedAddress, *corridor, memoryBases, layout,
+        options, stats, budget, dom, exhausted, true, false);
+    if (!rewritten && !budget.stopped) pendingPointers.push_back(load);
   }
   if (exhausted && !budget.reported) {
     stats.complete = false;
@@ -752,13 +966,56 @@ void forwardCheckedMemoryHubs(
   }
 }
 
+void forwardCheckedMemoryPointers(
+    llvm::Function &function,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
+    const std::vector<llvm::LoadInst *> &pendingPointers) {
+  if (!options.enableCrossBlock || !options.enablePhi ||
+      stats.loadsForwarded >= options.maxRewrites || budget.stopped)
+    return;
+  llvm::DominatorTree dom(function);
+  bool exhausted = false;
+  // Both legacy phases already had their module-wide opportunity. Rebuild
+  // every proof against current IR; never revisit a successfully copied LOAD
+  // or snapshot newly generated LOADs. All phases share the original caps.
+  for (auto *load : pendingPointers) {
+    if (budget.stopped || stats.loadsForwarded >= options.maxRewrites) break;
+    const auto address = byteAddress(load->getPointerOperand(), memoryBases, layout);
+    if (!address) continue;
+    const auto corridor = findCorridor(*load, dom, exhausted);
+    if (!corridor) continue;
+    forwardCorridor(*load, *address, *corridor, memoryBases, layout,
+                    options, stats, budget, dom, exhausted, true, true);
+  }
+  if (exhausted && !budget.reported) {
+    stats.complete = false;
+    ++stats.budgetExhausted;
+    budget.reported = true;
+  }
+}
+
+void forwardCheckedMemoryHubs(
+    llvm::Function &function,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
+    const std::vector<llvm::LoadInst *> &pendingHubs) {
+  std::vector<llvm::LoadInst *> pendingPointers;
+  forwardCheckedMemoryHubs(function, memoryBases, layout, options, stats,
+                          budget, pendingHubs, pendingPointers);
+  forwardCheckedMemoryPointers(function, memoryBases, layout, options, stats,
+                              budget, pendingPointers);
+}
+
 void forwardCheckedMemoryEdges(
     llvm::Function &function,
     const std::unordered_set<llvm::Value *> &memoryBases,
     const llvm::DataLayout &layout, const MemoryForwardOptions &options,
     MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget) {
   // Preserve the existing private per-function entry point. The module pass
-  // uses the queued overload so every legacy direct path gets priority first.
+  // uses queued overloads so all legacy direct and hub paths precede pointers.
   std::vector<llvm::LoadInst *> pendingHubs;
   forwardCheckedMemoryEdges(function, memoryBases, layout, options, stats,
                              budget, pendingHubs);

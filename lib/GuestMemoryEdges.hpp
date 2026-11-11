@@ -46,4 +46,19 @@ void forwardCheckedMemoryHubs(
     MemoryForwardStats &, CheckedMemoryEdgeBudget &,
     const std::vector<llvm::LoadInst *> &pendingHubs);
 
+
+// Queue only originals not copied by either legacy phase. The module pass
+// consumes this queue after every function's legacy hub search has completed.
+void forwardCheckedMemoryHubs(
+    llvm::Function &, const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &, const MemoryForwardOptions &,
+    MemoryForwardStats &, CheckedMemoryEdgeBudget &,
+    const std::vector<llvm::LoadInst *> &pendingHubs,
+    std::vector<llvm::LoadInst *> &pendingPointers);
+void forwardCheckedMemoryPointers(
+    llvm::Function &, const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &, const MemoryForwardOptions &,
+    MemoryForwardStats &, CheckedMemoryEdgeBudget &,
+    const std::vector<llvm::LoadInst *> &pendingPointers);
+
 } // namespace dragon::llvmlifter::detail

@@ -1418,12 +1418,26 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
   // spend them before a later function's historical direct-store paths.
   // Every queued LOAD was captured once after that function's ordinary and
   // byte rewrites; only cloned LOADs can be removed by the CFG edge phases.
+  std::vector<PendingCheckedHubs> pendingCheckedPointers;
   for (const auto &pending : pendingCheckedHubs) {
     if (checkedEdgeBudget.stopped || stats.loadsForwarded >= options.maxRewrites)
       break;
+    std::vector<llvm::LoadInst *> pendingPointers;
     forwardCheckedMemoryHubs(*pending.function, pending.memoryBases,
                             module.getDataLayout(), options, stats,
-                            checkedEdgeBudget, pending.loads);
+                            checkedEdgeBudget, pending.loads, pendingPointers);
+    if (!pendingPointers.empty())
+      pendingCheckedPointers.push_back(
+          {pending.function, pending.memoryBases, std::move(pendingPointers)});
+  }
+  // Pointer-PHI proofs are additive precision, never a reason to preempt an
+  // existing direct or expanded-hub GEP opportunity in this or a later function.
+  for (const auto &pending : pendingCheckedPointers) {
+    if (checkedEdgeBudget.stopped || stats.loadsForwarded >= options.maxRewrites)
+      break;
+    forwardCheckedMemoryPointers(*pending.function, pending.memoryBases,
+                                module.getDataLayout(), options, stats,
+                                checkedEdgeBudget, pending.loads);
   }
   if (!rewriteBudgetReported && stats.loadsForwarded >= options.maxRewrites) {
     stats.complete = false;
