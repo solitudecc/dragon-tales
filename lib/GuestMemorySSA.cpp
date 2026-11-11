@@ -766,10 +766,13 @@ void runByteForwarding(llvm::Function &function,
     for (auto *pred : llvm::predecessors(header)) {
       if (!reachable.contains(pred) || !dom.dominates(header, pred)) continue;
       std::deque<llvm::BasicBlock *> loopQueue{pred};
+      // Membership in another loop must not truncate this backedge closure.
+      std::unordered_set<llvm::BasicBlock *> loopVisited{header};
       loopBlocks.insert(header);
       while (!loopQueue.empty()) {
         auto *member = loopQueue.front(); loopQueue.pop_front();
-        if (!loopBlocks.insert(member).second) continue;
+        if (!loopVisited.insert(member).second) continue;
+        loopBlocks.insert(member);
         for (auto *memberPred : llvm::predecessors(member))
           if (reachable.contains(memberPred) && memberPred != header)
             loopQueue.push_back(memberPred);
@@ -992,12 +995,15 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
           continue;
         backedgePreds[header].insert(pred);
         std::deque<llvm::BasicBlock *> loopQueue{pred};
+        // Walk each natural loop independently before merging membership.
+        std::unordered_set<llvm::BasicBlock *> loopVisited{header};
         loopBlocks.insert(header);
         while (!loopQueue.empty()) {
           auto *member = loopQueue.front();
           loopQueue.pop_front();
-          if (!loopBlocks.insert(member).second)
+          if (!loopVisited.insert(member).second)
             continue;
+          loopBlocks.insert(member);
           for (auto *memberPred : llvm::predecessors(member)) {
             if (reachable.contains(memberPred) && memberPred != header)
               loopQueue.push_back(memberPred);

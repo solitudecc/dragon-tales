@@ -63,6 +63,7 @@ add_executable(dragon_tests
         lifters/TestLLVMStoreStateContexts.cpp
         lifters/TestLLVMGuestMemoryHubs.cpp
         lifters/TestLLVMGuestMemoryHubPriority.cpp
+        lifters/TestLLVMGuestLoopMembership.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
