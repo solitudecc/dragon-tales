@@ -217,6 +217,35 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Bounded original-edge worklist (2026-11-11, baseline `2294900`, implementation
+`26386b2`): see `docs/guest-edge-worklist-20261111.md` and its native/real notes.
+Explicit `guest-memory edge_worklist=1` enables continuation after all three
+legacy whole-module phases. Default/0 and old overloads retain legacy behavior;
+MemoryForwardOptions layout and existing C/Python direct-call ABI are unchanged.
+Freeze original LOADs/blocks/terminator+successor-index+target identities before
+each function's first rewrite. Extra work interleaves functions and requeues a
+successful LOAD at the tail; failed items are not blindly retried. Each success
+consumes a distinct still-original edge; clones never become candidates. Rebuild
+dominance and all existing proofs each attempt, sharing unchanged budgets.
+Selected corridor connections must be original; external side exits may already
+lead to prior clones. This is bounded scheduling, not a general fixed point.
+Old option tests run but fail at API acceptance (4 cases/15 assertions), not
+wrong semantics. New main/no-Z3 focus each 5/162, related 99/4154, full CTest
+1030/1030 and 895/895; 392 source and 49 harness pins agree across hosts.
+Independent old/new native each 2280 full-state matches and 776 specified fault
+detections; all four modes improve one to two original edges, negative edges
+remain. Frozen real default/enabled each C16/LLVM16 plus 144 controls pass.
+Default 20 IR files are byte-identical to baseline. Enabled same three rounds
+and max_pass_runs32 retain every old index, add combo O0 states14/34 and22,
+and improve cff O0 actual-index counts 1/2/3 to 11/16/16. All 12 Guest calls
+remain incomplete, 10/12 dispatch calls incomplete, switches_rewritten always0.
+Do not call index coverage or context copies complete de-flattening. Initial
+parsed-text default probe failed due to input use-list ordering; retain failure,
+use original full lifting for exact compatibility, never normalize it away.
+No new corpus/instruction campaign. Native, real and root archives are separate;
+runtime parts are separately hash-bound, baseline parts referenced explicitly.
+Only verified duplicate expanded data were retired, with restoration notices.
+
 Guest STORE pointer-PHI proofs (2026-11-11, baseline `06542e7`, implementation
 `3d7c564`): see `docs/guest-memory-pointer-phi-20261111.md` and the native/real
 validation notes. Checked LOAD addresses remain direct Guest byte GEPs. STORE

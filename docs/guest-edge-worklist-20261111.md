@@ -16,6 +16,12 @@ detail::runGuestMemorySSA(module, options, graphPointer, true);
 
 保留旧重载符号及默认行为，未扩展 `MemoryForwardOptions` 对象布局。原 C/Python 直接调用接口及默认优化流水线不变；使用已有 PassPipeline 参数通道即可显式请求新选项。
 
+已有 Python 流水线可这样添加该步骤（寄存器提升已由前序步骤执行时）：
+
+```python
+pipeline.add("guest-memory", run_mem2reg=0, edge_worklist=1)
+```
+
 ## 调度与原边身份
 
 先完整执行既有全模块三阶段：direct GEP → expanded-hub GEP → pointer-PHI。额外队列不能抢占这些阶段的证明、复制或 rewrite 预算。
@@ -48,4 +54,20 @@ test-only 全部调用既有 LLVMLifter/PassPipeline API，通过字符串选项
 
 新 main/no-Z3 库加载同一 test-only 二进制，各 5 cases / 162 assertions 全过。覆盖：direct/hub/pointer 的多个原 STORE 入边，调用/别名后写负边，原三阶段与跨函数轮转优先级，rewrite 上限的 incomplete，显式关闭与旧入口 IR 字节相等，以及参数校验。
 
-最终相关测试 main/no-Z3 各 99 cases / 4154 assertions 全过，完整 CTest 分别 1030/1030、895/895；392 份源码在 Mac/VM 逐项 SHA 对齐。独立 native 及真实 ELF 的最终审计、收益与归档另行记录。旧 API 拒绝日志、旧单边精度基线和新语义执行结果须分别记录，不能合并计数，也不能把新接口不可用说成旧语义失败。
+最终相关测试 main/no-Z3 各 99 cases / 4154 assertions 全过，完整 CTest 分别 1030/1030、895/895；392 份源码及 49 份 harness 在 Mac/VM 逐项 SHA 对齐。旧 API 拒绝日志、旧单边精度基线和新语义执行结果分别记录，不能合并计数，也不能把新接口不可用说成旧语义失败。
+
+## 最终收益与限制
+
+实现里程碑为 `26386b2`。[独立原生验证](guest-edge-worklist-native-validation-20261111.md)中，新旧各 2280 次完整状态比较一致、776 个指定错误全部检出；四种夹具均从一次消费一条原入边提升到两条，未知调用/别名负边保留。
+
+[真实 ELF 验证](guest-edge-worklist-real-validation-20261111.md)沿用四个输入二进制、外层三轮及 max_pass_runs32。默认模式的 20 份 IR 与基线逐字节一致。启用模式新增 combo O0 的 state14/index90232、state34/index90392 和 state22/index90296，保留 state0、state32 及所有旧逐轮索引；cff O0 的逐轮实际索引覆盖从 1/2/3 提升到 11/16/16。两组各 C16/LLVM16 完整状态匹配及 144 个指定破坏控制通过，没有新增排除、跳过或归一化。
+
+所有 12 次 Guest-memory 调用仍为 incomplete；10/12 次 dispatch 调用仍为 incomplete，所有 `switches_rewritten` 均为 0。这是实际索引证明覆盖的改善，尚未完全去平坦化。最初解析保存文本 IR 的默认兼容性检查因 predecessor use-list 顺序变化失败，失败材料保留；最终使用原始完整 lifting 工作流通过严格字节门槛，没有归一化放宽比较。本阶段没有新增 69 输入全语料库或机器指令验证；它们也不能代替这里的调用/Guest 完整状态验证。
+
+## 根验证归档与存储
+
+根材料在 VM `~/vmc-runs/guest-edge-worklist-root-20261111/` 和 Mac `/Users/c/Desktop/deob/validation-artifacts/guest-edge-worklist-root-20261111/`。`metadata.tar.gz`（VM 邻接名为 `guest-edge-worklist-root-20261111-metadata.tar.gz`）双端逐项核验 488 份 payload 文件，SHA-256 为 `3cad60f72721ba357ab896b100304209a23aa45472d199c4988e8efd8749e33a`。包含源码/harness 快照、旧失败、两种构建完整测试日志及运行脚本。
+
+运行库另存四份无损 gzip，共 118386309 字节，以 `RUNTIME-PARTS.json` 绑定压缩与展开哈希；根 metadata 包不重复包含运行库。`BASELINE-RUNTIME-REFERENCES.json` 引用上一阶段已双端保存的四份基线运行库。新四份及基线四份均核验，不能仅凭 metadata 包宣称运行库完整备份。独立 native/real 完整包及哈希见各自文档。
+
+为控制 VM 空间，仅在完整包双端核验及展开目录逐项匹配后，退役上一阶段 pointer-PHI 两组重复 real 原数据（270 文件）及 runtime-v2 两份原始库；对应归档、压缩库和恢复说明保留。本阶段两组 real 重复展开目录也经相同核验后退役（272 文件）；失败的文本解析试验与外层报告仍保留。具体记录见根 `previous-real-retirement.json`、各原目录 `ARCHIVED` 说明及 real 的 `RETIRED-DUPLICATE-RUNS.json`。
