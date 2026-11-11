@@ -2579,3 +2579,15 @@ Root independently verified all final archive payloads; see
 docs/guarded-business-corridors-20261112.md and guarded-business-real-validation-20261112.md.
 Next: explicit constant-only terminator folding, then separately hinted finite
 business target guards. Never infer immutable table bytes or remove the full fallback.
+
+Constant-only branch cleanup (2026-11-12, baseline 3bcae99): new opt-in
+`constant-branches` folds only literal ConstantInt br/switch, then pure CFG
+entry-unreachable deletion in changed functions. No SimplifyCFG or dynamic guard
+merging. Repeated successor PHIs and generated markers preserved; identity,
+EH/debug/blockaddress and module scan/fold budgets checked before mutation.
+New exposed constants require another explicit pass, never hidden iteration.
+Old public tests compile but builtin absent: main/noZ3 each6cases/12assert with
+6 failures; capability absence is not an old semantic mismatch. New related
+focus each22/741; CTest1087/1087 and952/952. Independent native and real replay
+are ongoing; do not merge this implementation milestone until they finish.
+See docs/llvm-constant-branches.md. Full loop closure remains unclaimed.

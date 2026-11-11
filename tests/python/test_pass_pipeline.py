@@ -54,7 +54,7 @@ with lift(g) as l,d.PassPipeline() as p:
     assert names==set(d.PassPipeline.DEFAULT_LLVM)|{
         'graph-audit','finite-values','control-flow',
         'dispatch-specialize','dispatch-deflatten','guest-memory','entry-prefix',
-        'guarded-transitions'}
+        'guarded-transitions','constant-branches'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
@@ -64,6 +64,15 @@ with lift(g) as l,d.PassPipeline() as p:
     expect(d.PipelineError,lambda:p.run(l));assert l.ir()==before
     expect(ValueError,lambda:p.register('dependent',lambda c,o:None))
     expect(ValueError,lambda:p.register('wrong',lambda c,o:None,stage=7))
+
+with d.LLVMLifter() as l,d.PassPipeline(['constant-branches']) as p:
+    assert 'constant-branches' not in d.PassPipeline.DEFAULT_LLVM
+    for option,limit in (('max_folds',65536),('max_instructions',1000000),('max_blocks',65536)):
+        expect(ValueError,lambda:p.add('constant-branches',**{option:limit+1}))
+    before=l.ir();r=p.run(l)
+    assert r['ok'] and not r['changed'] and l.ir()==before
+    assert r['runs'][0]['status']==d.PassStatus.UNAVAILABLE
+    assert r['runs'][0]['counters']['available']==0
 
 with lift(g) as l,d.PassPipeline(['guarded-transitions']) as p:
     assert 'guarded-transitions' not in d.PassPipeline.DEFAULT_LLVM
