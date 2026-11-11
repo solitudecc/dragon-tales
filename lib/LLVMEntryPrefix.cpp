@@ -26,12 +26,22 @@ struct Edge {
   bool backedge = false;
   bool terminalLeaf = false;
 };
+struct DirectExitRepair {
+  Instruction *definition = nullptr;
+  BasicBlock *exit = nullptr;
+  std::vector<Use *> uses;
+  std::vector<unsigned> successorSlots;
+};
+constexpr std::size_t MaxExitRepairValues = 64;
+constexpr std::size_t MaxExitRepairUses = 512;
+constexpr std::size_t MaxExitRepairInputs = 512;
 struct Plan {
   Function *function = nullptr;
   BasicBlock *seed = nullptr, *root = nullptr;
   std::vector<BasicBlock *> blocks;
   std::set<BasicBlock *> members;
   std::map<PHINode *, Value *> rootInputs;
+  std::vector<DirectExitRepair> exitRepairs;
   std::map<std::pair<BasicBlock *, unsigned>, Edge> edges;
   bool internalIncoming(BasicBlock *from, BasicBlock *target) const {
     for (unsigned i = 0; i < from->getTerminator()->getNumSuccessors(); ++i) {
@@ -187,6 +197,7 @@ bool prepare(Function &function, size_t maxBlocks, size_t maxInstructions,
         return fail(error, "root historical PHI input not external dominating SSA");
     plan.rootInputs[&phi] = input;
   }
+  std::size_t repairUses = 0, repairInputs = 0;
   for (auto *block : plan.blocks) {
     for (auto &instruction : *block) {
       auto *phi = dyn_cast<PHINode>(&instruction);
@@ -209,17 +220,62 @@ bool prepare(Function &function, size_t maxBlocks, size_t maxInstructions,
             !dom.dominates(operand, plan.seed->getTerminator()))
           return fail(error, "external SSA operand does not dominate seed");
       }
+      DirectExitRepair repair{&instruction, nullptr, {}, {}};
       for (auto &use : instruction.uses()) {
         auto *user = dyn_cast<Instruction>(use.getUser());
         if (!user) return fail(error, "non-instruction SSA user");
         if (plan.members.contains(user->getParent())) continue;
-        auto *outsidePhi = dyn_cast<PHINode>(user);
-        if (!outsidePhi || !plan.members.contains(
-                               outsidePhi->getIncomingBlock(use.getOperandNo())))
-          return fail(error, "non-PHI or unsupported external live-out");
+        if (auto *outsidePhi = dyn_cast<PHINode>(user)) {
+          if (!plan.members.contains(outsidePhi->getIncomingBlock(use.getOperandNo())))
+            return fail(error, "unsupported external PHI live-out");
+          continue; // Existing original-edge PHI repair remains unchanged.
+        }
+        auto *exit = user->getParent();
+        // Unique predecessor BLOCK, not edge: repeated switch/branch successor
+        // slots are handled individually below. No nonlocal dominance guess.
+        if (exit->getUniquePredecessor() != block ||
+            (repair.exit && repair.exit != exit))
+          return fail(error, "non-PHI live-out is not confined to one direct unique-predecessor exit");
+        auto *type = instruction.getType();
+        if (!type->isIntegerTy() && !type->isFloatingPointTy() &&
+            !type->isPointerTy() && !type->isVectorTy())
+          return fail(error, "unsupported direct-exit SSA type");
+        repair.exit = exit;
+        if (++repairUses > MaxExitRepairUses) {
+          plan.truncated = true;
+          return fail(error, "direct-exit ordinary-use budget exhausted");
+        }
+        repair.uses.push_back(&use);
+      }
+      if (!repair.uses.empty()) {
+        if (plan.exitRepairs.size() == MaxExitRepairValues) {
+          plan.truncated = true;
+          return fail(error, "direct-exit value budget exhausted");
+        }
+        auto *term = block->getTerminator();
+        for (unsigned i = 0; i < term->getNumSuccessors(); ++i) {
+          const auto &edge = plan.edges.at({block, i});
+          if (edge.target != repair.exit) continue;
+          if (edge.internal) return fail(error, "direct-exit repair crosses an internal edge");
+          repair.successorSlots.push_back(i);
+        }
+        if (repair.successorSlots.empty()) return fail(error, "missing direct-exit edge");
+        if (repair.successorSlots.size() > (MaxExitRepairInputs - repairInputs) / 2) {
+          plan.truncated = true;
+          return fail(error, "direct-exit PHI incoming budget exhausted");
+        }
+        repairInputs += repair.successorSlots.size() * 2;
+        plan.exitRepairs.push_back(std::move(repair));
       }
     }
   }
+  // New bridges consume the same instruction budget as copied instructions.
+  // Refuse before mutation instead of silently allocating extra repair space.
+  if (plan.exitRepairs.size() > maxInstructions - plan.instructions) {
+    plan.truncated = true;
+    return fail(error, "direct-exit PHI instruction budget exhausted");
+  }
+  plan.instructions += plan.exitRepairs.size();
   return true;
 }
 void apply(Plan &plan) {
@@ -288,6 +344,22 @@ void apply(Plan &plan) {
   cast<BranchInst>(plan.seed->getTerminator())->setSuccessor(0, copies.at(plan.root));
   // Keep original blocks and all non-seed execution paths intact.
   for (auto &phi : plan.root->phis()) phi.removeIncomingValue(plan.seed, false);
+  // Only direct original exits are repaired. The old edge carries the original
+  // execution's definition; each cloned edge carries its fresh mapped value.
+  // Calls and volatile effects stay in the original exit after these PHIs.
+  for (const auto &repair : plan.exitRepairs) {
+    auto *origin = repair.definition->getParent();
+    auto found = values.find(repair.definition);
+    auto *fresh = found == values.end() ? repair.definition : static_cast<Value *>(found->second);
+    auto *bridge = PHINode::Create(repair.definition->getType(),
+        repair.successorSlots.size() * 2, "entry.prefix.live", &repair.exit->front());
+    for (const auto slot : repair.successorSlots) {
+      (void)slot; // Equal values for every original/cloned successor slot.
+      bridge->addIncoming(repair.definition, origin);
+      bridge->addIncoming(fresh, copies.at(origin));
+    }
+    for (auto *use : repair.uses) use->set(bridge);
+  }
 }
 }
 

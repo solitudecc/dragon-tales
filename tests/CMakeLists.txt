@@ -67,6 +67,7 @@ add_executable(dragon_tests
         lifters/TestLLVMGuestLoopMembership.cpp
         lifters/TestLLVMGuestJoinOrder.cpp
         lifters/TestLLVMGuardedEntry.cpp
+        lifters/TestLLVMEntryPrefixLiveOut.cpp
         lifters/TestLLVMEntryPrefix.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp

@@ -128,12 +128,34 @@ TEST_CASE("Entry prefix commits without replacing module function or arguments",
   CHECK_FALSE(again.changed);CHECK(again.runs[0].result.counters.at("skipped_single_entry")==1);
   CHECK(lifter.ir()==once);
 }
-TEST_CASE("Entry prefix rejection preserves original IR byte for byte", "[llvm][pipeline][entry-prefix]") {
-  LLVMLifter lifter{Architecture::X86_64};auto *f=fixture(lifter,true);auto *root=named(*f,"header");
-  const auto before=lifter.ir();auto report=run(lifter);
-  CHECK_FALSE(report.changed);CHECK(report.runs[0].result.counters.at("rejected")==1);
-  CHECK(report.runs[0].result.status==Status::Incomplete);
-  CHECK(lifter.ir()==before);CHECK(named(*f,"header")==root);CHECK(lifter.module().size()==1);
+TEST_CASE("Entry prefix direct call liveout gains while nonlocal rejection stays transactional", "[llvm][pipeline][entry-prefix]") {
+  SECTION("previous direct-return refusal is now a precisely repaired exit") {
+    // Preserve the original fixture: only its obsolete refusal expectation is
+    // upgraded. The fresh selector must survive the original unknown call.
+    LLVMLifter lifter{Architecture::X86_64};auto *f=fixture(lifter,true);
+    auto report=run(lifter);CHECK(report.changed);
+    CHECK(report.runs[0].result.counters.at("peeled_edges")==1);
+    auto *outside=named(*f,"outside");REQUIRE(outside);REQUIRE(!outside->phis().empty());
+    auto &phi=*outside->phis().begin();CHECK(phi.getNumIncomingValues()==2);
+    CHECK(llvm::cast<llvm::ReturnInst>(outside->getTerminator())->getReturnValue()==&phi);
+    for(unsigned i=0;i<2;++i) {
+      auto *value=llvm::dyn_cast<llvm::Instruction>(phi.getIncomingValue(i));REQUIRE(value);
+      CHECK(value->getParent()==phi.getIncomingBlock(i));
+    }
+    CHECK(named(*f,"outside.entry.prefix")==nullptr);
+  }
+  SECTION("ordinary use beyond the direct exit remains rejected") {
+    LLVMLifter lifter{Architecture::X86_64};auto *f=fixture(lifter,true);auto *root=named(*f,"header");
+    auto *outside=named(*f,"outside");auto *ret=llvm::cast<llvm::ReturnInst>(outside->getTerminator());
+    auto *value=ret->getReturnValue();ret->eraseFromParent();
+    auto *remote=llvm::BasicBlock::Create(lifter.module().getContext(),"remote",f);
+    llvm::BranchInst::Create(remote,outside);Builder(remote).CreateRet(value);
+    REQUIRE_FALSE(llvm::verifyModule(lifter.module(),&llvm::errs()));
+    const auto before=lifter.ir();auto report=run(lifter);
+    CHECK_FALSE(report.changed);CHECK(report.runs[0].result.counters.at("rejected")==1);
+    CHECK(report.runs[0].result.status==Status::Incomplete);
+    CHECK(lifter.ir()==before);CHECK(named(*f,"header")==root);CHECK(lifter.module().size()==1);
+  }
 }
 TEST_CASE("Entry prefix budgets report incomplete without altering rejected IR", "[llvm][pipeline][entry-prefix]") {
   for(auto cap:{0,1}) DYNAMIC_SECTION("blocks "<<cap) {

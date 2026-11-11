@@ -16,7 +16,7 @@ struct EntryPrefixStats {
   std::size_t candidateEdges = 0;
   std::size_t peeledEdges = 0;
   std::size_t clonedBlocks = 0;
-  std::size_t clonedInstructions = 0;
+  std::size_t clonedInstructions = 0; ///< Copied-region instructions plus new exit PHIs; not net IR growth.
   std::size_t originalExits = 0;
   std::size_t rejected = 0;
   std::size_t budgetExhausted = 0;
