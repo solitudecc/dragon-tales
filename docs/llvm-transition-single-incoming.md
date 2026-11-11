@@ -7,3 +7,5 @@
 原指令预算仍计入被选掉的 PHI，属于保守复制成本而非净增长。单入替换的 uses 与既有快照/live-out uses 共用 8192 上限；没有增加原默认模块或路径预算。重复 successor 槽在第一轮仍按真实槽保留剩余 PHI incoming，最后一槽才触发此规则。未知副作用及返回原 seed 的边仍执行原代码，seed 中的 LOAD/freeze 在下一轮重新执行。
 
 独立回归 `TestLLVMGuardedSingleIncoming.cpp` 使用旧版已存在的 core 与 pipeline API：测试外部 SSA 快照、Module/Function/Argument/metadata 身份、原块顺序、原 side exit 和回 seed、重复槽两次处理、undef/poison 与预算不变拒绝，以及 controller 单入门禁。未修改旧 core 回归或原 I history 严格三次复制门槛。构建、旧失败、新原生和完整测试结果由集成任务另行记录。
+
+集成结果：原严格三次复制与分轮字节相等门槛现已在两构建通过，完整独立状态对拍见[最终原生验证](guarded-history-singleton-native-validation-20261112.md)。真实四样本结构闭合仍为 2/4，不能把本组件验收当作完整循环去平坦化。

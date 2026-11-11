@@ -9,3 +9,5 @@
 新独立回归文件为 `TestLLVMGuardedHistoricalBooleans.cpp`，覆盖整体键相关性、不同历史 PHI、历史/新 LOAD、未知臂、周期、undef/poison、四键拒绝、预算和既有成功预测。它使用已有公开 pipeline API，可在旧 I 运行库上编译；实际旧失败与新验证数字由集成任务记录。本文件没有把静态审查或 IR verify 计作原生语义验证。
 
 这一增量不处理最后原边留下空 PHI 的问题；后者属于独立 core 事务扩展。原独立 history 三次复制门槛仍需完整重跑，不能因第二次复制恢复便报告全部通过。
+
+集成结果：原严格三次复制与分轮字节相等门槛现已在两构建通过，完整独立状态对拍见[最终原生验证](guarded-history-singleton-native-validation-20261112.md)。真实四样本结构闭合仍为 2/4，不能把本组件验收当作完整循环去平坦化。
