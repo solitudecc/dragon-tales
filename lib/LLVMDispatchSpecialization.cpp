@@ -149,6 +149,12 @@ std::optional<llvm::APInt> uniqueConstant(const llvm::Value *value,
 
 DispatcherSpecializationStats runDispatcherSpecialization(
     llvm::Module &module, const DispatcherSpecializationOptions &options) {
+  return runDispatcherSpecialization(module, options, false);
+}
+
+DispatcherSpecializationStats runDispatcherSpecialization(
+    llvm::Module &module, const DispatcherSpecializationOptions &options,
+    bool allowPlainStores) {
   DispatcherSpecializationStats stats;
   stats.available = true;
   if (!options.maxConditions || !options.maxExpressionNodes) {
@@ -179,7 +185,8 @@ DispatcherSpecializationStats runDispatcherSpecialization(
         auto condition = uniqueConstant(branch->getCondition(), nodes,
                                         options.maxExpressionNodes, active);
         if (!condition || condition->getBitWidth() != 1) {
-          detail::specializeStateGuardEdge(*branch, dom, options, stats, edgeBudget);
+          detail::specializeStateGuardEdge(*branch, dom, options, stats, edgeBudget,
+                                           allowPlainStores);
           continue;
         }
         ++stats.uniqueConditions;

@@ -191,6 +191,12 @@ class LLVMLifter {
   [[nodiscard]] DispatcherSpecializationStats runDispatcherSpecialization(
       const DispatcherSpecializationOptions &options = {});
 
+  /// Explicit opt-in for preserving simple AS0 i8/i16/i32/i64/i128 STOREs
+  /// while copying a proved state context. The original overload keeps STORE
+  /// barriers for context copies.
+  [[nodiscard]] DispatcherSpecializationStats runDispatcherSpecialization(
+      const DispatcherSpecializationOptions &options, bool allowPlainStores);
+
   [[nodiscard]] DeflatteningStats runProvableDeflattening(
       const DeflatteningOptions &options = {});
 

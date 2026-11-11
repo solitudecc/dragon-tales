@@ -122,7 +122,8 @@ PassPipeline::PassPipeline(bool builtins) {
   },false,{},none);
   registerLLVM("dispatch-specialize",[](LLVMContext &c,const Options &o) {
     const auto stats=c.lifter.runDispatcherSpecialization({
-        number(o,"max_conditions",256), number(o,"max_expression_nodes",128)});
+        number(o,"max_conditions",256), number(o,"max_expression_nodes",128)},
+        number(o,"allow_plain_stores",0)!=0);
     Result r;
     r.status=!stats.available?Status::Unavailable:
         (stats.complete?Status::Success:Status::Incomplete);
@@ -135,7 +136,11 @@ PassPipeline::PassPipeline(bool builtins) {
       {"unresolved_switches",stats.unresolvedSwitches},
       {"budget_exhausted",stats.budgetExhausted}};
     return r;
-  },false,{},numeric({"max_conditions","max_expression_nodes"}));
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_conditions","max_expression_nodes","allow_plain_stores"})(o);
+    if(!error.empty())return error;
+    return number(o,"allow_plain_stores",0)>1?std::string{"allow_plain_stores must be 0 or 1"}:std::string{};
+  });
   registerLLVM("dispatch-deflatten",[](LLVMContext &c,const Options &o) {
     const auto stats=c.lifter.runProvableDeflattening({
         number(o,"max_dispatchers",64), number(o,"max_incoming_edges",512),

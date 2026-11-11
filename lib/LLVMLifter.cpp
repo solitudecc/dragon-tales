@@ -1356,8 +1356,15 @@ dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(const MemoryForwardOptions &op
 dragon::llvmlifter::DispatcherSpecializationStats
 dragon::llvmlifter::LLVMLifter::runDispatcherSpecialization(
     const DispatcherSpecializationOptions &options) {
+  return runDispatcherSpecialization(options, false);
+}
+
+dragon::llvmlifter::DispatcherSpecializationStats
+dragon::llvmlifter::LLVMLifter::runDispatcherSpecialization(
+    const DispatcherSpecializationOptions &options, bool allowPlainStores) {
   if (module_->empty()) return {};
-  return ::dragon::llvmlifter::runDispatcherSpecialization(*module_, options);
+  return ::dragon::llvmlifter::runDispatcherSpecialization(*module_, options,
+                                                         allowPlainStores);
 }
 
 dragon::llvmlifter::DeflatteningStats

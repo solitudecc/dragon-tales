@@ -28,7 +28,8 @@ struct StateGuardEdgeBudget {
 bool specializeStateGuardEdge(
     llvm::BranchInst &, llvm::DominatorTree &,
     const DispatcherSpecializationOptions &,
-    DispatcherSpecializationStats &, StateGuardEdgeBudget &);
+    DispatcherSpecializationStats &, StateGuardEdgeBudget &,
+    bool allowPlainStores);
 
 } // namespace detail
 } // namespace dragon::llvmlifter

@@ -40,7 +40,7 @@ bool supportedSSAType(llvm::Type *type) {
          (type->isIntegerTy() && type->getIntegerBitWidth() <= MaxIntegerBits);
 }
 
-bool safeBlock(const llvm::BasicBlock &block) {
+bool safeBlock(const llvm::BasicBlock &block, bool allowPlainStores) {
   if (block.isEHPad() || block.hasAddressTaken()) return false;
   const auto *terminator = block.getTerminator();
   if (!llvm::isa<llvm::BranchInst, llvm::SwitchInst>(terminator) ||
@@ -59,6 +59,22 @@ bool safeBlock(const llvm::BasicBlock &block) {
       return false;
     if (const auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
       if (!load->isSimple()) return false;
+      continue;
+    }
+    if (const auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) {
+      const auto *type = llvm::dyn_cast<llvm::IntegerType>(
+          store->getValueOperand()->getType());
+      if (!allowPlainStores || !store->isSimple() ||
+          store->getPointerAddressSpace() != 0 || !type)
+        return false;
+      const auto width = type->getBitWidth();
+      if ((width != 8 && width != 16 && width != 32 && width != 64 &&
+           width != 128) ||
+          llvm::isa<llvm::UndefValue, llvm::PoisonValue>(store->getValueOperand()) ||
+          llvm::isa<llvm::UndefValue, llvm::PoisonValue>(store->getPointerOperand()))
+        return false;
+      // Admitting a copied write adds no memory fact. Clone it at the same
+      // execution point, and keep all subsequent LOADs as fresh executions.
       continue;
     }
     if (instruction.isTerminator()) continue;
@@ -304,7 +320,7 @@ bool observesEarlierExecution(const ContextPath &path,
 
 bool canExtend(const ContextPath &path, llvm::BasicBlock &next,
                 llvm::BasicBlock &pred, llvm::DominatorTree &dom,
-                bool &exhausted) {
+                bool &exhausted, bool allowPlainStores) {
   if (contains(path, &next) || &next == &pred || !dom.isReachableFromEntry(&next) ||
       observesEarlierExecution(path, next, pred, dom))
     return false;
@@ -318,7 +334,7 @@ bool canExtend(const ContextPath &path, llvm::BasicBlock &next,
     exhausted = true;
     return false;
   }
-  if (!safeBlock(next)) return false;
+  if (!safeBlock(next, allowPlainStores)) return false;
   for (const auto &phi : next.phis()) {
     const auto incomingIndex = phi.getBasicBlockIndex(previous);
     if (incomingIndex < 0) return false;
@@ -334,7 +350,7 @@ bool canExtend(const ContextPath &path, llvm::BasicBlock &next,
 
 ContextPath contextPath(llvm::BranchInst &branch, llvm::BasicBlock &pred,
                          unsigned selected, llvm::DominatorTree &dom,
-                         bool &exhausted) {
+                         bool &exhausted, bool allowPlainStores) {
   ContextPath result{{branch.getParent()}, {}, branch.getParent()->size()};
   bool pathBudget = false;
   while (true) {
@@ -346,7 +362,8 @@ ContextPath contextPath(llvm::BranchInst &branch, llvm::BasicBlock &pred,
     if (result.blocks.size() == 1) {
       edge = selected;
       auto *candidate = branch.getSuccessor(selected);
-      if (canExtend(result, *candidate, pred, dom, pathBudget)) next = candidate;
+      if (canExtend(result, *candidate, pred, dom, pathBudget, allowPlainStores))
+        next = candidate;
     } else {
       // Keep an unknown conditional branch intact. Structural preference for
       // a terminal dispatch or another check is only a copying heuristic;
@@ -354,7 +371,8 @@ ContextPath contextPath(llvm::BranchInst &branch, llvm::BasicBlock &pred,
       unsigned bestRank = 0;
       for (unsigned index = 0; index < terminator->getNumSuccessors(); ++index) {
         auto *candidate = terminator->getSuccessor(index);
-        if (!canExtend(result, *candidate, pred, dom, pathBudget)) continue;
+        if (!canExtend(result, *candidate, pred, dom, pathBudget, allowPlainStores))
+          continue;
         const auto *candidateTerm = candidate->getTerminator();
         const auto *candidateBranch = llvm::dyn_cast<llvm::BranchInst>(candidateTerm);
         const unsigned rank = llvm::isa<llvm::SwitchInst>(candidateTerm) ? 3
@@ -567,7 +585,8 @@ void reportBudget(DispatcherSpecializationStats &stats,
 bool specializeStateGuardEdge(
     llvm::BranchInst &branch, llvm::DominatorTree &dom,
     const DispatcherSpecializationOptions &options,
-    DispatcherSpecializationStats &stats, StateGuardEdgeBudget &budget) {
+    DispatcherSpecializationStats &stats, StateGuardEdgeBudget &budget,
+    bool allowPlainStores) {
   if (budget.stopped) return false;
   auto &block = *branch.getParent();
   auto &function = *block.getParent();
@@ -579,7 +598,7 @@ bool specializeStateGuardEdge(
     reportBudget(stats, budget);
     return false;
   }
-  if (!safeBlock(block)) return false;
+  if (!safeBlock(block, allowPlainStores)) return false;
   std::vector<llvm::BasicBlock *> predecessors;
   // PHI order is stable and favors a seed over a later loop backedge.
   for (unsigned index = 0; index < block.phis().begin()->getNumIncomingValues(); ++index)
@@ -613,7 +632,8 @@ bool specializeStateGuardEdge(
     // Its new unconditional predecessor would become the next invocation's
     // candidate again, producing an endless chain of equivalent copies.
     if (branch.getSuccessor(selected) == &block) continue;
-    auto path = contextPath(branch, *pred, selected, dom, exhausted);
+    auto path = contextPath(branch, *pred, selected, dom, exhausted,
+                            allowPlainStores);
     std::optional<std::size_t> useful;
     if (path.blocks.size() > 1) {
       useful = usefulContext(path, *pred, options, budget, proof.nodes, exhausted);

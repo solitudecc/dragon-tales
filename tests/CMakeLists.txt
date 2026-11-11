@@ -59,6 +59,9 @@ add_executable(dragon_tests
         lifters/TestLLVMStateContextCorridors.cpp
         lifters/TestLLVMLoopCarriedStateContexts.cpp
         lifters/TestLLVMFutureRegionStateContexts.cpp
+        lifters/TestLLVMStoreStateContexts.cpp
+        lifters/TestLLVMGuestMemoryHubs.cpp
+        lifters/TestLLVMGuestMemoryHubPriority.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp

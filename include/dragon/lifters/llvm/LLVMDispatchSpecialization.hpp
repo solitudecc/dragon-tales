@@ -38,4 +38,13 @@ struct DispatcherSpecializationStats {
 DispatcherSpecializationStats runDispatcherSpecialization(
     llvm::Module &, const DispatcherSpecializationOptions & = {});
 
+/// Explicitly allow copying simple AS0 i8/i16/i32/i64/i128 STOREs at their
+/// original execution point. Literal undef/poison operands remain barriers.
+/// Stores and subsequent reads retain their order; this does not infer memory
+/// facts or enable STORE-to-LOAD forwarding. The original overload keeps STORE
+/// barriers for context copies, without changing the options layout.
+DispatcherSpecializationStats runDispatcherSpecialization(
+    llvm::Module &, const DispatcherSpecializationOptions &,
+    bool allowPlainStores);
+
 } // namespace dragon::llvmlifter

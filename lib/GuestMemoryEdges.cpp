@@ -44,6 +44,9 @@ struct Corridor {
   // In execution order, starting with the multiply-entered block.
   std::vector<llvm::BasicBlock *> blocks;
   std::unordered_set<llvm::BasicBlock *> members;
+  // New hub paths keep exceptional live-out repair outside their supported
+  // domain; the historical direct-edge path retains its existing contract.
+  bool expanded = false;
 };
 
 bool supportedSSAType(llvm::Type *type) {
@@ -175,18 +178,40 @@ bool selectedEdge(llvm::BasicBlock &pred, llvm::BasicBlock &join,
   return count == 1;
 }
 
-bool selectedPHIsAvailable(const Corridor &corridor, llvm::BasicBlock &pred) {
-  for (const auto &phi : corridor.blocks.front()->phis()) {
-    const auto index = phi.getBasicBlockIndex(&pred);
-    if (index < 0 || !supportedSSAType(phi.getType())) return false;
-    // An incoming value defined in the region belongs to the previous loop
-    // invocation. Mapping it through the new clone would use a different
-    // execution. Leave these loop-carried shapes for a separate proof.
-    if (const auto *value = llvm::dyn_cast<llvm::Instruction>(
-            phi.getIncomingValue(index)))
-      if (corridor.members.contains(
-              const_cast<llvm::BasicBlock *>(value->getParent())))
-        return false;
+bool selectedPHIsAvailable(const Corridor &corridor, llvm::BasicBlock &pred,
+                            llvm::DominatorTree &dom) {
+  for (std::size_t position = 0; position < corridor.blocks.size(); ++position) {
+    auto *selectedPred = position ? corridor.blocks[position - 1] : &pred;
+    for (const auto &instruction : *corridor.blocks[position]) {
+      if (const auto *phi = llvm::dyn_cast<llvm::PHINode>(&instruction)) {
+        const auto index = phi->getBasicBlockIndex(selectedPred);
+        if (index < 0 || !supportedSSAType(phi->getType())) return false;
+        auto *incoming = phi->getIncomingValue(index);
+        if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(incoming)) return false;
+        if (const auto *value = llvm::dyn_cast<llvm::Instruction>(incoming)) {
+          const auto origin = std::find(corridor.blocks.begin(),
+              corridor.blocks.end(), value->getParent());
+          // Only definitions from an earlier block of this selected path
+          // describe the fresh execution. Self/future arms are historical.
+          if (origin != corridor.blocks.end()) {
+            if (static_cast<std::size_t>(origin - corridor.blocks.begin()) >= position)
+              return false;
+          } else if (!dom.dominates(value, selectedPred->getTerminator())) {
+            return false;
+          }
+        }
+        continue;
+      }
+      for (const auto &operand : instruction.operands()) {
+        const auto *value = llvm::dyn_cast<llvm::Instruction>(operand);
+        if (!value) continue;
+        const auto origin = std::find(corridor.blocks.begin(),
+            corridor.blocks.end(), value->getParent());
+        if (origin != corridor.blocks.end() &&
+            static_cast<std::size_t>(origin - corridor.blocks.begin()) > position)
+          return false;
+      }
+    }
   }
   return true;
 }
@@ -296,18 +321,25 @@ bool structurallyTranslatedIndex(
              corridor, pred, proof, depth + 1);
 }
 
-bool needsRepair(const llvm::Use &use, const Corridor &corridor) {
+bool needsRepair(const llvm::Use &use, const Corridor &corridor,
+                   const llvm::BasicBlock &origin) {
   const auto *user = llvm::dyn_cast<llvm::Instruction>(use.getUser());
-  if (!user) return true; // rejected during preflight
-  if (!corridor.members.contains(
-          const_cast<llvm::BasicBlock *>(user->getParent())))
-    return true;
-  // A PHI's use occurs on its incoming edge. This includes an original
-  // region PHI with a self-use on a backedge outside the cloned corridor.
-  if (const auto *phi = llvm::dyn_cast<llvm::PHINode>(user))
-    return !corridor.members.contains(
-        phi->getIncomingBlock(use.getOperandNo()));
-  return false;
+  if (!corridor.expanded) {
+    // findCorridor admits only a single-predecessor forward chain after its
+    // original head. No outside edge can bypass an original definition and
+    // enter another member of that chain. Keep the historical repair scope
+    // (and its actual work charge) for those direct paths.
+    if (!user || !corridor.members.contains(
+                     const_cast<llvm::BasicBlock *>(user->getParent())))
+      return true;
+    const auto *phi = llvm::dyn_cast<llvm::PHINode>(user);
+    return phi && !corridor.members.contains(phi->getIncomingBlock(use.getOperandNo()));
+  }
+  if (!user || user->getParent() != &origin) return true;
+  // An exit can reenter another original corridor block. Repair those uses
+  // too, while keeping ordinary same-block uses on their current definition.
+  const auto *phi = llvm::dyn_cast<llvm::PHINode>(user);
+  return phi && phi->getIncomingBlock(use.getOperandNo()) != &origin;
 }
 
 std::optional<std::size_t> preflightRepair(
@@ -318,9 +350,10 @@ std::optional<std::size_t> preflightRepair(
     for (const auto &instruction : *block) {
       bool live = false;
       for (const auto &use : instruction.uses()) {
-        if (!needsRepair(use, corridor)) continue;
+        if (!needsRepair(use, corridor, *block)) continue;
         const auto *user = llvm::dyn_cast<llvm::Instruction>(use.getUser());
         if (!user || user->getFunction() != &function ||
+            (corridor.expanded && user->getParent()->isEHPad()) ||
             !supportedSSAType(instruction.getType()))
           return std::nullopt;
         live = true;
@@ -349,7 +382,7 @@ llvm::StoreInst *proveStore(
     const llvm::DataLayout &layout, llvm::DominatorTree &dom,
     bool &exhausted, CheckedMemoryEdgeBudget &budget) {
   if (corridor.members.contains(&pred) ||
-      !selectedPHIsAvailable(corridor, pred))
+      !selectedPHIsAvailable(corridor, pred, dom))
     return nullptr;
   auto *base = llvm::dyn_cast<llvm::Instruction>(loadedAddress.base);
   if (!base || corridor.members.contains(base->getParent()) ||
@@ -412,15 +445,23 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
     map[block] = clone;
     clones.push_back(clone);
   }
-  // The new entry has precisely this predecessor. Do not carry any other
-  // PHI arm, and do not remap an old-loop incoming value to a new invocation.
+  // Every copy has precisely its selected path predecessor. In particular,
+  // a non-front join must not retain arms belonging to original unknown paths.
   auto *join = corridor.blocks.front();
   auto *clonedJoin = clones.front();
-  for (auto &phi : join->phis())
-    map[&phi] = phi.getIncomingValueForBlock(&pred);
-  for (auto iterator = clonedJoin->begin();
-       iterator != clonedJoin->end() && llvm::isa<llvm::PHINode>(*iterator);)
-    (iterator++)->eraseFromParent();
+  for (std::size_t index = 0; index < corridor.blocks.size(); ++index) {
+    auto *selectedPred = index ? corridor.blocks[index - 1] : &pred;
+    for (auto &phi : corridor.blocks[index]->phis()) {
+      auto *incoming = phi.getIncomingValueForBlock(selectedPred);
+      const auto found = map.find(incoming);
+      llvm::Value *selected = incoming;
+      if (found != map.end()) selected = found->second;
+      map[&phi] = selected;
+    }
+    for (auto iterator = clones[index]->begin();
+         iterator != clones[index]->end() && llvm::isa<llvm::PHINode>(*iterator);)
+      (iterator++)->eraseFromParent();
+  }
   for (auto *clone : clones)
     for (auto &instruction : *clone)
       llvm::RemapInstruction(&instruction, map,
@@ -456,7 +497,7 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
   for (auto *definition : definitions) {
     llvm::SmallVector<llvm::Use *, 32> uses;
     for (auto &use : definition->uses())
-      if (needsRepair(use, corridor)) uses.push_back(&use);
+      if (needsRepair(use, corridor, *definition->getParent())) uses.push_back(&use);
     if (uses.empty()) continue;
     llvm::SmallVector<llvm::PHINode *, 8> phis;
     llvm::SSAUpdater updater(&phis);
@@ -473,13 +514,113 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
   stats.changed = true;
 }
 
+bool prependHub(Corridor &corridor, llvm::BasicBlock &hub,
+                  llvm::DominatorTree &dom, bool &exhausted) {
+  // Keep the original head multiply-entered after redirecting one edge. This
+  // also prevents leaving a zero-incoming original PHI behind.
+  if (llvm::pred_size(&hub) < 2 || corridor.members.contains(&hub) ||
+      !dom.isReachableFromEntry(&hub) || !safeCorridorBlock(hub))
+    return false;
+  if (llvm::pred_size(&hub) > MaxIncomingEdges) {
+    exhausted = true;
+    return false;
+  }
+  std::size_t instructions = hub.size();
+  for (auto *block : corridor.blocks) instructions += block->size();
+  if (corridor.blocks.size() == MaxCorridorBlocks ||
+      instructions > MaxCorridorInstructions) {
+    exhausted = true;
+    return false;
+  }
+  // Only the selected forward edge enters the next copy. A branch to an
+  // earlier member would require a fresh original invocation, not a copy loop.
+  for (auto *successor : llvm::successors(&hub))
+    if (successor == &hub ||
+        (corridor.members.contains(successor) && successor != corridor.blocks.front()))
+      return false;
+  for (auto *block : corridor.blocks)
+    for (auto *successor : llvm::successors(block))
+      if (successor == &hub) return false;
+  corridor.blocks.insert(corridor.blocks.begin(), &hub);
+  corridor.members.insert(&hub);
+  corridor.expanded = true;
+  return true;
+}
+
+bool forwardCorridor(
+    llvm::LoadInst &load, const ByteAddress &loadedAddress,
+    const Corridor &corridor,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
+    llvm::DominatorTree &dom, bool &exhausted, bool allowHubs) {
+  auto *join = corridor.blocks.front();
+  if (llvm::pred_size(join) > MaxIncomingEdges) {
+    exhausted = true;
+    return false;
+  }
+  std::vector<llvm::BasicBlock *> predecessors(llvm::pred_begin(join),
+                                              llvm::pred_end(join));
+  std::unordered_set<llvm::BasicBlock *> seen;
+  std::vector<llvm::BasicBlock *> hubs;
+  for (auto *pred : predecessors) {
+    if (!seen.insert(pred).second) continue;
+    unsigned successorIndex = 0;
+    if (!selectedEdge(*pred, *join, successorIndex)) continue;
+    if (++budget.edgeProofs > MaxEdgeProofs) {
+      exhausted = true;
+      budget.stopped = true;
+      return false;
+    }
+    auto *store = proveStore(load, loadedAddress, corridor, *pred,
+                             memoryBases, layout, dom, exhausted, budget);
+    if (budget.stopped) return false;
+    if (!store) {
+      // Try all historical direct-store candidates before widening the
+      // selected path. The hub itself must remain a read-only safe block.
+      if (allowHubs && !corridor.members.contains(pred)) hubs.push_back(pred);
+      continue;
+    }
+    const auto repair = preflightRepair(corridor, *load.getFunction(), exhausted);
+    if (!repair) continue;
+    std::size_t clonedInstructions = 0;
+    for (auto *block : corridor.blocks) clonedInstructions += block->size();
+    if (budget.clones == MaxClones ||
+        *repair > MaxRepairCells - budget.repairCells ||
+        clonedInstructions > MaxClonedInstructions - budget.clonedInstructions ||
+        stats.loadsForwarded >= options.maxRewrites) {
+      exhausted = true;
+      budget.stopped = true;
+      return false;
+    }
+    cloneEdge(load, *store, corridor, *pred, successorIndex, stats);
+    ++budget.clones;
+    budget.repairCells += *repair;
+    budget.clonedInstructions += clonedInstructions;
+    dom.recalculate(*load.getFunction());
+    return true;
+  }
+  // Each recursive extension adds a distinct block and every selected edge
+  // spends the same module proof budget as the existing direct-edge search.
+  for (auto *hub : hubs) {
+    if (budget.stopped) break;
+    auto extended = corridor;
+    if (prependHub(extended, *hub, dom, exhausted) &&
+        forwardCorridor(load, loadedAddress, extended, memoryBases, layout,
+                        options, stats, budget, dom, exhausted, true))
+      return true;
+  }
+  return false;
+}
+
 } // namespace
 
 void forwardCheckedMemoryEdges(
     llvm::Function &function,
     const std::unordered_set<llvm::Value *> &memoryBases,
     const llvm::DataLayout &layout, const MemoryForwardOptions &options,
-    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget) {
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
+    std::vector<llvm::LoadInst *> &pendingHubs) {
   if (!options.enableCrossBlock || !options.enablePhi ||
       stats.loadsForwarded >= options.maxRewrites || budget.stopped)
     return;
@@ -515,45 +656,12 @@ void forwardCheckedMemoryEdges(
     if (!loadedAddress) continue;
     const auto corridor = findCorridor(*load, dom, exhausted);
     if (!corridor) continue;
-    auto *join = corridor->blocks.front();
-    if (llvm::pred_size(join) > MaxIncomingEdges) {
-      exhausted = true;
-      continue;
-    }
-    std::vector<llvm::BasicBlock *> predecessors(llvm::pred_begin(join),
-                                                llvm::pred_end(join));
-    std::unordered_set<llvm::BasicBlock *> seen;
-    for (auto *pred : predecessors) {
-      if (!seen.insert(pred).second) continue;
-      unsigned successorIndex = 0;
-      if (!selectedEdge(*pred, *join, successorIndex)) continue;
-      if (++budget.edgeProofs > MaxEdgeProofs) {
-        exhausted = true;
-        budget.stopped = true;
-        break;
-      }
-      auto *store = proveStore(*load, *loadedAddress, *corridor, *pred,
-                               memoryBases, layout, dom, exhausted, budget);
-      if (!store) continue;
-      const auto repair = preflightRepair(*corridor, function, exhausted);
-      if (!repair) continue;
-      std::size_t clonedInstructions = 0;
-      for (auto *block : corridor->blocks) clonedInstructions += block->size();
-      if (budget.clones == MaxClones ||
-          *repair > MaxRepairCells - budget.repairCells ||
-          clonedInstructions > MaxClonedInstructions - budget.clonedInstructions ||
-          stats.loadsForwarded >= options.maxRewrites) {
-        exhausted = true;
-        budget.stopped = true;
-        break;
-      }
-      cloneEdge(*load, *store, *corridor, *pred, successorIndex, stats);
-      ++budget.clones;
-      budget.repairCells += *repair;
-      budget.clonedInstructions += clonedInstructions;
-      dom.recalculate(function);
-      break;
-    }
+    const bool rewritten = forwardCorridor(
+        *load, *loadedAddress, *corridor, memoryBases, layout,
+        options, stats, budget, dom, exhausted, false);
+    // Keep only unrevised original LOADs. Later functions cannot erase them,
+    // and an edge copy only removes its cloned LOAD, never this original.
+    if (!rewritten && !budget.stopped) pendingHubs.push_back(load);
     if (budget.stopped || stats.loadsForwarded >= options.maxRewrites)
       break;
   }
@@ -562,6 +670,50 @@ void forwardCheckedMemoryEdges(
     ++stats.budgetExhausted;
     budget.reported = true;
   }
+}
+
+void forwardCheckedMemoryHubs(
+    llvm::Function &function,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
+    const std::vector<llvm::LoadInst *> &pendingHubs) {
+  if (!options.enableCrossBlock || !options.enablePhi ||
+      stats.loadsForwarded >= options.maxRewrites || budget.stopped)
+    return;
+  llvm::DominatorTree dom(function);
+  bool exhausted = false;
+  for (auto *load : pendingHubs) {
+    if (budget.stopped || stats.loadsForwarded >= options.maxRewrites) break;
+    // Candidates were snapshotted and counted once by the direct phase.
+    // Rebuild current proofs, but never rescan or count the newly copied IR.
+    const auto loadedAddress = byteAddress(load->getPointerOperand(),
+                                           memoryBases, layout);
+    if (!loadedAddress) continue;
+    const auto corridor = findCorridor(*load, dom, exhausted);
+    if (!corridor) continue;
+    forwardCorridor(*load, *loadedAddress, *corridor, memoryBases, layout,
+                    options, stats, budget, dom, exhausted, true);
+  }
+  if (exhausted && !budget.reported) {
+    stats.complete = false;
+    ++stats.budgetExhausted;
+    budget.reported = true;
+  }
+}
+
+void forwardCheckedMemoryEdges(
+    llvm::Function &function,
+    const std::unordered_set<llvm::Value *> &memoryBases,
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget) {
+  // Preserve the existing private per-function entry point. The module pass
+  // uses the queued overload so every legacy direct path gets priority first.
+  std::vector<llvm::LoadInst *> pendingHubs;
+  forwardCheckedMemoryEdges(function, memoryBases, layout, options, stats,
+                             budget, pendingHubs);
+  forwardCheckedMemoryHubs(function, memoryBases, layout, options, stats,
+                           budget, pendingHubs);
 }
 
 } // namespace dragon::llvmlifter::detail

@@ -955,6 +955,13 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
 
   LeafCallCache leafCallCache;
   CheckedMemoryEdgeBudget checkedEdgeBudget;
+  struct PendingCheckedHubs {
+    llvm::Function *function;
+    std::unordered_set<llvm::Value *> memoryBases;
+    std::vector<llvm::LoadInst *> loads;
+  };
+  std::vector<PendingCheckedHubs> pendingCheckedHubs;
+  bool rewriteBudgetReported = false;
 
   for (auto &function : module) {
     if (function.isDeclaration() || function.arg_size() < 2)
@@ -1379,14 +1386,34 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     if (stats.loadsForwarded < options.maxRewrites)
       runByteForwarding(function, memoryBases, module.getDataLayout(), options,
                         stats, graph, leafCallCache);
-    if (stats.loadsForwarded < options.maxRewrites)
+    if (stats.loadsForwarded < options.maxRewrites) {
+      std::vector<llvm::LoadInst *> pendingHubs;
       forwardCheckedMemoryEdges(function, memoryBases, module.getDataLayout(),
-                                options, stats, checkedEdgeBudget);
+                                options, stats, checkedEdgeBudget, pendingHubs);
+      if (!pendingHubs.empty())
+        pendingCheckedHubs.push_back({&function, memoryBases, std::move(pendingHubs)});
+    }
     if (stats.loadsForwarded >= options.maxRewrites) {
       stats.complete = false;
       ++stats.budgetExhausted;
+      rewriteBudgetReported = true;
       break;
     }
+  }
+  // New multi-join searches share the original module budgets, but cannot
+  // spend them before a later function's historical direct-store paths.
+  // Every queued LOAD was captured once after that function's ordinary and
+  // byte rewrites; only cloned LOADs can be removed by the CFG edge phases.
+  for (const auto &pending : pendingCheckedHubs) {
+    if (checkedEdgeBudget.stopped || stats.loadsForwarded >= options.maxRewrites)
+      break;
+    forwardCheckedMemoryHubs(*pending.function, pending.memoryBases,
+                            module.getDataLayout(), options, stats,
+                            checkedEdgeBudget, pending.loads);
+  }
+  if (!rewriteBudgetReported && stats.loadsForwarded >= options.maxRewrites) {
+    stats.complete = false;
+    ++stats.budgetExhausted;
   }
   return stats;
 }
