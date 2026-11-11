@@ -42,6 +42,14 @@
 不能把完整执行匹配解释为复杂去平坦化已经完成。细节见
 [状态检查入边特化](llvm-state-guard-edges.md)。
 
+后续里程碑 `1449cd2` 把已证明入边延长为有界多块上下文，跨桥接、第二个 PHI 和
+未知内存检查；保留 table LOAD/switch/default 及回原块重新执行的语义。完整 CTest
+为 main **951/951**、无 Z3 **816/816**，新 6912 次及旧兼容 4928 次完整状态匹配。
+真实 f-cff O2 的 known50 路径现有实际 target LOAD 索引 **70096**，CFF switch 为
+**1→2 的上下文副本**，没有消除原分发器；其它三个样本没有新增该项精度，预算 incomplete
+继续保留。多条状态入边、O0 内存关系及表内容证明仍是后续缺口，详见
+[多级状态上下文](llvm-state-context-corridors.md)。
+
 此前跨调用直接 STORE 阶段的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
 `857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
 地址关系、完整 GuestMemory 常量写和显式调用摘要；去平坦化覆盖有限状态集合、同函数

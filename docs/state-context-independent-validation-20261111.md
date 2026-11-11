@@ -71,6 +71,10 @@ target switch 的输入（允许 PHI/freeze identity），不将无关的常量�
 不变性证明。测量器的 **1 个正例、10 个指定假收益对照** 已通过，最后一项专门拒绝
 “真实 table LOAD 存在但 switch 使用另一个值”的假收益。
 
+真实重放沿用策略 0、StaticAnalysis FunctionStart、product-O0，每个 ELF 的固定输入为
+0、1、0x80000000、0xffffffff。四 ELF 中的 C O0/O2 是输入二进制的编译级别，不代表
+本轮新增了 product-O2 或 recursive 重放矩阵；独立 native 小程序另有 O0/O2 两级比较。
+
 旧原顺序、post-GVN 两种 baseline 各重新执行为 **C16/LLVM16 完整根匹配**，
 Graph/input/library 不变，新 context=false，70096 LOAD 前后均 0。原有三个 dispatch
 budget incomplete，以及原顺序两个/post-GVN 四个 GuestSSA incomplete 模块继续报告。
@@ -117,3 +121,16 @@ INCOMPLETE；f-cff O2 无预算耗尽。GuestSSA 原顺序两个、post-GVN 四�
 或 69 输入全语料运行。有限定义输入、全部字段和故障控制不构成任意输入/整个优化器的证明。
 
 证据根：VM `~/vmc-runs/state-context-reference-20261111/`。
+
+生产实现里程碑 `1449cd2`；集中 main/no-Z3 完整 CTest **951/951、816/816**，
+新旧组件合并组两构建均 **35 cases / 2798 assertions**。
+根代理另外核对 8 份实际 native 源快照与仓库一致，完整源码/库绑定见
+[多级上下文记录](llvm-state-context-corridors.md)。
+
+完整包为 VM `~/vmc-runs/state-context-reference-20261111-evidence.tar.gz` 与本地
+`/Users/c/Desktop/deob/validation-artifacts/state-context-reference-20261111/`
+下的同名文件。双端 SHA-256 为
+`61be3fc7648592119dfa9284392aa96dcb69d15e9fbedc4663aee176cdb11955`，
+本地逐项核验 **1039** 个内部文件全部通过，包大小 179966731 字节。
+包内保留初始结构探针、旧基线与旧精度负控制、v1 失败、最终矩阵、四次真实重放、
+严格只读复审、所有故障对照、精确执行源码版本及完整 index/manifest。

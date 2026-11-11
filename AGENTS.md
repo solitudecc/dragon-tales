@@ -211,6 +211,38 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Bounded state contexts (2026-11-11, baseline `947f9c1`, implementation
+`1449cd2`): see `docs/llvm-state-context-corridors.md`. An already proved guard
+edge may extend through up to 6 safe blocks / 256 total instructions, retaining
+unknown bounds and actual LOAD/switch/default. Require a useful downstream
+constant PHI with the remaining per-edge expression budget; structural successor
+preference is a copying heuristic, never an assumption that a check succeeds.
+Reentries go to original blocks, with fresh PHIs/LOADs/freezes and full SSA repair
+even for uses inside other original region blocks. Old-execution dependencies
+and effect barriers stop extension; limits retain the old one-block rewrite.
+No default pipeline, Graph, instruction or ABI change. Same final old tests:
+14/388, 8 cases/45 failed assertions; final new 14/580, combined 35/2798 in both
+builds; CTest 951/951 and 816/816. Native same-source old/new each 6912 matches,
+486 specified faults; prior 4928 compatibility matches/312 faults. V1 precision
+failure ran zero new native comparisons; old test645's obsolete edge lookup
+faulted after valid IR, now restored without modifying that test. Invalid i128
+fixture and include-path failures are retained separately, not old-code evidence.
+Frozen real raw/post each C16/LLVM16 (strategy0/product-O0). Only f-cff O2 gains
+one actual target-switch-used Guest LOAD index 70096, with unknown size checks,
+49 cases/default and all original incoming paths retained. CFF switches 1->2
+are context duplication, not removal. Other three roots gain no context;
+dispatch incomplete remains 3 modules and GuestSSA raw2/post4. Default expr128
+O2 probes byte-match expr256; no default budget increase. Text opt fixpoint
+configuration failures are not framework failures; C++ options stay unchanged.
+Frozen main: `~/vmc-runs/state-context-root-20261111/final-runtime/` (v2 symlink),
+no-Z3 and failed v1 binaries retained gzip. Mac/VM 16 source bindings and 8 native
+snapshots match. Root logs SHA-256
+b606d90e4bde74c49c841d1ae199e9628cc98b7c8b4b9795bff438e61d008bf6;
+independent archive 61be3fc7648592119dfa9284392aa96dcb69d15e9fbedc4663aee176cdb11955.
+No new 69-input/instruction/IGNIL campaign. Previous state-guard reference raw
+copies are archived-only; `~/vmc-runs/state-guard-reference-20261111-ARCHIVED.txt`
+provides restoration from the complete dual-host verified tar.
+
 State guard incoming edges (2026-11-11, baseline `13f0563`, implementation
 `42639c6`): see `docs/llvm-state-guard-edges.md`. Opt-in dispatch-specialize can
 clone one proved incoming context per original shared conditional block. Keep

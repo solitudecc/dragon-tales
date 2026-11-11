@@ -1,6 +1,6 @@
 # 多级状态上下文与地址关系
 
-基线 `947f9c1`。本阶段延长显式 `dispatch-specialize` 中已证明的状态入边，
+基线 `947f9c1`，实现里程碑 `1449cd2`。本阶段延长显式 `dispatch-specialize` 中已证明的状态入边，
 让其上下文经过共享桥接块、后续 PHI 和内存检查。默认优化顺序、Graph、机器指令、
 Guest/C ABI 和表内容假设均保持原契约。
 
@@ -51,6 +51,8 @@ Exit 比较均匹配。新库四种正模式保留未知 bounds，同时将表 L
 增加本轮上下文收益：已知 50 路径经过复制的桥接块和第二个汇合，未知 bounds 仍依赖
 实际复制的 LOAD；目标 LOAD 的 Guest 偏移经现有 LLVM cleanup 化为 **70096**，
 且该值实际被 target switch 使用。49 个 cases、default、回原块目标和全部原入边保留。
+该重放域为 x86-64、线性策略 0、product-O0；四个 ELF 覆盖 f-cff/f-combo 的 C O0/O2，
+各取 `0/1/0x80000000/0xffffffff`。没有据此新增递归策略或更多种子的覆盖声明。
 
 f-cff O2 的实际 CFF switch 为 **1→2**，其中一个是上下文副本；程序自身 switch
 仍为 **1→1**。其它三个样本没有本轮新增上下文收益。三个整模块仍报告 dispatch
@@ -104,4 +106,21 @@ campaign。剩余多路径状态、内存不变性及其它复杂分发关系仍
 本地位于 `/Users/c/Desktop/deob/validation-artifacts/state-context-impl-20261111/`，
 160 个内部文件核验通过。独立精度测量另有 1 个正例、10 个指定假收益对照，
 核对常量地址 LOAD 确实连接到实际 target switch，不把无关 LOAD 计为上下文收益。
-独立对拍和集中构建归档的路径及双端哈希将在封存后补充。
+
+独立对拍包：VM `~/vmc-runs/state-context-reference-20261111-evidence.tar.gz`，本地
+`/Users/c/Desktop/deob/validation-artifacts/state-context-reference-20261111/`
+下同名文件；双端 SHA-256
+`61be3fc7648592119dfa9284392aa96dcb69d15e9fbedc4663aee176cdb11955`，
+1039 个内部文件全部核验。根代理另行确认 8 份旧/新 native 实际源码快照与最终仓库一致。
+
+集中构建与来源绑定包：VM
+`~/vmc-runs/state-context-root-20261111/final-validation-logs.tar.gz`，本地
+`/Users/c/Desktop/deob/validation-artifacts/state-context-root-20261111/` 下同名文件。
+双端 SHA-256 `b606d90e4bde74c49c841d1ae199e9628cc98b7c8b4b9795bff438e61d008bf6`，
+27 个内部文件核验通过；16 份最终生产、测试及验证源码的 Mac/VM 哈希相同。
+主构建重编日志的 Ninja 依赖日志恢复保留；最终两库与独立验证冻结 v2 哈希相同。
+`final-runtime` 链接冻结 v2，no-Z3 库另以 gzip 保存在同根 `final-runtime-noz3/`。
+
+为腾出构建空间，上一轮 505 MiB 的已归档参考证据展开副本已清理，完整双端压缩包保留；
+VM `~/vmc-runs/state-guard-reference-20261111-ARCHIVED.txt` 记录完整恢复命令。
+本轮失败候选 v1 backend 同样仅作 gzip 压缩，保留原始及压缩哈希。
