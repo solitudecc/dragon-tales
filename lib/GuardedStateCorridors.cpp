@@ -48,17 +48,22 @@ using Values=std::vector<llvm::APInt>;
 using MaybeValues=std::optional<Values>;
 struct Key {llvm::Value *value;bool historical;bool operator==(const Key &)const=default;};
 struct KeyHash {std::size_t operator()(const Key &k)const{return std::hash<llvm::Value *>{}(k.value)^(k.historical?0x9e3779b9u:0);}};
+struct BooleanScenario {
+  std::unordered_map<Key,bool,KeyHash> values;
+  std::optional<Key> missing;
+};
 // This enumerator predicts target-table addresses. Its arithmetic is modular;
 // flags are neither stripped nor used to establish absence of poison. The
 // original expressions still execute before the actual target guard.
 struct Enumerator {
   llvm::BasicBlock *seed;
   const std::vector<llvm::BasicBlock *> &path;
-  Work &work;std::size_t nodes=0;bool limited=false;
+  Work &work;std::size_t nodes=0;bool limited=false,booleanUnknown=false;
+  BooleanScenario *scenario=nullptr;
   std::unordered_map<llvm::BasicBlock *,std::size_t> positions;
   std::unordered_map<Key,Values,KeyHash> memo;
   std::unordered_set<Key,KeyHash> active;
-  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w):seed(s),path(p),work(w) {
+  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr):seed(s),path(p),work(w),scenario(sc) {
     for(std::size_t n=0;n<p.size();++n)positions.emplace(p[n],n);
   }
   bool append(Values &to,const llvm::APInt &value) {
@@ -78,6 +83,27 @@ struct Enumerator {
   }
   MaybeValues compute(llvm::Value *value,bool historical,unsigned depth) {
     if(auto *constant=llvm::dyn_cast<llvm::ConstantInt>(value))return Values{constant->getValue()};
+    if(value->getType()->isIntegerTy(1)) {
+      bool atom=llvm::isa<llvm::Argument,llvm::ICmpInst,llvm::FCmpInst,llvm::FreezeInst>(value);
+      if(auto *load=llvm::dyn_cast<llvm::LoadInst>(value))atom=load->isSimple();
+      if(atom && !scenario)booleanUnknown=true;
+      if(atom && scenario) {
+        // A prior/external definition has one old value, while an instruction
+        // executed again in the path has a separate fresh Boolean identity.
+        bool old=historical;
+        if(auto *instruction=llvm::dyn_cast<llvm::Instruction>(value)) {
+          old|=!positions.contains(instruction->getParent());
+          if(!llvm::isa<llvm::FreezeInst>(instruction))for(auto &operand:instruction->operands()) {
+            if(!work.charge())return {};
+            if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(operand.get()))return {};
+          }
+        } else old=false; // Function arguments do not execute again.
+        Key key{value,old};auto assigned=scenario->values.find(key);
+        if(assigned==scenario->values.end()) {if(!scenario->missing)scenario->missing=key;return {};}
+        return Values{llvm::APInt(1,assigned->second)};
+      }
+    }
+
     if(auto *phi=llvm::dyn_cast<llvm::PHINode>(value)) {
       auto found=positions.find(phi->getParent());
       if(!historical && found!=positions.end()) {
@@ -100,6 +126,11 @@ struct Enumerator {
       return result.empty()?MaybeValues{}:MaybeValues{result};
     }
     if(auto *select=llvm::dyn_cast<llvm::SelectInst>(value)) {
+      if(scenario) {
+        auto condition=get(select->getCondition(),historical,depth+1);
+        if(!condition || condition->size()!=1)return {};
+        return get((*condition)[0].isZero()?select->getFalseValue():select->getTrueValue(),historical,depth+1);
+      }
       auto yes=get(select->getTrueValue(),historical,depth+1),no=get(select->getFalseValue(),historical,depth+1);
       if(!yes || !no)return {};Values result=*yes;for(const auto &v:*no)if(!append(result,v))return {};return result;
     }
@@ -117,7 +148,7 @@ struct Enumerator {
     auto left=get(binary->getOperand(0),historical,depth+1);
     auto right=get(binary->getOperand(1),historical,depth+1);
     if(!left || !right) {
-      if(opcode!=llvm::Instruction::And || work.exhausted)return {};
+      if(opcode!=llvm::Instruction::And || work.exhausted || scenario)return {};
       auto *mask=llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(0));
       auto *unknown=binary->getOperand(1);
       if(!mask){mask=llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(1));unknown=binary->getOperand(0);}
@@ -154,6 +185,39 @@ struct Enumerator {
     return result;
   }
 };
+// Only called after the old SSA enumeration failed. Every complete Boolean
+// assignment must yield finite values; unknown integer arms never disappear.
+MaybeValues correlatedAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,
+    llvm::Value *index,Work &work,bool &limited) {
+  std::deque<BooleanScenario> pending(1);
+  std::unordered_set<Key,KeyHash> keys;
+  Values result;std::size_t complete=0;
+  while(!pending.empty()) {
+    if(!work.charge(1+path.size()))return {};
+    auto scenario=std::move(pending.front());pending.pop_front();
+    Enumerator enumerate(&seed,path,work,&scenario);auto values=enumerate.get(index);limited|=enumerate.limited;
+    if(work.exhausted)return {};
+    if(scenario.missing) {
+      auto key=*scenario.missing;
+      if(!work.charge())return {};
+      keys.insert(key);
+      if(keys.size()>3){limited=true;return {};}
+      for(bool bit:{false,true}) {
+        if(!work.charge(1+scenario.values.size()))return {};
+        auto next=scenario;next.missing.reset();next.values.emplace(key,bit);pending.push_back(std::move(next));
+      }
+      continue;
+    }
+    if(!values)return {};
+    if(++complete>8){limited=true;return {};}
+    for(const auto &v:*values) {
+      if(!work.charge())return {};
+      if(std::find(result.begin(),result.end(),v)==result.end())result.push_back(v);
+      if(result.size()>MaxValues){limited=true;return {};}
+    }
+  }
+  return result.empty()?MaybeValues{}:MaybeValues{result};
+}
 llvm::Value *indexOf(llvm::BasicBlock &block) {
   auto *jump=llvm::dyn_cast<llvm::SwitchInst>(block.getTerminator());auto *load=jump && jump->getNumSuccessors()<=512?llvm::dyn_cast<llvm::LoadInst>(jump->getCondition()):nullptr;
   if(!load || load->getParent()!=&block || !load->isSimple() || !load->getType()->isIntegerTy(64) || load->getPointerAddressSpace()!=0)return nullptr;
@@ -257,6 +321,7 @@ MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicB
 std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions) {
   auto *index=indexOf(*path.back());if(!index)return {};
   Enumerator enumerate(&seed,path,work);auto addresses=enumerate.get(index);limited|=enumerate.limited;
+  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited);
   if(!addresses && storePredictions && !work.exhausted)addresses=storeAddresses(seed,path,index,work,limited);
   if(!addresses)return {};auto *jump=llvm::cast<llvm::SwitchInst>(path.back()->getTerminator());std::vector<std::uint64_t> values;
   for(const auto &address:*addresses) {
