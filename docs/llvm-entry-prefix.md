@@ -150,11 +150,12 @@ PassPipeline 会按变换步骤使分析缓存失效。
 聚焦回归覆盖函数/模块/参数身份、全局引用与普通元数据、
 PHI/重复出口、fresh 值、预算和拒绝时原 IR 不变。
 
-此前 standalone f-cff O0 pilot 在 32/2048 下复制 21 块、748 条指令；另行标准 LLVM
-优化把首次前缀的五处 Guest 栈写地址具体化，消除了 slot 70032 的真实 selector LOAD/switch，
-保留动态 bounds 并直达原 `bb_67010`。这只是一个首次入口的精度证据；standalone 配方不等于
-生产 pass 加旧三轮配方的完整真实回放。
+生产 pass 加旧三轮配方的四 ELF 真实回放为 **C16/LLVM16** 完整状态匹配，
+144 个错误控制全检出。f-cff O0 在 32/2048 下复制 21 块、748 条指令，后续优化
+消除了 slot 70032 的首次实际 selector LOAD/switch，保留动态 bounds 并直达原
+`bb_67010`。入口字节仍须检查，原循环/分发器仍保留；combo O0 前缀预算不足，
+combo O2 保守拒绝。旧内存/分发分析的 incomplete 仍如实报告。
 
-四 ELF 真实矩阵尚未最终验收。完整阶段验证及归档见
+完整阶段验证及归档见[真实验证](entry-prefix-real-validation-20261111.md)、
 [生产集成验证](entry-prefix-validation-20261111.md)和
 [独立原生验证](entry-prefix-production-native-20261111.md)。

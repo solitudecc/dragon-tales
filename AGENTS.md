@@ -217,6 +217,34 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Bounded first-entry prefixes (2026-11-12, base `071c775`, implementation `bb0c429`):
+see `docs/llvm-entry-prefix.md`, `docs/entry-prefix-validation-20261111.md`, and
+`docs/entry-prefix-real-validation-20261111.md`. Opt-in `entry-prefix` isolates
+the original guarded.accept edge with module-wide32blocks/2048instructions
+budgets (hard4096/65536). Calls/switch targets and DFS reentries stay original;
+exclusive same-switch RET leaves may join the prefix with all error effects.
+Root/internal/exit PHIs use actual edges and fresh values. Per-function trial
+and rollback preserve Module/Function/Argument identity, recursive references,
+globals/attributes; instruction/CFG handles expire. Unsupported liveouts, EH,
+blockaddress/debug identity or exhausted budgets report Incomplete. No assumed
+Guest stores, noalias, table immutability or default-pipeline changes.
+Final tests compile on old origin/main7de235d: main/no-Z3 each4cases/5assertions
+fail due absent builtin, not old wrong execution. New each5cases/107assertions;
+CTest1051/1051 and916/916. Actual production native each1824 full-state matches,
+608fault observations/198specified detections,9088comparator controls; each44
+saved streams/2432frames audited. Standalone prototype counts stay separate.
+Real four-ELF new recipe: C16/LLVM16 complete,144controls detected,4Graphs/source
+IR unchanged, each25runs=1prefix+3x8old steps. f-cffO0 guard still checks Guest
+70032==67010, but its first actual selector LOAD/switch disappears after the
+five now-constant stack writes; bounds/error Exit remain, valid path reaches
+original bb_67010. This is conditional first-entry precision, not full CFF
+removal. Prefix cffO0/O2 complete21/748 and22/961; comboO0 partial32/2007,
+comboO2 unchanged liveout refusal. Old GuestSSA12/12 and dispatch12/12 remain
+incomplete (budget12/16). No new Unicorn/IGNIL/full69-input campaign. No skips,
+exclusions or normalization added. Runtimes/logs/models/IR are frozen under
+`~/vmc-runs/entry-prefix-production-20261111/` and `entry-prefix-real-20261111/`,
+with dual-host archives in local `validation-artifacts/`.
+
 Guarded entry views (2026-11-11, baseline `7de235d`, implementation `aba656a`):
 see `docs/llvm-guarded-entry.md`, `docs/guarded-entry-validation-20261111.md`,
 and `docs/guarded-entry-real-validation-20261111.md`. Explicit independent
