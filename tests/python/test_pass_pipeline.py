@@ -53,7 +53,8 @@ with lift(g) as l,d.PassPipeline() as p:
     names={x['name'] for x in p.passes()}
     assert names==set(d.PassPipeline.DEFAULT_LLVM)|{
         'graph-audit','finite-values','control-flow',
-        'dispatch-specialize','dispatch-deflatten','guest-memory','entry-prefix'}
+        'dispatch-specialize','dispatch-deflatten','guest-memory','entry-prefix',
+        'guarded-transitions'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
@@ -63,6 +64,18 @@ with lift(g) as l,d.PassPipeline() as p:
     expect(d.PipelineError,lambda:p.run(l));assert l.ir()==before
     expect(ValueError,lambda:p.register('dependent',lambda c,o:None))
     expect(ValueError,lambda:p.register('wrong',lambda c,o:None,stage=7))
+
+with lift(g) as l,d.PassPipeline(['guarded-transitions']) as p:
+    assert 'guarded-transitions' not in d.PassPipeline.DEFAULT_LLVM
+    before=l.ir()
+    for option,limit in (('max_candidates',4096),('max_rewrites',4096),
+                         ('max_blocks',4096),('max_instructions',262144)):
+        expect(ValueError,lambda:p.add('guarded-transitions',**{option:limit+1}))
+    r=p.run(l)
+    assert r['ok'] and not r['changed'] and l.ir()==before
+    assert r['runs'][0]['status']==d.PassStatus.UNAVAILABLE
+    assert r['runs'][0]['counters']['available']==0
+    assert r['runs'][0]['counters']['rewritten_edges']==0
 
 with lift(g) as l,d.PassPipeline(['control-flow']) as p:
     assert 'control-flow' not in d.PassPipeline.DEFAULT_LLVM

@@ -1,0 +1,44 @@
+{
+  "schema": "guarded-transition-state43-explicit-contract-v1",
+  "input_local": "/tmp/dragon-index-cache-full-evidence/f-cff/O0/after-raw.ll",
+  "input_sha256": "dab36d3d945342c283ecfac097fa84a6ba47de5f0e01e5e030914979586343ed",
+  "function": "dragon_static_entry_x86_64_102a0.guarded.real_sp",
+  "state": 43,
+  "table_index": 69976,
+  "candidate": 66450,
+  "candidate_case_target": "memory.valid13.bb_66450_crit_edge",
+  "prediction_source": "Existing guarded.next43 equality check; never runtime immutability",
+  "preferred_request": {
+    "seed": "memory.valid11.state.context807",
+    "seed_successor": 1,
+    "path": ["memory.valid13.state.context809"],
+    "forward_successors": [],
+    "max_blocks": 32,
+    "max_instructions": 2048
+  },
+  "optional_full_path_request": {
+    "seed": "memory.valid225",
+    "seed_successor": 0,
+    "path": ["bb_66234.guest.edge533", "memory.valid7.guest.edge534", "bb_66252.state.context806", "memory.valid11.state.context807", "memory.valid13.state.context809"],
+    "forward_successors": [0, 1, 0, 1],
+    "max_blocks": 32,
+    "max_instructions": 2048
+  },
+  "source_effects": [
+    "First full-path block retains STORE 43 to RBP.39-120",
+    "bb_66252.state.context806 retains STORE 43 to RBP.39-128",
+    "Last block retains actual LOAD Guest[69976]",
+    "Every unknown bounds failure remains an original exit"
+  ],
+  "required_audit": [
+    "Preferred seed successor changes to private terminal guard",
+    "Guard compares the actual fresh target LOAD to 66450",
+    "True edge reaches original candidate case and its business block",
+    "False edge executes complete original switch/default with the SAME LOAD SSA value",
+    "No new Guest read, STORE deletion, noundef, noalias or immutable assumption",
+    "Original generic paths, PHI slot multiplicities and loop liveouts verify",
+    "After standard cleanup audit guard versus recombined switch explicitly"
+  ],
+  "status": "prepared_only_not_executed",
+  "full_loop_claim": false
+}

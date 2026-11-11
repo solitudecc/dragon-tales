@@ -1,4 +1,5 @@
 #include <dragon/passes/PassPipeline.hpp>
+#include "GuardedTransitions.hpp"
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
@@ -115,6 +116,28 @@ PassPipeline::PassPipeline(bool builtins) {
   registerLLVM("instcombine",[](LLVMContext &c,const Options &){c.lifter.runInstCombine();return Result{};},false,{},none);
   registerLLVM("gvn",[](LLVMContext &c,const Options &){c.lifter.runGVN();return Result{};},false,{},none);
   registerLLVM("dce",[](LLVMContext &c,const Options &){c.lifter.runDCE();return Result{};},false,{},none);
+  registerLLVM("guarded-transitions",[](LLVMContext &c,const Options &o) {
+    const auto s=llvmlifter::detail::runGuardedTransitions(c.lifter.module(),
+      {number(o,"max_candidates",64),number(o,"max_rewrites",32),
+       number(o,"max_blocks",128),number(o,"max_instructions",16384)});
+    Result r; r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
+    r.changed=s.changed;r.message=s.message;
+    r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
+      {"candidate_edges",s.candidateEdges},{"attempted_edges",s.attemptedEdges},
+      {"rewritten_edges",s.rewrittenEdges},{"unresolved_edges",s.unresolvedEdges},
+      {"rejected",s.rejected},{"budget_exhausted",s.budgetExhausted},
+      {"cloned_blocks",s.clonedBlocks},{"cloned_instructions",s.clonedInstructions},
+      {"original_switches_retained",s.originalSwitchesRetained},
+      {"fallback_switches_created",s.fallbackSwitchesCreated}};
+    return r;
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_candidates","max_rewrites","max_blocks","max_instructions"})(o);
+    if(!error.empty())return error;
+    if(number(o,"max_candidates",64)>4096 || number(o,"max_rewrites",32)>4096 ||
+       number(o,"max_blocks",128)>4096 || number(o,"max_instructions",16384)>262144)
+      return std::string{"guarded-transitions options exceed hard limits 4096/4096/4096/262144"};
+    return std::string{};
+  });
   registerLLVM("entry-prefix",[](LLVMContext &c,const Options &o) {
     const auto s=c.lifter.runEntryPrefix({number(o,"max_blocks",32),
                                         number(o,"max_instructions",2048)});

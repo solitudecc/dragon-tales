@@ -11,10 +11,12 @@ add_library(libdragon SHARED
         LLVMLifter.cpp
         LLVMDispatchSpecialization.cpp
         StateGuardEdges.cpp
+        GuardedTransition.cpp
         LLVMDeflattening.cpp
         CallEffectSummary.cpp
         GuestMemorySSA.cpp
         GuestMemoryEdges.cpp
+        GuardedTransitions.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp
         LLVMPredicateFolding.cpp
