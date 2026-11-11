@@ -62,5 +62,21 @@ O2仍24/3条原terminal；comboO0仅新增1业务成为5条，搜索截断仍inc
 
 完整冻结B+本组件现已完成C16/LLVM16全状态匹配与144/144错误控制，16原输入
 逐字节相同，Graph/source/pins不变；真正原生finalIR有49/24/5/3个guards，四组
-严格闭合均为false。归档及详细审核另行提交。**此实现里程碑不是完整循环去平坦化
+严格闭合均为false。详见[真实样本审核](guarded-business-real-validation-20261112.md)。**此实现里程碑不是完整循环去平坦化
 验收。**没有新增单指令/IGNIL/69输入campaign，也没有独立二进制输出功能。
+
+## 最终归档
+
+实现提交 `d253869`。以下包在 Mac 与 VM 均保留；root 独立重新核对包 SHA、
+精确文件集合及所有 payload 大小/SHA，运行库 gzip 同样完整解压核验。
+Mac 根 `/Users/c/Desktop/deob/validation-artifacts/`，VM 根 `~/vmc-runs/`：
+
+| 包（相对根） | SHA256 | payload文件 |
+|---|---|---:|
+| guarded-business-corridors-20261112/guarded-business-corridors-metadata-v1.tar.gz | 9b2bf432319a0354e38972ed748d50751ad7ebbc0af96ecdc02314bff152796a | 71 |
+| guarded-business-native-20261112.tar.gz | 06a6cfba3b8a13fe8a31546055e011452681c757f66bb871db3ea16ea48266b4 | 576 |
+| guarded-business-real-20261112.tar.gz | 33ae211b9b86f3dc0fc32ae67fda70d8e38ecf28523f82162be562fb5bed355e | 320 |
+| guarded-business-full-real-20261112/recipe-B.tar.gz | c45bb0eb693b563bf2b9d5807f8eb11d3ddf258bdc508f8f444cbf95683e1e2f | 426 |
+
+本阶段验证已完成；完整循环闭合仍未完成。下一步是精确常量分支清理及独立候选
+集合的实际目标保护，所有未知目标继续走同次 LOAD 的原始完整 fallback。

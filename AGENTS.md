@@ -2569,3 +2569,13 @@ full-state matches (1536 before,1280 transformed after,256 unchanged CALL after)
 pass; final archives/reports pending. cffO0 explicit
 512-block profile rewrites24terminal+25business edges; strict fast-loop closure
 still fails. See docs/guarded-business-corridors-20261112.md.
+
+Business corridor final replay (2026-11-12, implementation d253869): full frozen
+B C16/LLVM16 complete-state matches and 144 specified controls; original inputs,
+Graph and runtime pins unchanged. Real guards 49/24/5/3, all four strict closure
+gates remain false. Independent five-pass tail makes cffO0's 25 state branches
+literal false while preserving 49 dynamic guards; tail native executions zero.
+Root independently verified all final archive payloads; see
+docs/guarded-business-corridors-20261112.md and guarded-business-real-validation-20261112.md.
+Next: explicit constant-only terminator folding, then separately hinted finite
+business target guards. Never infer immutable table bytes or remove the full fallback.
