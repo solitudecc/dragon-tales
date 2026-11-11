@@ -1763,6 +1763,74 @@ class LLVMLifter:
         finally:
             lib.dragon_cstr_free(raw)
 
+    def guarded_entry_view(self, initial_state, *, context_id, provenance):
+        """Create an independent view with checked entry bytes and fallback.
+
+        Requires an unoptimized StaticAnalysis/FunctionStart root. Candidates
+        use FiniteEntryState's register/Guest byte representation, but are
+        runtime-checked, not assumed immutable. A mismatch executes the original
+        root. Select the new symbol from guarded_entry_manifest() explicitly.
+        The source may be closed after creation; the view owns its LLVM context.
+        """
+        if not self._ptr:
+            raise ReferenceError('LLVMLifter has been closed')
+        if getattr(self, '_pass_active', False):
+            raise RuntimeError('cannot create a guarded view during a pass run')
+        if not isinstance(initial_state, FiniteEntryState):
+            raise TypeError('initial_state must be FiniteEntryState')
+        if not isinstance(context_id, str) or not isinstance(provenance, str):
+            raise TypeError('context_id and provenance must be strings')
+        if '\0' in context_id or '\0' in provenance:
+            raise ValueError('guarded entry strings cannot contain NUL')
+        identifier, origin = context_id.encode('utf-8'), provenance.encode('utf-8')
+        if not 1 <= len(identifier) <= 64 or not 1 <= len(origin) <= 4096:
+            raise ValueError('guarded entry strings exceed their byte limits')
+        facts = FiniteEntryState(initial_state.entry, registers=initial_state.registers,
+                                 memory=initial_state.memory)
+        if len(facts.registers) + len(facts.memory) > 256 or (
+                sum(w // 8 for _, w, _ in facts.registers) +
+                sum(len(data) for _, data in facts.memory) > 4096):
+            raise ValueError('guarded entry permits at most 256 rows and 4096 bytes')
+        native = ffi.new('dragon_finite_entry_state_t*')
+        native.entry = facts.entry
+        regs = ffi.new('dragon_finite_register_fact_t[]', len(facts.registers)) if facts.registers else ffi.NULL
+        cells = ffi.new('dragon_finite_memory_fact_t[]', len(facts.memory)) if facts.memory else ffi.NULL
+        native.registers, native.register_count = regs, len(facts.registers)
+        native.memory, native.memory_count = cells, len(facts.memory)
+        keep = [regs, cells]
+        for i, (offset, width, value) in enumerate(facts.registers):
+            regs[i].offset, regs[i].width, regs[i].value = offset, width, value
+        for i, (address, payload) in enumerate(facts.memory):
+            data = ffi.new('uint8_t[]', payload)
+            keep.append(data)
+            cells[i].address, cells[i].bytes, cells[i].size = address, data, len(payload)
+        error = ffi.new('char**')
+        ptr = lib.dragon_llvm_lifter_create_guarded_entry_view(
+            self._ptr, native, identifier, origin, error)
+        try:
+            if ptr == ffi.NULL:
+                detail = ffi.string(error[0]).decode('utf-8', errors='replace') if error[0] != ffi.NULL else 'guarded entry creation failed'
+                raise ValueError(detail)
+        finally:
+            if error[0] != ffi.NULL:
+                lib.dragon_cstr_free(error[0])
+        view = LLVMLifter.__new__(LLVMLifter)
+        view._ptr = ptr
+        return view
+
+    def guarded_entry_manifest(self):
+        """Return the checked-fact manifest, or {} for an ordinary lifter."""
+        if not self._ptr:
+            raise ReferenceError('LLVMLifter has been closed')
+        raw = lib.dragon_llvm_lifter_guarded_entry_manifest(self._ptr)
+        if raw == ffi.NULL:
+            raise RuntimeError('failed to read guarded entry manifest')
+        try:
+            import json
+            return json.loads(ffi.string(raw).decode())
+        finally:
+            lib.dragon_cstr_free(raw)
+
     def run_mem2reg(self):
         """Promote allocas to SSA values."""
         lib.dragon_llvm_lifter_run_mem2reg(self._ptr)

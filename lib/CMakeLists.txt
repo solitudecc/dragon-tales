@@ -19,6 +19,7 @@ add_library(libdragon SHARED
         LLVMLiftProvenance.cpp
         LLVMPredicateFolding.cpp
         LLVMMBASimplification.cpp
+        LLVMGuardedEntry.cpp
         LLVMExecution.cpp
         LLVMImportMetadata.cpp
 )
@@ -53,6 +54,8 @@ llvm_map_components_to_libnames(LLVM_LIBS
         Object
         DebugInfoDWARF
         Support
+        BitReader
+        BitWriter
         Passes
         TransformUtils
         X86

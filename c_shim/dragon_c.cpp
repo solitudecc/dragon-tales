@@ -1380,6 +1380,73 @@ char *dragon_llvm_lifter_ir(const dragon_llvm_lifter_t *l) {
   return dup_string(l->lifter.ir());
 }
 
+dragon_llvm_lifter_t *dragon_llvm_lifter_create_guarded_entry_view(
+    const dragon_llvm_lifter_t *l, const dragon_finite_entry_state_t *facts,
+    const char *context_id, const char *provenance, char **error) {
+  if (error) *error = nullptr;
+  auto fail = [&](const std::string &message) -> dragon_llvm_lifter_t * {
+    if (error) *error = dup_string(message);
+    return nullptr;
+  };
+  try {
+    if (!l || !facts || !context_id || !provenance)
+      return fail("guarded entry requires a lifter, facts and provenance strings");
+    auto bounded = [](const char *s, std::size_t cap) {
+      std::size_t n = 0;
+      while (n <= cap && s[n]) ++n;
+      return n;
+    };
+    const auto idSize = bounded(context_id, 64);
+    const auto provenanceSize = bounded(provenance, 4096);
+    if (!idSize || idSize > 64 || !provenanceSize || provenanceSize > 4096)
+      return fail("invalid guarded entry context or provenance length");
+    if (facts->register_count > 256 || facts->memory_count > 256 ||
+        facts->register_count + facts->memory_count > 256 ||
+        (facts->register_count && !facts->registers) ||
+        (facts->memory_count && !facts->memory))
+      return fail("invalid guarded entry fact arrays");
+    dragon::llvmlifter::GuardedEntryContext context;
+    context.entry = facts->entry;
+    context.contextId.assign(context_id, idSize);
+    context.provenance.assign(provenance, provenanceSize);
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < facts->register_count; ++i) {
+      const auto &r = facts->registers[i];
+      if (r.width < 8 || r.width > 64 || r.width % 8 ||
+          (r.width < 64 && (r.value >> r.width)))
+        return fail("invalid guarded register width or value");
+      if (r.width / 8 > 4096 - bytes)
+        return fail("guarded entry byte limit exceeded");
+      dragon::llvmlifter::GuardedEntryBytes row{r.offset, {}};
+      for (unsigned j = 0; j < r.width / 8; ++j)
+        row.bytes.push_back(static_cast<std::uint8_t>(r.value >> (8 * j)));
+      bytes += row.bytes.size();
+      context.registers.push_back(std::move(row));
+    }
+    for (std::size_t i = 0; i < facts->memory_count; ++i) {
+      const auto &m = facts->memory[i];
+      if (!m.size || !m.bytes || m.size > 4096 - bytes)
+        return fail("invalid guarded memory bytes or byte limit");
+      bytes += m.size;
+      context.memory.push_back({m.address, {m.bytes, m.bytes + m.size}});
+    }
+    std::string detail;
+    auto view = l->lifter.createGuardedEntryView(context, detail);
+    if (!view) return fail(detail);
+    return new dragon_llvm_lifter{std::move(*view)};
+  } catch (const std::exception &e) {
+    return fail(e.what());
+  } catch (...) {
+    return fail("guarded entry creation failed");
+  }
+}
+
+char *dragon_llvm_lifter_guarded_entry_manifest(const dragon_llvm_lifter_t *l) {
+  if (!l) return nullptr;
+  try { return dup_string(l->lifter.guardedEntryManifest()); }
+  catch (...) { return nullptr; }
+}
+
 void dragon_llvm_lifter_run_mem2reg(dragon_llvm_lifter_t *l) {
   if (l)
     l->lifter.runMem2Reg();

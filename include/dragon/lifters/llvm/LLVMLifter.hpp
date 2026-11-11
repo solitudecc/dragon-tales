@@ -17,7 +17,9 @@
 #include <memory>
 #include <set>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace dragon::llvmlifter {
 
@@ -77,6 +79,18 @@ struct StaticRegionOptions {
   /// addresses may then be decoded instruction starts without existing blocks.
   /// Existing custom IGNIL rewrites are not the source of this machine view.
   bool rebuildDecodedBlocks = false;
+};
+
+struct GuardedEntryBytes {
+  std::uint64_t offset = 0;
+  std::vector<std::uint8_t> bytes;
+};
+struct GuardedEntryContext {
+  std::uint64_t entry = 0;
+  std::string contextId;
+  std::string provenance;
+  std::vector<GuardedEntryBytes> registers;
+  std::vector<GuardedEntryBytes> memory;
 };
 
 class LLVMLifter {
@@ -213,6 +227,15 @@ class LLVMLifter {
       const Graph &graph, const MemoryForwardOptions &options = {});
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const Graph &graph, const MemoryForwardOptions &options, bool enableEdgeWorklist);
+
+  /// Create an independent owned module with a separately named guarded entry.
+  /// Only unchanged canonical StaticAnalysis/FunctionStart entries are admitted.
+  /// Failed runtime byte/size guards invoke the ordinary root. Internal calls
+  /// and loop reentries never acquire new entry facts. Source IR is unchanged.
+  [[nodiscard]] std::unique_ptr<LLVMLifter> createGuardedEntryView(
+      const GuardedEntryContext &, std::string &error) const;
+  /// Owned JSON manifest, or "{}" for an ordinary lifter.
+  [[nodiscard]] std::string guardedEntryManifest() const;
 
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();

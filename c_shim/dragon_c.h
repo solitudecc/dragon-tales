@@ -790,6 +790,19 @@
   // Dump textual LLVM IR. Caller must free with dragon_cstr_free.
   char* dragon_llvm_lifter_ir(const dragon_llvm_lifter_t* l);
 
+  // Create an independently owned StaticAnalysis/FunctionStart view. Facts
+  // are checked at its external entry; mismatches execute the original root.
+  // No image immutability or caller precondition is inferred. At most 256
+  // rows / 4096 bytes; strings must be valid C strings. Does not modify l.
+  // On failure returns null and optionally an owned error string. Free error
+  // with dragon_cstr_free; destroy the returned view normally.
+  dragon_llvm_lifter_t* dragon_llvm_lifter_create_guarded_entry_view(
+      const dragon_llvm_lifter_t* l, const dragon_finite_entry_state_t* facts,
+      const char* context_id, const char* provenance, char** error);
+  // Owned JSON containing the entry symbol, checked facts and provenance;
+  // returns {} for a lifter without a guarded view, null on API failure.
+  char* dragon_llvm_lifter_guarded_entry_manifest(const dragon_llvm_lifter_t* l);
+
   void dragon_llvm_lifter_run_mem2reg(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_inst_combine(dragon_llvm_lifter_t* l);
   void dragon_llvm_lifter_run_gvn(dragon_llvm_lifter_t* l);
