@@ -91,9 +91,12 @@ struct Plan {
   std::vector<llvm::Instruction *> definitions;
   std::size_t copyCost = 0;
   llvm::BasicBlock *caseTarget = nullptr;
+  std::vector<std::pair<llvm::ConstantInt *,llvm::BasicBlock *>> fastCases;
+  bool setMode = false;
 };
 bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
-             const GuardedTransitionOptions &o, Plan &p, GuardedTransitionResult &r) {
+             const GuardedTransitionOptions &o, Plan &p, GuardedTransitionResult &r,
+             const std::vector<llvm::ConstantInt *> *candidates) {
   if (!q.seed || !q.seedTarget || q.blocks.empty() || !q.candidate ||
       q.forwardSuccessors.size() + 1 != q.blocks.size())
     return fail(r, "malformed explicit path");
@@ -132,6 +135,21 @@ bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
   auto chosen = jump->findCaseValue(q.candidate);
   if (chosen == jump->case_default()) return fail(r, "candidate is not an original case");
   p.caseTarget = chosen->getCaseSuccessor();
+  if(candidates) {
+    if(candidates->empty() || candidates->size()>16)return fail(r,"target set must contain 1 to 16 candidates");
+    p.setMode=true;
+    for(auto *candidate:*candidates) {
+      if(!candidate || &candidate->getContext()!=&f.getContext() || candidate->getType()!=load->getType())
+        return fail(r,"target set contains a foreign or mismatched candidate");
+      for(const auto &[old,target]:p.fastCases) {
+        (void)target;
+        if(old->getValue()==candidate->getValue())return fail(r,"target set contains duplicate candidates");
+      }
+      auto item=jump->findCaseValue(candidate);
+      if(item==jump->case_default())return fail(r,"target set contains a non-case candidate");
+      p.fastCases.emplace_back(candidate,item->getCaseSuccessor());
+    }
+  }
   for (std::size_t n = 0; n < q.blocks.size(); ++n) {
     auto *b = q.blocks[n], *pred = n ? q.blocks[n - 1] : q.seed;
     for (auto &i : *b) {
@@ -170,7 +188,7 @@ bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
     }
   }
   auto blocks = q.blocks.size() + 1 + !p.snapshots.empty();
-  p.copyCost = instructions + 2 + (p.snapshots.empty() ? 0 : p.snapshots.size() + 1);
+  p.copyCost = instructions + (p.setMode ? 1 : 2) + (p.snapshots.empty() ? 0 : p.snapshots.size() + 1);
   if (blocks > o.maxBlocks || p.copyCost > o.maxInstructions)
     return fail(r, "guard and snapshot copy budget exhausted", true);
   std::size_t liveOuts = 0, uses = p.snapshots.size();
@@ -246,8 +264,13 @@ bool apply(Plan &p, llvm::Function &f, GuardedTransitionResult &r) {
   jump->removeFromParent();
   jump->insertInto(fallback, fallback->end());
   llvm::IRBuilder<> builder(last);
-  auto *matches = builder.CreateICmpEQ(jump->getCondition(), q.candidate, "transition.matches");
-  builder.CreateCondBr(matches, p.caseTarget, fallback);
+  if(p.setMode) {
+    auto *fast=builder.CreateSwitch(jump->getCondition(),fallback,p.fastCases.size());
+    for(const auto &[value,target]:p.fastCases)fast->addCase(value,target);
+  } else {
+    auto *matches = builder.CreateICmpEQ(jump->getCondition(), q.candidate, "transition.matches");
+    builder.CreateCondBr(matches, p.caseTarget, fallback);
+  }
   // One incoming per actual successor slot, including repeated targets.
   auto addExit = [&](llvm::BasicBlock *original, llvm::BasicBlock *copy,
                      llvm::BasicBlock *target) {
@@ -264,7 +287,9 @@ bool apply(Plan &p, llvm::Function &f, GuardedTransitionResult &r) {
               term->getSuccessor(edge));
     }
   }
-  addExit(q.blocks.back(), last, p.caseTarget);
+  if(p.setMode) {
+    for(const auto &[value,target]:p.fastCases) {(void)value;addExit(q.blocks.back(),last,target);}
+  } else addExit(q.blocks.back(), last, p.caseTarget);
   if (snapshots) llvm::BranchInst::Create(clones.front(), snapshots);
   q.seed->getTerminator()->setSuccessor(q.seedSuccessor, snapshots ? snapshots : clones.front());
   for (auto &phi : q.blocks.front()->phis())
@@ -337,9 +362,10 @@ bool commit(llvm::Function &source, llvm::Function &trial, std::string &error) {
   return true;
 }
 } // namespace
-GuardedTransitionResult cloneGuardedTransition(
+static GuardedTransitionResult cloneTransitionImpl(
     llvm::Function &f, const GuardedTransitionRequest &q,
-    const GuardedTransitionOptions &o) {
+    const GuardedTransitionOptions &o,
+    const std::vector<llvm::ConstantInt *> *candidates) {
   GuardedTransitionResult r;
   if (!f.getParent()) { fail(r, "function has no module"); return r; }
   std::string error;
@@ -353,7 +379,7 @@ GuardedTransitionResult cloneGuardedTransition(
   }
   if (!supportedIdentity(f, r)) return r;
   Plan original;
-  if (!prepare(f, q, o, original, r)) return r;
+  if (!prepare(f, q, o, original, r, candidates)) return r;
   llvm::ValueToValueMapTy map;
   auto *trial = makeTrial(f, map);
   auto copied = q;
@@ -361,7 +387,7 @@ GuardedTransitionResult cloneGuardedTransition(
   copied.seedTarget = llvm::cast<llvm::BasicBlock>(map.lookup(q.seedTarget));
   for (auto &block : copied.blocks) block = llvm::cast<llvm::BasicBlock>(map.lookup(block));
   Plan plan;
-  if (!prepare(*trial, copied, o, plan, r)) { trial->eraseFromParent(); return r; }
+  if (!prepare(*trial, copied, o, plan, r, candidates)) { trial->eraseFromParent(); return r; }
   if (!apply(plan, *trial, r)) {
     trial->eraseFromParent();
     r.clonedBlocks = r.clonedInstructions = r.snapshotPhis = r.repairPhis = r.originalExitEdges = 0;
@@ -381,5 +407,18 @@ GuardedTransitionResult cloneGuardedTransition(
   if (!r.changed)
     r.clonedBlocks = r.clonedInstructions = r.snapshotPhis = r.repairPhis = r.originalExitEdges = 0;
   return r;
+}
+GuardedTransitionResult cloneGuardedTransition(
+    llvm::Function &f,const GuardedTransitionRequest &q,const GuardedTransitionOptions &o) {
+  return cloneTransitionImpl(f,q,o,nullptr);
+}
+GuardedTransitionResult cloneGuardedTransitionSet(
+    llvm::Function &f,const GuardedTransitionSetRequest &q,const GuardedTransitionOptions &o) {
+  GuardedTransitionResult result;
+  if(q.candidates.empty() || q.candidates.size()>16) {
+    fail(result,"target set must contain 1 to 16 candidates");return result;
+  }
+  GuardedTransitionRequest path{q.seed,q.seedSuccessor,q.seedTarget,q.blocks,q.forwardSuccessors,q.candidates.front()};
+  return cloneTransitionImpl(f,path,o,&q.candidates);
 }
 } // namespace dragon::llvmlifter::detail

@@ -2594,3 +2594,16 @@ comparator controls,48 saved streams6144frames. Real C16/LLVM16 and144 controls
 pass; cffO0 folds25 literalbranches/removes49blocks, comboO0 1/5, O2 unchanged.
 All49/24/5/3 guards retained; all four strict closure gates still false.
 See docs/llvm-constant-branches.md. Full loop closure remains unclaimed.
+
+Guarded target sets (2026-11-12, baseline 5cac879): new independent
+`dragon.indirect-target-hints` holds untrusted little-endian table candidates.
+Opt-in `guarded-target-sets` copies an actual incoming slot and builds an at-most
+16-case switch on the actual target LOAD; default uses the same value/full old
+switch. No changes to real `dragon.guarded-entry` JSON memory. Old single API
+layout/compare branch retained; repeated PHI/default slots fixed by shared core.
+Final focus main/noZ3 each28/927, full1093/958. Old new-API regressions each6/20
+with5 failures (builtin absent) and legacy passing. Old/new24 single-path IRs
+byte-identical on main. Real probes yield six-case guards on all four modules;
+cffO0 conditional fastSCC closure true, others false. Native/real complete-state
+validation and actual fast-loop observation are ongoing; not final loop acceptance.
+See docs/guarded-target-sets-20261112.md.

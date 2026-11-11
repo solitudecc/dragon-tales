@@ -14,6 +14,16 @@ struct GuardedTransitionRequest {
   std::vector<unsigned> forwardSuccessors;
   llvm::ConstantInt *candidate = nullptr;
 };
+// Separate request: the existing single-candidate API and its layout remain
+// unchanged. Candidates are predictions, never facts about mutable memory.
+struct GuardedTransitionSetRequest {
+  llvm::BasicBlock *seed = nullptr;
+  unsigned seedSuccessor = 0;
+  llvm::BasicBlock *seedTarget = nullptr;
+  std::vector<llvm::BasicBlock *> blocks;
+  std::vector<unsigned> forwardSuccessors;
+  std::vector<llvm::ConstantInt *> candidates;
+};
 struct GuardedTransitionOptions {
   // Independent budgets, including guard/fallback, snapshots and SSA repair.
   std::size_t maxBlocks = 32;
@@ -43,5 +53,10 @@ struct GuardedTransitionResult {
 // This helper does not prove state/table facts.
 GuardedTransitionResult cloneGuardedTransition(
     llvm::Function &, const GuardedTransitionRequest &,
+    const GuardedTransitionOptions & = {});
+// A small switch on the SAME actual LOAD selects known cases; its default
+// retains the full original switch/default. At most 16 distinct candidates.
+GuardedTransitionResult cloneGuardedTransitionSet(
+    llvm::Function &, const GuardedTransitionSetRequest &,
     const GuardedTransitionOptions & = {});
 }
