@@ -2611,3 +2611,28 @@ and144 controls pass; first run disk-stopped at64MiB and remains a failed archiv
 Only cffO0 conditional closure true; actual fast-loop observation is pending,
 so this is not final loop acceptance.
 See docs/guarded-target-sets-20261112.md.
+
+
+Guarded SSA state corridors (2026-11-12, baseline 313df60, implementation 500ba7f):
+new opt-in guarded-state-corridors predicts finite SSA table addresses on actual
+incoming PHI paths, preserving historical views, original operations/flags and
+same-LOAD full fallback. No immutable table, alias or no-poison assumption.
+Discovery is bounded before transactions, with cached instruction counts and
+charged PHI scans. Main/no-Z3 related 35/1110; CTest 1100/1100 and 965/965.
+Old public-string regressions compile and fail 7/15 assertions in both builds
+because the builtin is absent, not because old execution is semantically wrong.
+Independent each-build native 9216 normal observations (3072 before, 5120 copied
+after, 1024 unchanged CALL after), 1732 specified faults / 3584 fault observations,
+101376 comparator controls; all 50 streams / 12800 frames reaudited. No skips or
+normalizations. Real fixed 45-step recipe C16/LLVM16 full state and 144 controls,
+170.097s, all source/runtime/input pins unchanged. Export-to-wrapper-to-actual
+llc input binding checked. Final fast closure remains one of four: cff O0 only.
+F copies cff O2 17 and combo O2 23 paths; missing bitwise expressions and finite
+STORE predictions remain. The real observer has not run; LLVM-only observer
+selftests do not prove real-loop execution. First audit missing-PYTHONPATH failure
+retained separately. See docs/llvm-guarded-state-corridors.md and linked native/
+real reports. Frozen source/unit logs: guarded-state-corridors-20261112; native:
+guarded-state-corridor-native-20261112; real: guarded-state-corridors-full-real-20261112.
+Raw F libraries were retired after explicit use-ended confirmation and verification;
+compressed full payloads are on Mac only under validation-artifacts, with exact
+restore receipts on both hosts. Do not load a nonexistent old runtime path.
