@@ -217,6 +217,27 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Explicit Guest-memory pipeline and loop membership (2026-11-11, baseline
+`ca245bc`): `a7ed9bd` adds opt-in `guest-memory`, preserving the historical
+custom `guest-memory-ssa` name and default six-step optimize. All 19 native
+stats and unavailable/incomplete survive; flags accept integer 0/1, Graph-only
+proof options are rejected. `ee041f9` repairs both ordinary and byte walkers:
+each natural backedge needs its own visited set before merging loop membership.
+A global visited set could let an inner loop truncate an outer closure.
+Final old builtin tests fail 10 cases/25 assertions; old final nested tests fail
+2 cases/432 assertions. Main/no-Z3 related tests each82/3516; full CTest
+1013/1013 and878/878. Independent native old/new each9216 full-state matches,
+512 specified faults detected; old native matches, so no old wrong-result claim.
+Three explicit pipeline rounds expose real f-cff O0 table LOAD indices
+70032,69760,69736 while retaining original switches/defaults/LOADs; this is
+recipe precision, not complete CFF removal or a new builtin proof algorithm.
+Each call reanalyses current LLVM, without reusing stale lowering certificates.
+The historical strict callback/builtin counter comparison still failed and is
+preserved: fixed same-IR padding probes stabilize loopBarriers at35, but
+joinBarriers still varies0/1. Do not claim all diagnostics deterministic.
+See docs/guest-memory-pipeline-integration-20261111.md and the linked independent
+real/native records. No new full69 corpus or instruction campaign is claimed.
+
 STORE contexts and multi-level Guest hubs (2026-11-11, baseline `a0b92a3`,
 implementation `a5eb193`): see `docs/llvm-o0-state-memory.md` and
 `docs/store-hub-independent-validation-20261111.md`. Explicit numeric
