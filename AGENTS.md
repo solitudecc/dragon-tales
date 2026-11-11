@@ -217,6 +217,31 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Guarded entry views (2026-11-11, baseline `7de235d`, implementation `aba656a`):
+see `docs/llvm-guarded-entry.md`, `docs/guarded-entry-validation-20261111.md`,
+and `docs/guarded-entry-real-validation-20261111.md`. Explicit independent
+StaticAnalysis/FunctionStart views check candidate register/Guest bytes in IR;
+failure calls the ordinary root. Wrong PC defaults, loop reentry and recursive
+ordinary calls remain. No image immutability, noalias or assume is added.
+Only canonical raw prologues are accepted; manifest is provenance, not a
+certificate for arbitrary public-module edits or host-frame introspection.
+Main/no-Z3 each pass core 7/226, C 2/109 and Python checks; CTest1045/1045 and
+910/910. Final tests cannot compile old API; do not label that a runtime defect.
+Independent old/main/no-Z3 native comparisons:2240/6720/6720 complete arena
+matches; each1120 faulty snapshots/560 required differences detected,6/18/18
+protected-page probes plus badread controls. No skips/exclusions/normalization.
+Strict SSA audit confirms the synthetic plain result uses checked constant14.
+Real SP and SP+output eachC16/LLVM16 and144 controls pass, but both real precision
+gates FAIL: CFF selector LOADs remain18/17/3/4; shared pass budgets stay incomplete.
+SP-only final-IR observer16 matches/16guard hits is separately counted.
+Do not claim real de-flattening or silently change those frozen recipes.
+First f-cff O0 dispatch is blocked by a20-way RSP PHI and5possible table-aliasing
+stack writes along9blocks, with no CALL; see `guarded-entry-loop-diagnosis-20261111.md`.
+Native/source metadata596payloads49,503,719B and four compressed runtimes are
+dual-host verified under `~/vmc-runs/guarded-entry-20261111/` and local
+`validation-artifacts/guarded-entry-20261111/`; real evidence has three separate
+verified archives. Entry-prefix prototypes are separate unfinished work.
+
 Dispatcher expression-budget reporting (2026-11-11, baseline `3bc5f2e`, fix
 `1f5284a`): see `docs/dispatch-proof-budget-20261111.md`. Global branch/switch
 constant proofs that exceed maxExpressionNodes now mark complete=false and

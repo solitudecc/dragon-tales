@@ -124,6 +124,8 @@ are separately recorded. Real success requires a CFF target-selector LOAD or
 switch simplification in the guarded body; checking API availability or passing
 a semantic replay alone is insufficient.
 
-Validation results and remaining precision limits are recorded separately in
-the stage report when those runs finish. No new instruction campaign, general
+Validation results and remaining precision limits are recorded in
+[the stage report](guarded-entry-validation-20261111.md) and the
+[first-dispatch diagnosis](guarded-entry-loop-diagnosis-20261111.md).
+No new instruction campaign, general
 heap analysis, VM devirtualization or standalone rewritten binary is included.
