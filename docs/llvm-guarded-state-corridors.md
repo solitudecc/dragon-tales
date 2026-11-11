@@ -14,6 +14,8 @@ This implementation depends on the independent `GuardedTransitionSetRequest` cor
 
 ## Predictions and execution views
 
+The later [finite bitwise extension](llvm-guarded-finite-bitwise.md) adds And/Or/Xor and bounded mask predictions to this same builtin; the F validation figures below describe its earlier frozen baseline.
+
 The named metadata `dragon.guarded-entry` contains a JSON manifest. This component reads its `view_symbol` and memory byte rows solely as predictions. It neither changes that metadata nor adds entry assumptions. Memory rows are limited to 256 and 4096 bytes, reject overlap, invalid hex and range overflow, and must be little-endian 64-bit Guest addresses for this implementation. This does not relax the separate natural-business-table component's 16-target limit.
 
 The terminal must be a simple AS0 i64 LOAD in the same block as its switch, through a byte GEP on the Guest data pointer loaded from function argument 1. A literal address remains the responsibility of the existing constant-context controller. Finite address sets are evaluated with APInt at their IR widths, through PHIs, selects, integer casts and Add/Sub/Mul/Shl. At most eight distinct values, 128 expression visits and depth 32 are admitted. Oversized shifts, unknown values, undef, poison, LOAD, freeze and cyclic dependencies do not produce a finite prediction. Select conditions are not evaluated: the two value arms are only candidate sources. Instruction flags remain in the executed copy; enumeration is not a no-poison proof.

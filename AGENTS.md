@@ -2636,3 +2636,30 @@ guarded-state-corridor-native-20261112; real: guarded-state-corridors-full-real-
 Raw F libraries were retired after explicit use-ended confirmation and verification;
 compressed full payloads are on Mac only under validation-artifacts, with exact
 restore receipts on both hosts. Do not load a nonexistent old runtime path.
+
+
+Finite bitwise guarded predictions (2026-11-12, implementation 9886747):
+APInt And/Or/Xor and <=3-bit literal-mask candidates extend the existing opt-in
+state controller. Preserve flags/actual reads/full fallback; masks are never
+static bounds. Old F main/no-Z3 each4 cases/77 assertions, 3 precision failures
+(not missing API), negative case passes. New related39/1369; full1104/1104,
+969/969. Independent each-build8192 normal observations (4096before,3584copied,
+512unchanged),1472specified faults/3584fault observations,90112comparator controls;
+46streams11776frames each reaudited. Original F69IR outputs remain byte-identical.
+Real unchanged45step recipe C16/LLVM16 full state+144controls,177.142s; precise
+export/wrapper/actual-llc bindings and all pins pass. Source Exit-PC+fullcase
+family audit now includes two renamed combo prefix selectors that default-name
+matching missed; previous and current closed counts both remain1/4, cffO0 only.
+G cffO0 actual observer: four original inputs, single view entry/admission,
+all50central visits and prediction failures zero; same SCC guard visits
+51/63/30/53. Complete state bytes equal formal outputs. Four double-count
+controls rejected; omitted-first-central emission detected. Initial observer
+runner wrongly expected all central sites omitted; failure and all8 streams
+retained, v2 fixes only that expectation and counts only final4+4 observations.
+Scope is guarded-view execution, not recursive callees/all programs/other3ELFs.
+See docs/llvm-guarded-finite-bitwise.md and linked native/real/observer reports.
+G source/unit metadata v2 adds old-tests-v1 omitted from v1 archive allowlist;
+v1 remains saved, production/test sources unchanged. Raw G libraries retired
+after all use ended; exact full gzips remain Mac-only with restore receipts.
+Remaining: selected path STORE PHIs, correlated Boolean states, unresolved
+CALL-return state and precise bounded resumption; never silently discard these.
