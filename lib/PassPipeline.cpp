@@ -115,6 +115,38 @@ PassPipeline::PassPipeline(bool builtins) {
   registerLLVM("instcombine",[](LLVMContext &c,const Options &){c.lifter.runInstCombine();return Result{};},false,{},none);
   registerLLVM("gvn",[](LLVMContext &c,const Options &){c.lifter.runGVN();return Result{};},false,{},none);
   registerLLVM("dce",[](LLVMContext &c,const Options &){c.lifter.runDCE();return Result{};},false,{},none);
+  registerLLVM("guest-memory",[](LLVMContext &c,const Options &o) {
+    llvmlifter::MemoryForwardOptions options;
+    options.maxRewrites=number(o,"max_rewrites",65536);
+    options.runMem2Reg=number(o,"run_mem2reg",1)!=0;
+    options.enableCrossBlock=number(o,"enable_cross_block",1)!=0;
+    options.enablePhi=number(o,"enable_phi",1)!=0;
+    options.consumeCallEffectSummaries=number(o,"consume_call_effect_summaries",0)!=0;
+    const auto s=c.lifter.runGuestMemorySSA(options);
+    Result r;
+    r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
+    r.changed=s.changed;
+    if(!s.available)r.message="Guest memory analysis requires a nonempty StaticAnalysis or StatefulV2 module";
+    r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
+      {"blocks_visited",s.blocksVisited},{"guest_loads",s.guestLoads},
+      {"guest_stores",s.guestStores},{"loads_forwarded",s.loadsForwarded},
+      {"loads_reused",s.loadsReused},{"call_barriers",s.callBarriers},
+      {"alias_barriers",s.aliasBarriers},{"partial_overlaps",s.partialOverlaps},
+      {"phis_inserted",s.phisInserted},{"join_barriers",s.joinBarriers},
+      {"loop_barriers",s.loopBarriers},{"budget_exhausted",s.budgetExhausted},
+      {"byte_rebuilds",s.byteRebuilds},{"leaf_calls_preserved",s.leafCallsPreserved},
+      {"summary_calls_preserved",s.summaryCallsPreserved},
+      {"summary_calls_rejected",s.summaryCallsRejected}};
+    return r;
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_rewrites","run_mem2reg","enable_cross_block","enable_phi",
+      "consume_call_effect_summaries"})(o);
+    if(!error.empty())return error;
+    for(const auto *name:{"run_mem2reg","enable_cross_block","enable_phi",
+                         "consume_call_effect_summaries"})
+      if(number(o,name,0)>1)return std::string{name}+" must be 0 or 1";
+    return std::string{};
+  });
   registerLLVM("control-flow",[](LLVMContext &c,const Options &) {
     Result r;r.counters=controlFlowCounts(c.lifter.module(),"_before");
     c.lifter.runControlFlowSimplification();
