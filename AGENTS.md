@@ -217,6 +217,18 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Stable Guest join ordering (2026-11-11, baseline `9f9e5f9`, fix `0eb61de`):
+ordinary mergeIncoming sorts predecessor facts by original function block order
+instead of host pointer order. Same-address/width/defined-value proofs and caps
+are unchanged; this fixes candidate and PHI order, not a proved native wrong
+result. Old final2 tests fail6/44 assertions; main/no-Z3 focus84/3560, CTest
+1015/1015 and880/880. Independent main native old/new each3840 full-state matches
+and1408 specified faults detected. Fixed real IR eight-padding probe now has
+join0/loop35 throughout. No global determinism claim or rewrite of the historical
+strict-counter failure. GDB of that one O2 input confirms three local six-block
+limits, not global budget starvation; optimized line-breakpoint misclassifications
+are explicitly withdrawn. See docs/guest-memory-join-order-20261111.md.
+
 Explicit Guest-memory pipeline and loop membership (2026-11-11, baseline
 `ca245bc`): `a7ed9bd` adds opt-in `guest-memory`, preserving the historical
 custom `guest-memory-ssa` name and default six-step optimize. All 19 native
