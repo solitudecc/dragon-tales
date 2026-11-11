@@ -217,6 +217,28 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Dispatcher expression-budget reporting (2026-11-11, baseline `3bc5f2e`, fix
+`1f5284a`): see `docs/dispatch-proof-budget-20261111.md`. Global branch/switch
+constant proofs that exceed maxExpressionNodes now mark complete=false and
+increment budgetExhausted once per root query. Existing traversal, edge fallback,
+IR rewrites, ABI and budgets are unchanged. Ordinary Unknown within budget is
+not exhaustion; complete=true still does not mean every switch was resolved.
+Old main/no-Z3 same-API tests each fail 4 cases/14 of158 assertions; new each
+5/158 pass. Related each99/5132, full CTest1035/1035 and900/900. Independent
+same-binary old/new oracle each21 fixtures,42 byte-identical IR files,8 corrected
+status cases,63 status/21 valid-IR corruption controls; nonstatus fields equal.
+393 source pins match; no new native, real replay or corpus run is claimed.
+Read-only table diagnosis reuses the prior real archive: 25 known-index LOAD
+chains /21 unique indices in cff O0 and combo O0 still lack Guest content facts.
+No fixed dispatcher-table initializer is present, but dynamic writes/calls may
+alias; absence of fixed STOREs is not an immutability proof. Separate O0/O2
+addresses, CFF/business tables and SBOX. Actual targeted recipe does not include
+MBA/predicates/dispatch-deflatten: its zero switches_rewritten is not a measured
+failure of every full pipeline. A conditional entry-context LLVM consumer is
+proposed, not implemented. Preserve arbitrary Guest semantics by default.
+Metadata/runtime/diagnostic packages are independently hash-bound and verified
+on both hosts; only the prior two archived runtime hardlinks were retired.
+
 Bounded original-edge worklist (2026-11-11, baseline `2294900`, implementation
 `26386b2`): see `docs/guest-edge-worklist-20261111.md` and its native/real notes.
 Explicit `guest-memory edge_worklist=1` enables continuation after all three

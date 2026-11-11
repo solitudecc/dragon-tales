@@ -36,9 +36,9 @@ flowchart LR
 | `graph-audit` | Graph，读取统计 | 无；报告指令、有效块/函数、缺失 IGNIL 和按块累加的 unlifted 记录数 |
 | `finite-values` | Graph，只读分析并缓存 | `max_values=64, max_blocks=4096, max_operations=1000000, max_facts=262144` |
 | `mem2reg` / `instcombine` / `gvn` / `dce` | LLVM | 无 |
-| `guest-memory` | LLVM，显式选择 | `max_rewrites=65536, run_mem2reg=1, enable_cross_block=1, enable_phi=1, consume_call_effect_summaries=0`；复用现有 GuestMemorySSA，标志只接受整数 0/1 |
+| `guest-memory` | LLVM，显式选择 | `max_rewrites=65536, run_mem2reg=1, enable_cross_block=1, enable_phi=1, consume_call_effect_summaries=0, edge_worklist=0`；复用现有 GuestMemorySSA，标志只接受整数 0/1 |
 | `control-flow` | LLVM，显式选择 | 无；SCCP、状态机/普通跳转穿线、CFG 与死代码清理。详见 [控制流清理](llvm-control-flow-cleanup.md) |
-| `dispatch-specialize` | LLVM，显式选择 | `max_conditions=256, max_expression_nodes=128`；唯一常量条件才改写，未知/多值保持原样 |
+| `dispatch-specialize` | LLVM，显式选择 | `max_conditions=256, max_expression_nodes=128, allow_plain_stores=0`；唯一常量条件才改写，未知/多值保持原样；条件或表达式预算退出报告 Incomplete |
 | `dispatch-deflatten` | LLVM，显式选择 | `max_dispatchers=64, max_incoming_edges=512, max_expression_nodes=128, max_values=16`；只改写状态 PHI 的有限值集合全部指向同一 switch 目标的可证明边 |
 | `mba` | LLVM | `timeout_ms=100, max_queries=16, max_expression_nodes=128, max_variables=3, resource_limit=1000000` |
 | `predicates` | LLVM | `timeout_ms=25, max_queries=64, max_expression_nodes=256, resource_limit=200000` |
