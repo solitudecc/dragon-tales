@@ -109,11 +109,45 @@ struct Enumerator {
       for(const auto &v:*input)if(!append(result,opcode==llvm::Instruction::SExt?v.sextOrTrunc(width):v.zextOrTrunc(width)))return {};return result;
     }
     auto *binary=llvm::dyn_cast<llvm::BinaryOperator>(value);if(!binary)return {};
-    const auto opcode=binary->getOpcode();if(opcode!=llvm::Instruction::Add && opcode!=llvm::Instruction::Sub && opcode!=llvm::Instruction::Mul && opcode!=llvm::Instruction::Shl)return {};
-    auto left=get(binary->getOperand(0),historical,depth+1),right=get(binary->getOperand(1),historical,depth+1);if(!left || !right)return {};Values result;
+    const auto opcode=binary->getOpcode();
+    if(opcode!=llvm::Instruction::Add && opcode!=llvm::Instruction::Sub &&
+       opcode!=llvm::Instruction::Mul && opcode!=llvm::Instruction::Shl &&
+       opcode!=llvm::Instruction::And && opcode!=llvm::Instruction::Or &&
+       opcode!=llvm::Instruction::Xor)return {};
+    auto left=get(binary->getOperand(0),historical,depth+1);
+    auto right=get(binary->getOperand(1),historical,depth+1);
+    if(!left || !right) {
+      if(opcode!=llvm::Instruction::And || work.exhausted)return {};
+      auto *mask=llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(0));
+      auto *unknown=binary->getOperand(1);
+      if(!mask){mask=llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(1));unknown=binary->getOperand(0);}
+      if(!mask || llvm::isa<llvm::UndefValue,llvm::PoisonValue>(unknown))return {};
+      // Candidate range only: never substitute the AND, strip its source's
+      // flags/freeze, or infer that a table entry remains unchanged. A failed
+      // earlier dependency visit keeps its existing budget diagnostic.
+      std::vector<unsigned> positions;
+      const auto &bits=mask->getValue();
+      for(unsigned bit=0;bit<bits.getBitWidth();++bit) {
+        if(!work.charge())return {};
+        if(bits[bit]){if(positions.size()==3)return {};positions.push_back(bit);}
+      }
+      Values result;
+      for(unsigned subset=0;subset<(1u<<positions.size());++subset) {
+        llvm::APInt value(bits.getBitWidth(),0);
+        for(unsigned n=0;n<positions.size();++n)if(subset&(1u<<n))value.setBit(positions[n]);
+        if(!append(result,value))return {};
+      }
+      return result;
+    }
+    Values result;
     for(const auto &a:*left)for(const auto &b:*right) {
       llvm::APInt v=a;
-      if(opcode==llvm::Instruction::Add)v=a+b;else if(opcode==llvm::Instruction::Sub)v=a-b;else if(opcode==llvm::Instruction::Mul)v=a*b;
+      if(opcode==llvm::Instruction::Add)v=a+b;
+      else if(opcode==llvm::Instruction::Sub)v=a-b;
+      else if(opcode==llvm::Instruction::Mul)v=a*b;
+      else if(opcode==llvm::Instruction::And)v=a&b;
+      else if(opcode==llvm::Instruction::Or)v=a|b;
+      else if(opcode==llvm::Instruction::Xor)v=a^b;
       else {if(b.uge(a.getBitWidth()))return {};v=a.shl(static_cast<unsigned>(b.getZExtValue()));}
       if(!append(result,v))return {};
     }

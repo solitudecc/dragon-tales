@@ -75,6 +75,7 @@ add_executable(dragon_tests
         lifters/TestLLVMConstantBranches.cpp
         lifters/TestLLVMGuardedTargetSets.cpp
         lifters/TestLLVMGuardedStateCorridors.cpp
+    lifters/TestLLVMGuardedFiniteBitwise.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
