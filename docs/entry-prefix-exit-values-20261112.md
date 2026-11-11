@@ -1,6 +1,6 @@
 # 首次入口前缀的直接出口值传递
 
-基线 `756d64b`。此前 `entry-prefix` 对普通 non-PHI 跨区域使用保守拒绝。
+基线 `756d64b`，实现里程碑 `aac31b6`。此前 `entry-prefix` 对普通 non-PHI 跨区域使用保守拒绝。
 真实 combo O2 的三个值，以及显式高预算 combo O0 的一个值，都只在定义块
 的直接出口中使用；这个出口原来只有该定义块一个来源，可以精确合并新旧执行值。
 
@@ -47,16 +47,48 @@ PHI 仍保守拒绝，候选失败时原 IR 不变。
 另外增加越过直接出口的普通使用负例，继续要求拒绝且 IR 逐字节不变。
 这项预期升级不删除失败输入，也不放宽语义比较。
 
-主/no-Z3 完整 CTest **1056/1056、921/921** 均通过。独立原生主构建的六种形态
-已得到1536次完整状态匹配，896次错误变体观察中476个指定错误全部检出；
+主/no-Z3 完整 CTest **1056/1056、921/921** 均通过。独立原生两个构建的六种形态
+各得到1536次完整状态匹配，896次错误变体观察中476个指定错误全部检出；
 未知调用次数、volatile 效果、寄存器、Guest和全部Exit均比较。
-no-Z3原生复测与最终归档仍在进行，不与旧1824次执行混计。
+每组38条保存流、2432帧完整审计通过；原13个成功产物在两个新构建下逐字节相同，
+不重跑或重计旧1824次执行。详见[独立原生报告](entry-prefix-liveout-independent-validation-20261112.md)。
 
 真实原预算配方A通过 **C16/LLVM16** 完整状态对照及144个错误控制；原cffO0
 首次selector直连门槛保留。comboO2从拒绝变成22块/2045成本的partial前缀，
 三个出口PHI及其原/新入边、全部普通使用均核对，五种错误结构控制均检出。
 预算耗尽仍保留；comboO0仍为32块/2007成本的partial结果。独立高预算配方B
-还在验证，不先行宣称其成功。
+也通过C16/LLVM16及144个错误控制，comboO0完整隔离110块/7892成本的前缀，
+comboO2完整隔离40块/3071成本的前缀。新PHI正确传递原/复制执行值，分配调用
+及出口其余指令仍保留。两套配方每个模块各25次实际pass run，原三个优化轮次和
+其它pass预算不变；B仅显式提高prefix预算。
+详见[真实验证](entry-prefix-continuation-real-validation-20261112.md)。
+
+## 仍未消除的循环分发：具体证据
+
+主agent另行读取配方B最终 `guarded-views/f-combo/O0/after-bound.ll`，SHA
+`81ea20f65fd1b0b997d5881f1f575e53cdf70b57a614076b65e22545129876f0`。
+该IR已在B完整归档内，以下只读诊断不新增原生执行计数：
+
+- `memory.valid317` 读取 `Guest[90592]`，生成 `%1646 = select(load != 0, 3, 1)`；
+  `memory.valid319` 将它存入 `Guest[RBP-168]`，再回循环分发。这是两个条件状态，
+  不能在没有内存证明时将未知LOAD直接折成恒真或恒假。
+- 分发器仍有实际的 `Guest[90120 + state*8]` 目标读取。状态集合与表内容是两层
+  不同的证明；恢复 `{1,3}` 并不证明目标字节恒定。
+- 普通调用 `@dragon_static_entry_x86_64_15f20` 有lifted定义，且确有动态Guest写。
+  当前缺少足以保留表事实的写范围/别名证明。不能称它为未解析外部黑盒，也不能
+  仅因callee可见就推断它不会修改表。
+
+真实隔离配方没有运行MBA、predicates或dispatch-deflatten；另行冻结两个B产物，
+各运行一次完整配方及一次扩大条件预算的配方，共四次独立IR探针。全部verify通过，
+无超时；combo各化简16处MBA，谓词折叠和去平坦化均为0。扩大条件预算后新增的
+上下文只发生在ordinary fallback函数；guarded函数的真实CFF和业务表LOAD/switch
+均保留。谓词/MBA还有预算跳过，不能把API成功解释为覆盖全部表达式。
+这些探针没有新原生语义对拍，也没有修改A/B验收配方或默认设置。
+见[独立配方诊断](residual-loop-recipe-diagnosis-20261112.md)。
+
+现有deflatten已支持某些已证明的双目标select，不能把这一能力再列成完全未实现。
+下一步需把循环中的状态/地址关系接到实际表读取，并证明调用写范围与目标表不
+别名等前提；仅增加预算或启用现有pass并未解决这些样本。不得将实际内存条件猜成常量。
 
 证据根为 `~/vmc-runs/entry-prefix-continuation-20261112/`。构建来自 VM 的
 `756d64b` 加五个候选源码文件，逐文件 SHA 在 `candidate-v1-source.json`。
@@ -68,3 +100,22 @@ no-Z3原生复测与最终归档仍在进行，不与旧1824次执行混计。
 26个payload加manifest，代理双端校验后主agent独立逐项复核。
 此前四份基线运行库硬链接在旧测试和预算探针完成后已退役，原构建库及双端gzip
 仍保留，恢复路径见 `baseline-runtime-retired.json`，避免新构建额外保留旧库占满磁盘。
+
+本轮没有新增单指令/Unicorn或全69输入语料库campaign。原生验证针对该LLVM变换，
+结构/字节审计单独计数，未知调用后的内存事实和完整循环去平坦化不在成功声明内。
+
+## 最终归档
+
+下列包已双端校验，主agent另外独立验证包SHA、精确文件集合及每个payload的SHA
+和记录大小。运行库四份gzip同时验证解压后的原始SHA；源码五项与`aac31b6`一致。
+Mac根目录为`/Users/c/Desktop/deob/validation-artifacts/`，VM根为`~/vmc-runs/`。
+
+| 包（相对证据根） | SHA256 |
+|---|---|
+| entry-prefix-continuation-20261112/oracle-main-v1-evidence.tar.gz | f8b774c2c181d3d47c9ea85ba1bc9992052ca05da41b0557bd46e372a0e8f9e6 |
+| entry-prefix-continuation-20261112/oracle-noz3-v1-evidence.tar.gz | 396aecd4ab0a9f4c8b43da885b08f4cb092bfed3a5795986d5c942911382e9e8 |
+| entry-prefix-continuation-20261112/metadata-final-v1-evidence.tar.gz | a5effd6d688e8720006d2a6684911d7172c6faf217caf8aae2d8eab0c1caed3d |
+| entry-prefix-continuation-real-20261112/recipe-A.tar.gz | dd85cb3efbbbd51aaac8b9c28d8837bbf87f400584e5b488ac72c2a0ba4a39e5 |
+| entry-prefix-continuation-real-20261112/recipe-B.tar.gz | 107a7879475e07c2129b1b102bb972d45ccb8d1964e35eef351bcac41ca608cf |
+| entry-prefix-continuation-real-20261112/final-review.tar.gz | c543b620709680ff0f6649ad39e8d864ee941708f7ac42d990943c1a0148702f |
+| residual-loop-recipes-20261112.tar.gz | 5cf9c5a529d362d53efdabc56cc4c56f7c8a2cdf3f8edcb9d6dce13a380deecb |

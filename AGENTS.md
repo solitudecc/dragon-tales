@@ -217,6 +217,39 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Direct prefix exit values (2026-11-12, base `756d64b`, implementation `aac31b6`):
+see `docs/entry-prefix-exit-values-20261112.md` and its independent/native real
+reports. Ordinary non-PHI liveouts may now cross one direct exit only when all
+uses are in that exit and the definition block is its unique original
+predecessor BLOCK. Bridge PHIs carry original/fresh values for every actual
+successor slot; calls/volatile effects stay original. Root-PHI clones still use
+the seed input. Nonlocal/shared/historical cases remain refused. Per-candidate
+repair caps64values/512uses/512incoming; new PHIs consume the original shared
+instruction budget. No layout/counter-key/default-budget changes.
+Final old tests compile/run on both756d runtimes:10cases/227assertions,
+5cases/20assertions fail; new each10/262 pass. CTest1056/1056 and921/921.
+Independent native each1536 full-state matches,896fault observations with476
+specified detections,16896comparator controls;38streams/2432frames audited.
+Old13 accepted IR products remain byte-identical in both builds; old1824native
+counts are not rerun or re-counted. Prior direct-liveout refusal is now a checked
+positive; a nonlocal refusal remains byte-identical on rejection.
+Real recipeA keeps32/2048: comboO2 becomes partial22blocks/2045cost with3bridges.
+Separately frozen recipeB128/16384: comboO0 complete110/7892 with one bridge,
+comboO2 complete40/3071; both cff prefixes stay21/748 and22/961. Each recipe
+passes C16/LLVM16 and144fault controls,25actual runs/module, with unchanged
+inputs/output streams/source Graph and original call/error behavior. Later
+GuestSSA/dispatch remain incomplete; prefix completion is not full loop CFF
+removal. Real combo state still includes select(Guest[90592]!=0,3,1), and a
+lifted callee with dynamic Guest writes blocks unproved table preservation.
+Four separate frozen full-pipeline IR probes verify: combo MBA16, predicates0,
+deflatten0. Larger dispatch condition budget adds only ordinary-root contexts;
+guarded real CFF/business table LOADs and switches remain. No new native oracle
+in these probes; skipped-query counts are not complete coverage. See
+`docs/residual-loop-recipe-diagnosis-20261112.md`.
+No new instruction/Unicorn/full69-input campaign or exclusions. Artifacts are
+under `~/vmc-runs/entry-prefix-continuation-20261112/` and
+`entry-prefix-continuation-real-20261112/`, with dual-host verified archives.
+
 Bounded first-entry prefixes (2026-11-12, base `071c775`, implementation `bb0c429`):
 see `docs/llvm-entry-prefix.md`, `docs/entry-prefix-validation-20261111.md`, and
 `docs/entry-prefix-real-validation-20261111.md`. Opt-in `entry-prefix` isolates
