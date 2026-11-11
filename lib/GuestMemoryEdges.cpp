@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <deque>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -800,6 +801,34 @@ bool prependHub(Corridor &corridor, llvm::BasicBlock &hub,
   return true;
 }
 
+bool originalEdge(const CheckedMemoryOriginalFunction &original,
+                  llvm::BasicBlock &block, unsigned successorIndex,
+                  llvm::BasicBlock &target) {
+  const auto found = original.blocks.find(&block);
+  if (found == original.blocks.end()) return false;
+  const auto &frozen = found->second;
+  auto *terminator = block.getTerminator();
+  return terminator == frozen.terminator && terminator->getParent() == &block &&
+         successorIndex < frozen.successors.size() &&
+         successorIndex < terminator->getNumSuccessors() &&
+         frozen.successors[successorIndex] == &target &&
+         terminator->getSuccessor(successorIndex) == &target;
+}
+
+bool originalCorridor(const CheckedMemoryOriginalFunction &original,
+                      const Corridor &corridor) {
+  for (std::size_t index = 0; index < corridor.blocks.size(); ++index) {
+    auto *block = corridor.blocks[index];
+    if (!original.blocks.contains(block)) return false;
+    if (index + 1 == corridor.blocks.size()) continue;
+    auto *next = corridor.blocks[index + 1];
+    unsigned successorIndex = 0;
+    if (!selectedEdge(*block, *next, successorIndex) ||
+        !originalEdge(original, *block, successorIndex, *next)) return false;
+  }
+  return true;
+}
+
 bool forwardCorridor(
     llvm::LoadInst &load, const ByteAddress &loadedAddress,
     const Corridor &corridor,
@@ -807,7 +836,9 @@ bool forwardCorridor(
     const llvm::DataLayout &layout, const MemoryForwardOptions &options,
     MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget,
     llvm::DominatorTree &dom, bool &exhausted, bool allowHubs,
-    bool pointerOnly) {
+    bool pointerOnly,
+    const CheckedMemoryOriginalFunction *original = nullptr) {
+  if (original && !originalCorridor(*original, corridor)) return false;
   auto *join = corridor.blocks.front();
   if (llvm::pred_size(join) > MaxIncomingEdges) {
     exhausted = true;
@@ -821,6 +852,8 @@ bool forwardCorridor(
     if (!seen.insert(pred).second) continue;
     unsigned successorIndex = 0;
     if (!selectedEdge(*pred, *join, successorIndex)) continue;
+    if (original && !originalEdge(*original, *pred, successorIndex, *join))
+      continue;
     if (++budget.edgeProofs > MaxEdgeProofs) {
       exhausted = true;
       budget.stopped = true;
@@ -868,7 +901,7 @@ bool forwardCorridor(
     auto extended = corridor;
     if (prependHub(extended, *hub, dom, exhausted) &&
         forwardCorridor(load, loadedAddress, extended, memoryBases, layout,
-                        options, stats, budget, dom, exhausted, true, pointerOnly))
+                        options, stats, budget, dom, exhausted, true, pointerOnly, original))
       return true;
   }
   return false;
@@ -902,6 +935,18 @@ void forwardCheckedMemoryEdges(
     if (full) break;
   }
 
+  CheckedMemoryOriginalFunction *original = nullptr;
+  if (budget.enableWorklist) {
+    budget.originals.push_back({&function, memoryBases, {}, {}});
+    original = &budget.originals.back();
+    for (auto &block : function) {
+      auto *terminator = block.getTerminator();
+      CheckedMemoryOriginalBlock frozen{terminator, {}};
+      for (auto *successor : llvm::successors(&block))
+        frozen.successors.push_back(successor);
+      original->blocks.emplace(&block, std::move(frozen));
+    }
+  }
   llvm::DominatorTree dom(function);
   bool exhausted = false;
   // Snapshot only original LOADs. New clones cannot recursively expand this
@@ -912,6 +957,7 @@ void forwardCheckedMemoryEdges(
       budget.stopped = true;
       break;
     }
+    if (original) original->loads.push_back(load);
     const auto loadedAddress = byteAddress(load->getPointerOperand(),
                                            memoryBases, layout);
     if (!loadedAddress) continue;
@@ -1007,6 +1053,56 @@ void forwardCheckedMemoryHubs(
                           budget, pendingHubs, pendingPointers);
   forwardCheckedMemoryPointers(function, memoryBases, layout, options, stats,
                               budget, pendingPointers);
+}
+
+void forwardCheckedMemoryWorklist(
+    const llvm::DataLayout &layout, const MemoryForwardOptions &options,
+    MemoryForwardStats &stats, CheckedMemoryEdgeBudget &budget) {
+  if (!budget.enableWorklist || !options.enableCrossBlock || !options.enablePhi ||
+      budget.stopped || stats.loadsForwarded >= options.maxRewrites) return;
+  struct Pending {
+    CheckedMemoryOriginalFunction *original;
+    llvm::LoadInst *load;
+  };
+  std::deque<Pending> pending;
+  // Interleave functions even when one contains many original LOADs. Each
+  // subsequent success also rotates to the tail rather than draining a function.
+  for (std::size_t position = 0;; ++position) {
+    bool added = false;
+    for (auto &original : budget.originals) if (position < original.loads.size()) {
+      pending.push_back({&original, original.loads[position]});
+      added = true;
+    }
+    if (!added) break;
+  }
+  bool exhausted = false;
+  while (!pending.empty() && !budget.stopped &&
+         stats.loadsForwarded < options.maxRewrites) {
+    const auto item = pending.front(); pending.pop_front();
+    auto &original = *item.original;
+    auto *load = item.load;
+    // Originals stay alive: checked rewrites remove only cloned LOADs. All
+    // analyses are rebuilt after preceding mutations, including other LOADs.
+    llvm::DominatorTree dom(*original.function);
+    const auto address = byteAddress(load->getPointerOperand(), original.memoryBases, layout);
+    if (!address) continue;
+    const auto corridor = findCorridor(*load, dom, exhausted);
+    if (!corridor || !originalCorridor(original, *corridor)) continue;
+    bool rewritten = false;
+    for (unsigned phase = 0; phase < 3 && !rewritten && !budget.stopped; ++phase)
+      rewritten = forwardCorridor(*load, *address, *corridor, original.memoryBases,
+          layout, options, stats, budget, dom, exhausted, phase != 0, phase == 2,
+          &original);
+    // Success redirects a still-frozen original edge, so that identity can
+    // never pass originalEdge again. Failure does not blindly requeue. Thus
+    // this queue is finite even without the shared clone/proof/rewrite caps.
+    if (rewritten) pending.push_back(item);
+  }
+  if (exhausted && !budget.reported) {
+    stats.complete = false;
+    ++stats.budgetExhausted;
+    budget.reported = true;
+  }
 }
 
 void forwardCheckedMemoryEdges(

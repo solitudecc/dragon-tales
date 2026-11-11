@@ -2,10 +2,13 @@
 
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace llvm {
+class BasicBlock;
+class Instruction;
 class DataLayout;
 class Function;
 class LoadInst;
@@ -13,6 +16,19 @@ class Value;
 }
 
 namespace dragon::llvmlifter::detail {
+
+// Frozen before the first checked-edge mutation in a function. Identities
+// refer only to original instructions/edges; none of the clones enter here.
+struct CheckedMemoryOriginalBlock {
+  llvm::Instruction *terminator = nullptr;
+  std::vector<llvm::BasicBlock *> successors;
+};
+struct CheckedMemoryOriginalFunction {
+  llvm::Function *function = nullptr;
+  std::unordered_set<llvm::Value *> memoryBases;
+  std::vector<llvm::LoadInst *> loads;
+  std::unordered_map<llvm::BasicBlock *, CheckedMemoryOriginalBlock> blocks;
+};
 
 struct CheckedMemoryEdgeBudget {
   std::size_t candidates = 0;
@@ -23,6 +39,8 @@ struct CheckedMemoryEdgeBudget {
   std::size_t repairCells = 0;
   bool stopped = false;
   bool reported = false;
+  bool enableWorklist = false;
+  std::vector<CheckedMemoryOriginalFunction> originals;
 };
 
 // The ordinary memory worklists must finish before this CFG-mutating fallback.
@@ -60,5 +78,12 @@ void forwardCheckedMemoryPointers(
     const llvm::DataLayout &, const MemoryForwardOptions &,
     MemoryForwardStats &, CheckedMemoryEdgeBudget &,
     const std::vector<llvm::LoadInst *> &pendingPointers);
+
+// Optional continuation after all module-wide legacy phases. A successful
+// original LOAD rotates to the queue tail; each rewrite consumes a distinct
+// frozen original edge and all existing budgets remain shared.
+void forwardCheckedMemoryWorklist(
+    const llvm::DataLayout &, const MemoryForwardOptions &,
+    MemoryForwardStats &, CheckedMemoryEdgeBudget &);
 
 } // namespace dragon::llvmlifter::detail

@@ -122,7 +122,7 @@ PassPipeline::PassPipeline(bool builtins) {
     options.enableCrossBlock=number(o,"enable_cross_block",1)!=0;
     options.enablePhi=number(o,"enable_phi",1)!=0;
     options.consumeCallEffectSummaries=number(o,"consume_call_effect_summaries",0)!=0;
-    const auto s=c.lifter.runGuestMemorySSA(options);
+    const auto s=c.lifter.runGuestMemorySSA(options,number(o,"edge_worklist",0)!=0);
     Result r;
     r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
     r.changed=s.changed;
@@ -140,10 +140,10 @@ PassPipeline::PassPipeline(bool builtins) {
     return r;
   },false,{},[](const Options &o) {
     auto error=numeric({"max_rewrites","run_mem2reg","enable_cross_block","enable_phi",
-      "consume_call_effect_summaries"})(o);
+      "consume_call_effect_summaries","edge_worklist"})(o);
     if(!error.empty())return error;
     for(const auto *name:{"run_mem2reg","enable_cross_block","enable_phi",
-                         "consume_call_effect_summaries"})
+                         "consume_call_effect_summaries","edge_worklist"})
       if(number(o,name,0)>1)return std::string{name}+" must be 0 or 1";
     return std::string{};
   });

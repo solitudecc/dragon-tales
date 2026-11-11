@@ -951,6 +951,12 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
 MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
                                      const MemoryForwardOptions &options,
                                      const Graph *graph) {
+  return runGuestMemorySSA(module, options, graph, false);
+}
+
+MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
+                                     const MemoryForwardOptions &options,
+                                     const Graph *graph, bool enableEdgeWorklist) {
   MemoryForwardStats stats;
   stats.available = true;
   if (!options.maxRewrites)
@@ -958,6 +964,7 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
 
   LeafCallCache leafCallCache;
   CheckedMemoryEdgeBudget checkedEdgeBudget;
+  checkedEdgeBudget.enableWorklist = enableEdgeWorklist;
   struct PendingCheckedHubs {
     llvm::Function *function;
     std::unordered_set<llvm::Value *> memoryBases;
@@ -1439,6 +1446,7 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
                                 module.getDataLayout(), options, stats,
                                 checkedEdgeBudget, pending.loads);
   }
+  forwardCheckedMemoryWorklist(module.getDataLayout(), options, stats, checkedEdgeBudget);
   if (!rewriteBudgetReported && stats.loadsForwarded >= options.maxRewrites) {
     stats.complete = false;
     ++stats.budgetExhausted;

@@ -185,6 +185,12 @@ class LLVMLifter {
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const MemoryForwardOptions &options = {});
 
+  /// Opt into bounded worklist continuation over distinct original incoming
+  /// edges, after the legacy module-wide first sweep. Existing caps are shared;
+  /// newly cloned LOADs/edges never become candidates in this invocation.
+  [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
+      const MemoryForwardOptions &options, bool enableEdgeWorklist);
+
   /// Rewrite only uniquely constant branch/switch conditions in the current
   /// LLVM module. Finite but differing dispatcher targets remain explicit and
   /// are reported as unresolved; no entry or memory assumptions are added.
@@ -205,6 +211,8 @@ class LLVMLifter {
   /// the lifter; unknown or non-proven effects remain CALL barriers.
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const Graph &graph, const MemoryForwardOptions &options = {});
+  [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
+      const Graph &graph, const MemoryForwardOptions &options, bool enableEdgeWorklist);
 
   [[nodiscard]] std::string ir() const; // dump textual LLVM IR
   [[nodiscard]] llvm::Module &module();

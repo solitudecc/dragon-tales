@@ -75,6 +75,7 @@ add_executable(dragon_tests
         lifters/TestLLVMGuestMemoryHistory.cpp
         lifters/TestLLVMGuestPointerPHI.cpp
         lifters/TestLLVMGuestPointerPHIPriority.cpp
+        lifters/TestLLVMGuestEdgeWorklist.cpp
         lifters/TestLLVMCallStateBarriers.cpp
         lifters/TestLLVMReachingStore.cpp
         lifters/TestLLVMCrossCallIsolation.cpp

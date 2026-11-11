@@ -66,6 +66,10 @@ namespace detail {
 MemoryForwardStats runGuestMemorySSA(llvm::Module &, const MemoryForwardOptions &);
 MemoryForwardStats runGuestMemorySSA(llvm::Module &, const MemoryForwardOptions &,
                                      const Graph *graph);
+// Explicit bounded continuation over frozen original LOADs/edges. Keep the
+// existing options layout and overload symbols unchanged.
+MemoryForwardStats runGuestMemorySSA(llvm::Module &, const MemoryForwardOptions &,
+                                     const Graph *graph, bool enableEdgeWorklist);
 }
 
 } // namespace dragon::llvmlifter

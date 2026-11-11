@@ -1346,11 +1346,17 @@ dragon::llvmlifter::LLVMLifter::runMBASimplification(const MBASimplifyOptions &o
 
 dragon::llvmlifter::MemoryForwardStats
 dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(const MemoryForwardOptions &options) {
+  return runGuestMemorySSA(options, false);
+}
+
+dragon::llvmlifter::MemoryForwardStats
+dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(
+    const MemoryForwardOptions &options, bool enableEdgeWorklist) {
   if (mode_ == ExecutionMode::Legacy || module_->empty())
     return {};
   if (options.runMem2Reg)
     runMem2Reg();
-  return detail::runGuestMemorySSA(*module_, options);
+  return detail::runGuestMemorySSA(*module_, options, nullptr, enableEdgeWorklist);
 }
 
 dragon::llvmlifter::DispatcherSpecializationStats
@@ -1377,11 +1383,17 @@ dragon::llvmlifter::LLVMLifter::runProvableDeflattening(
 dragon::llvmlifter::MemoryForwardStats
 dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(
     const Graph &graph, const MemoryForwardOptions &options) {
+  return runGuestMemorySSA(graph, options, false);
+}
+
+dragon::llvmlifter::MemoryForwardStats
+dragon::llvmlifter::LLVMLifter::runGuestMemorySSA(
+    const Graph &graph, const MemoryForwardOptions &options, bool enableEdgeWorklist) {
   if (mode_ == ExecutionMode::Legacy || module_->empty())
     return {};
   if (options.runMem2Reg)
     runMem2Reg();
-  return detail::runGuestMemorySSA(*module_, options, &graph);
+  return detail::runGuestMemorySSA(*module_, options, &graph, enableEdgeWorklist);
 }
 
 std::string dragon::llvmlifter::LLVMLifter::ir() const {
