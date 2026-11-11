@@ -217,6 +217,27 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Guest-memory PHI edge coverage (2026-11-12, base `e5d49be`, implementation
+`5e9a75f`): ordinary differing-value merges must cover every actual CFG edge
+before creating a PHI. Backedges not yet proved and unanalyzed predecessors
+cannot receive invented values. Complete ordinary joins and admitted canonical
+two-block loops emit one incoming per successor slot, including duplicates.
+Old final tests compile on both runtimes:6cases/60assertions,4cases/7assertions
+fail with invalid PHIs; new both6/109 pass. CTest1062/1062 and927/927.
+Independent native old each8 invalid outputs/1 valid ordinary control; invalid
+IR was never executed. New each1152 full-state matches,384fault observations/
+288specified detections,12672comparator controls;48streams/1536frames audited.
+No exclusions/skips/normalization. Nine new outputs are main/no-Z3 byte-equal.
+Unreachable-predecessor ordinary merges refuse incomplete PHIs, while the later
+checked-edge phase may still independently forward a proved edge and preserve
+the original LOAD/unknown path. Two frozen real B inputs (cff/combo O0), old/new
+single Guest-memory pass, all verify and produce byte-identical complete IR.
+This is compatibility, not another native replay or loop deobfuscation gain.
+No new instruction/Unicorn/full69-input campaign. See
+`docs/guest-memory-phi-edges-20261112.md` and its independent validation report.
+Artifacts: `~/vmc-runs/guest-memory-phi-edges-20261112/`,
+`guest-join-coverage-native-20261112/`, `guest-memory-phi-edges-real-20261112/`.
+
 Direct prefix exit values (2026-11-12, base `756d64b`, implementation `aac31b6`):
 see `docs/entry-prefix-exit-values-20261112.md` and its independent/native real
 reports. Ordinary non-PHI liveouts may now cross one direct exit only when all

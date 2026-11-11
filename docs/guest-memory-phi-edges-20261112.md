@@ -24,7 +24,7 @@ LOAD 还会使用该缺项 PHI。普通合流及规范循环中的重复跳转�
 原调用、别名、循环不变量、跨块开关、预算、公共 API 和默认流水线均保持原约束。
 两个输入值相同的既有路径不需要生成合流 PHI，保持原行为。
 
-## 验证进度
+## 最终验证
 
 新增6个定向测试在新主构建通过 **109 assertions**，覆盖 self/body 循环各稳定和变化
 两种情况、不可达前驱、普通重复switch槽、普通合流兼容、关闭PHI，以及重复循环回边。
@@ -43,4 +43,25 @@ LOAD 还会使用该缺项 PHI。普通合流及规范循环中的重复跳转�
 证据：`~/vmc-runs/guest-memory-phi-edges-20261112/`，本地副本
 `/Users/c/Desktop/deob/validation-artifacts/guest-memory-phi-edges-20261112/`。
 
-实现里程碑提交时，以上执行验证已完成，最终归档和文档核对仍在进行；合并前完成。
+实现提交 `5e9a75f`。最终归档、双端核验和主agent独立复核均已完成。
+
+- [独立原生报告](guest-memory-phi-edges-independent-validation-20261112.md)
+- [真实保存IR兼容](guest-memory-phi-real-compatibility-20261112.md)
+
+三份归档均核对精确文件集合、全部payload大小和SHA；四份运行库gzip还逐流核对
+解压后的完整运行库SHA。主agent另行完整复算两组保存流，仍各48流/1536帧，
+不增加原生执行数。源码三项与已测试候选pin一致。
+
+| 归档 | SHA256 |
+|---|---|
+| guest-memory-phi-edges-20261112/guest-memory-phi-edges-metadata-v1.tar.gz | 27c95f09536add0b54ddd40fe2b22781118a17c0a0702f42c716f50021c1ecea |
+| guest-join-coverage-native-20261112.tar.gz | bcd5a469bbc0be4b159373bc9517e8a30179f704bfb383b113f69afa3a600a69 |
+| guest-memory-phi-edges-real-20261112.tar.gz | ba67f38a6f89b864036508cc6cca71e1a3c26c2bf1d832415748906dd8ab1d1e |
+
+构建实际来源为VM `e5d49be`加候选patch，记录实际HEAD/status而非倒填提交号。
+元数据包不含可重建的旧测试可执行文件；源码、日志、退出码保留，运行库另包保存。
+旧运行库raw硬链接在全部旧运行完成且gzip双机核验后退役，恢复路径保存在
+`old-runtime-retired.json`；本轮新raw运行库仍保留。
+
+本轮没有新增指令/Unicorn或全69输入语料库campaign。完整循环去平坦化仍未完成；
+后续地址依赖去重候选尚未合并或执行旧新验证，不计入本次成功结果。
