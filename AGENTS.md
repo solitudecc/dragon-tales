@@ -2663,3 +2663,26 @@ v1 remains saved, production/test sources unchanged. Raw G libraries retired
 after all use ended; exact full gzips remain Mac-only with restore receipts.
 Remaining: selected path STORE PHIs, correlated Boolean states, unresolved
 CALL-return state and precise bounded resumption; never silently discard these.
+
+Guarded finite STORE and selected-path predictions (2026-11-12, implementation
+6981a44 then f54e434): opt-in guarded-store-corridors uses finite seed STORE
+values as untrusted table hints, then freshly selected path STORE PHIs when no
+historical seed hint exists. Actual memory accesses/flags/side exits and complete
+same-LOAD fallback remain. Existing SSA-only mode/default pipeline unchanged.
+H1 old builtin absence is four cases/26 assertions/five failures including Catch
+exception packaging; H2 old H1 existing builtin fails three cases/43 assertions,
+three precision requirements in both builds. Final focus46/1700 each, CTest
+1111/1111 and976/976. Each independent build10752 full-state comparisons:
+5120before+5120transformed+512CALL-unchanged,3304returns+7448boundaries;
+6144fault observations/2260specified all caught,118272comparator controls.
+Each66saved streams/16896frames reaudited; no exclusions/skips/differences.
+H1/H2 original65IR and main/no-Z394IR are byte-identical. Native full archive
+64ab1879 has1213payloads independently verified on both hosts. Metadata-v2
+54ecb71d has54payloads; H1 metadata-v1 retains old-test executables later retired
+only after complete archive verification, with exact restore receipt. Runtime H2
+main926a3abf/no-Z35e004c40; compressed payloads on Mac. NZ raw retired only after
+all use ended; main remains for formal replay. Formal real replay and new actual
+loop observations are still pending at this native-validation milestone. H2
+46-step probe rewrites14comboO0 edges but remains unclosed; do not call candidate
+or synthetic gains complete loop deflattening. See docs/llvm-guarded-path-store-predictions.md
+and docs/guarded-store-corridor-native-validation-20261112.md.

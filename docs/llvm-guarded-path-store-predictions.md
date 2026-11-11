@@ -70,3 +70,13 @@ with 54 exact payloads independently verified on the development host. Earlier
 H1 metadata-v1 retains the exact old-test executables; duplicate expanded
 executables were retired only after archive verification, with the restore
 receipt `~/vmc-runs/ARCHIVED-TEST-BINARIES-RETIRED-20261112.json`.
+
+The subsequent no-Z3 independent matrix and saved-stream audit also passed with
+exactly the same per-build counts. Both builds have 3304 business returns and
+7448 explicit boundary outcomes; all 2260 specified faulty-IR differences and
+118272 single-field comparator controls are detected per build. See
+[the independent H/H2 report](guarded-store-corridor-native-validation-20261112.md).
+Its full archive SHA256 is
+`64ab18793a776c9f146859b8115f994b79e8b0758578502fc9ba92f7c912a7c6`;
+the integration reviewer independently checked all 1213 payload files. Formal
+real-module replay remains pending at this validation milestone.
