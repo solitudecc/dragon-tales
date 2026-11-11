@@ -54,6 +54,7 @@ add_executable(dragon_tests
         lifters/TestGuestMemoryPipeline.cpp
         lifters/TestLLVMControlFlow.cpp
         lifters/TestLLVMDispatchSpecialization.cpp
+        lifters/TestLLVMDispatchExpressionBudget.cpp
         lifters/TestLLVMSameFunctionDeflattening.cpp
         lifters/TestLLVMConditionalState.cpp
         lifters/TestLLVMStateGuardEdges.cpp

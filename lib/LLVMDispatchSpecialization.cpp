@@ -184,6 +184,12 @@ DispatcherSpecializationStats runDispatcherSpecialization(
         Active active;
         auto condition = uniqueConstant(branch->getCondition(), nodes,
                                         options.maxExpressionNodes, active);
+        // Unknown and an interrupted proof are distinct outcomes. Report
+        // once for this root query, retaining the existing edge fallback.
+        if (nodes > options.maxExpressionNodes) {
+          stats.complete = false;
+          ++stats.budgetExhausted;
+        }
         if (!condition || condition->getBitWidth() != 1) {
           detail::specializeStateGuardEdge(*branch, dom, options, stats, edgeBudget,
                                            allowPlainStores);
@@ -213,6 +219,10 @@ DispatcherSpecializationStats runDispatcherSpecialization(
       Active active;
       auto selector = uniqueConstant(switchInst->getCondition(), nodes,
                                      options.maxExpressionNodes, active);
+      if (nodes > options.maxExpressionNodes) {
+        stats.complete = false;
+        ++stats.budgetExhausted;
+      }
       if (!selector) {
         ++stats.unresolvedSwitches;
         continue;
