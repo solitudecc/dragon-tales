@@ -47,6 +47,7 @@ flowchart LR
 | `guest-memory` | LLVM，显式选择 | `max_rewrites=65536, run_mem2reg=1, enable_cross_block=1, enable_phi=1, consume_call_effect_summaries=0, edge_worklist=0`；复用现有 GuestMemorySSA，标志只接受整数 0/1 |
 | `guarded-state-corridors` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；按实际 PHI 入边枚举有限状态预测，保留执行检查与同值完整回退；见[SSA 状态路径](llvm-guarded-state-corridors.md) |
 | `guarded-store-corridors` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；有限 STORE 值仅作目标预测，保留实际 Guest LOAD、写入顺序与同值完整回退；见[STORE 预测路径](llvm-guarded-store-corridors.md) |
+| `invariant-self-loops` | LLVM，显式选择 | `max_loops=64, max_work=1000000, max_blocks=65536`；仅隔离全部 PHI 自保持的纯 `icmp ugt` 真自边，保留首次条件、原假出口和不终止行为；见[不变自循环](llvm-invariant-self-loops.md) |
 | `guarded-target-sets` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；独立候选提示、实际 LOAD 的至多16目标小 switch、同值完整回退；见[有限目标集合](llvm-guarded-target-sets.md) |
 | `guarded-transitions` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384, business_corridors=0`；实际目标 LOAD 等值检查、同值完整回退；显式启用业务路径复制见[业务路径](guarded-business-corridors-20261112.md) |
 | `constant-branches` | LLVM，显式选择 | `max_folds=4096, max_instructions=1000000, max_blocks=65536`；只折叠已经是字面量常量的 br/switch，再删除入口不可达块，保留动态目标保护；见[精确常量分支清理](llvm-constant-branches.md) |

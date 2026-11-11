@@ -20,6 +20,7 @@ add_library(libdragon SHARED
         GuardedTargetSets.cpp
         GuardedStateCorridors.cpp
         ConstantBranches.cpp
+        InvariantSelfLoops.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp
         LLVMPredicateFolding.cpp

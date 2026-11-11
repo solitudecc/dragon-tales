@@ -217,6 +217,30 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Invariant self-loop isolation K (2026-11-12): see
+`docs/llvm-invariant-self-loops.md`. Opt-in `invariant-self-loops` retains the
+first icmp/branch and isolates only pure self-preserving PHIs into a separate
+spin; it never deletes divergence or adds a progress assumption. Main/no-Z3
+full suites 1119/1119 and 984/984. Final independent source-v3 focused native is
+clang-21 O2 only: baseline/main/no-Z3 36 each =108 full-state matches; four
+fault variants give144 observations/72 specified detections, all caught;
+252 records contain378 full frames. Two stopped-PC witnesses must match the
+actual AArch64 B-self opcode and full reference arena; timeout alone cannot pass.
+Saved-data/ELF audit adds zero native executions. Preserve initial runner-path
+failure, successful older v2/control runs, original status-budget failure and
+saved-auditor path correction; count only source-v3. Original reference files
+and hashes are under `scripts/validation/invariant_self_loop_reference/`;
+read-only `invariant_self_loop_saved_audit.py` uses an explicit pinned module
+path, avoiding generic `oracle` imports. Both native IRs match c05fb5/c5ddfd
+frozen backends through saved API replay. Full native evidence archive has977
+files/37,613,487 raw bytes, SHA
+`f5a951c3546ba42301a7e0456fea4f4fcfa7b2b6cfb3e648b3d51327947ca844`,
+VM `/home/cc/vmc-runs/invariant-self-loops-native-20261112.tar.gz` and Mac
+`/Users/c/Desktop/deob/validation-artifacts/invariant-self-loops-native-20261112/`.
+Exact file sets, sizes and hashes verified on both hosts; VM raw retained.
+Real whole-program K recipe validation and fast-loop closure remain pending.
+
+
 Checked Guest index dependency reuse (2026-11-12, base `40f733e`, implementation
 `02a71ef`): one proveStore invocation shares LOAD/STORE IndexDependencies under
 the same fixed corridor/predecessor. Fresh/history remain distinct; any failed

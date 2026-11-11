@@ -3,6 +3,7 @@
 #include "GuardedStateCorridors.hpp"
 #include "GuardedTargetSets.hpp"
 #include "ConstantBranches.hpp"
+#include "InvariantSelfLoops.hpp"
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
@@ -119,6 +120,23 @@ PassPipeline::PassPipeline(bool builtins) {
   registerLLVM("instcombine",[](LLVMContext &c,const Options &){c.lifter.runInstCombine();return Result{};},false,{},none);
   registerLLVM("gvn",[](LLVMContext &c,const Options &){c.lifter.runGVN();return Result{};},false,{},none);
   registerLLVM("dce",[](LLVMContext &c,const Options &){c.lifter.runDCE();return Result{};},false,{},none);
+  registerLLVM("invariant-self-loops",[](LLVMContext &c,const Options &o) {
+    const auto s=llvmlifter::detail::runInvariantSelfLoops(c.lifter.module(),
+      {number(o,"max_loops",64),number(o,"max_work",1000000),number(o,"max_blocks",65536)});
+    Result r;r.status=s.budgetExhausted?Status::Incomplete:(!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete));
+    r.changed=s.changed;r.message=s.message;
+    r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
+      {"candidate_loops",s.candidateLoops},{"isolated_loops",s.isolatedLoops},
+      {"removed_self_incomings",s.removedSelfIncomings},{"added_blocks",s.addedBlocks},
+      {"rejected",s.rejected},{"budget_exhausted",s.budgetExhausted},
+      {"scanned_instructions",s.scannedInstructions},{"work",s.work}};
+    return r;
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_loops","max_work","max_blocks"})(o);if(!error.empty())return error;
+    if(number(o,"max_loops",64)>65536 || number(o,"max_work",1000000)>1000000 || number(o,"max_blocks",65536)>65536)
+      return std::string{"invariant-self-loops options exceed hard limits 65536/1000000/65536"};
+    return std::string{};
+  });
   registerLLVM("constant-branches",[](LLVMContext &c,const Options &o) {
     const auto s=llvmlifter::detail::runConstantBranches(c.lifter.module(),
       {number(o,"max_folds",4096),number(o,"max_instructions",1000000),number(o,"max_blocks",65536)});
