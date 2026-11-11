@@ -217,6 +217,25 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Historical checked-memory inputs (2026-11-11, fix `c958da9`, after `68c737a`):
+GuestMemoryEdges snapshots only first-block selected PHI inputs that already
+dominate the original predecessor. Fresh and historical index dependency views
+stay separate; fresh LOAD/freeze observations are never replaced with old ones.
+Snapshot blocks/PHIs/branches consume existing caps and live-out repair work.
+Old final3 tests execute on2e50 and fail2 cases/14 of81 assertions; new3/217,
+main/no-Z3 related87/3777, full CTest1018/1018 and883/883. Independent main
+old/new each6480 full-state matches and2196 specified errors detected. Original
+single-predecessor deep fixtures and their whole-six precision gate remain
+unsatisfied; supported single-hub3 and separately added legal multi-hub3 gain.
+Frozen four-ELF new C16/LLVM16 plus all144 specified field controls pass. Real
+f-combo O0 gains state0/index90120 only;14/34/32 remain blocked by pointer PHIs
+at the STORE addresses. All12 Guest-memory calls remain incomplete; CFF1->2
+is a context copy. Runtime1b84e712 (main),11107f6c (no-Z3); source389 and
+harness41 dual-host SHA matches. See docs/guest-memory-history-20261111.md.
+The shared reference-root archive collision is documented: native ad93824
+contains partial real evidence, while final combined31045d/621 files carries
+the completed real audits. No new corpus69/instruction campaign is claimed.
+
 Stable Guest join ordering (2026-11-11, baseline `9f9e5f9`, fix `0eb61de`):
 ordinary mergeIncoming sorts predecessor facts by original function block order
 instead of host pointer order. Same-address/width/defined-value proofs and caps
