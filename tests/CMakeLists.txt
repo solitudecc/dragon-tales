@@ -59,6 +59,8 @@ add_executable(dragon_tests
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
         lifters/TestLLVMGuestMemorySSA.cpp
+        lifters/TestLLVMGuestAddressWidths.cpp
+        lifters/TestLLVMGuestMemoryAlias.cpp
         lifters/TestLLVMGuestMemoryEdges.cpp
         lifters/TestLLVMCallStateBarriers.cpp
         lifters/TestLLVMReachingStore.cpp
@@ -154,6 +156,16 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT WIN32)
         foreach(case IN ITEMS neg div mod zero sweep)
             add_test(NAME "Validation - IGNIL sanitizer ${case}" COMMAND dragon_optimizer_ubsan ${case})
             set_tests_properties("Validation - IGNIL sanitizer ${case}" PROPERTIES TIMEOUT 60)
+        endforeach()
+        # Exercise the real memory-analysis translation unit under UBSan.
+        # High modular Guest offsets are analyzed, never host-dereferenced.
+        add_executable(dragon_memory_alias_ubsan semantic/LLVMGuestMemoryAliasUBSan.cpp ../lib/GuestMemorySSA.cpp)
+        target_link_libraries(dragon_memory_alias_ubsan PRIVATE dragon::libdragon)
+        target_compile_options(dragon_memory_alias_ubsan PRIVATE -fsanitize=undefined -fno-sanitize-recover=undefined)
+        target_link_options(dragon_memory_alias_ubsan PRIVATE -fsanitize=undefined -fno-sanitize-recover=undefined)
+        foreach(case IN ITEMS distance sweep)
+            add_test(NAME "Validation - Guest memory alias sanitizer ${case}" COMMAND dragon_memory_alias_ubsan ${case})
+            set_tests_properties("Validation - Guest memory alias sanitizer ${case}" PROPERTIES TIMEOUT 60)
         endforeach()
     endif()
 endif()

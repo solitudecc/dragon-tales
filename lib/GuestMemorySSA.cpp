@@ -16,6 +16,7 @@
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Analysis/ValueTracking.h>
 
 #include <algorithm>
@@ -56,16 +57,48 @@ llvm::Value *stripPointerCasts(llvm::Value *value) {
   return value ? value->stripPointerCasts() : nullptr;
 }
 
-std::optional<std::uint64_t> constantInteger(const llvm::Value *value) {
-  const auto *constant = llvm::dyn_cast<llvm::ConstantInt>(value);
-  if (constant)
-    return constant->getBitWidth() <= 64
-        ? std::optional<std::uint64_t>(constant->getZExtValue()) : std::nullopt;
-  const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(value);
+struct ConstantIndexBudget {
+  static constexpr unsigned MaxWidth = 128;
+  static constexpr unsigned MaxDepth = 64;
+  static constexpr std::size_t MaxNodes = 256;
+  std::size_t nodes = 0;
+};
+
+std::optional<llvm::APInt> constantInteger(
+    const llvm::Value *value, ConstantIndexBudget &budget, unsigned depth = 0) {
+  if (!value || depth > ConstantIndexBudget::MaxDepth ||
+      ++budget.nodes > ConstantIndexBudget::MaxNodes)
+    return std::nullopt;
+  const auto *type = llvm::dyn_cast<llvm::IntegerType>(value->getType());
+  if (!type || type->getBitWidth() > ConstantIndexBudget::MaxWidth)
+    return std::nullopt;
+  const unsigned width = type->getBitWidth();
+  if (const auto *constant = llvm::dyn_cast<llvm::ConstantInt>(value))
+    return constant->getValue();
+  const auto *instruction = llvm::dyn_cast<llvm::Instruction>(value);
+  // A flagged operation may be poison. In particular freeze(poison) is a
+  // stable arbitrary value, not the unflagged operation's modular result.
+  if (!instruction || instruction->hasPoisonGeneratingFlags())
+    return std::nullopt;
+  if (const auto *freeze = llvm::dyn_cast<llvm::FreezeInst>(instruction))
+    return constantInteger(freeze->getOperand(0), budget, depth + 1);
+  if (const auto *cast = llvm::dyn_cast<llvm::CastInst>(instruction)) {
+    auto operand = constantInteger(cast->getOperand(0), budget, depth + 1);
+    if (!operand) return std::nullopt;
+    switch (cast->getOpcode()) {
+      case llvm::Instruction::ZExt:
+      case llvm::Instruction::Trunc: return operand->zextOrTrunc(width);
+      case llvm::Instruction::SExt: return operand->sextOrTrunc(width);
+      default: return std::nullopt;
+    }
+  }
+  const auto *binary = llvm::dyn_cast<llvm::BinaryOperator>(instruction);
   if (!binary) return std::nullopt;
-  const auto left = constantInteger(binary->getOperand(0));
-  const auto right = constantInteger(binary->getOperand(1));
-  if (!left || !right) return std::nullopt;
+  const auto left = constantInteger(binary->getOperand(0), budget, depth + 1);
+  const auto right = constantInteger(binary->getOperand(1), budget, depth + 1);
+  if (!left || !right || left->getBitWidth() != width ||
+      right->getBitWidth() != width)
+    return std::nullopt;
   switch (binary->getOpcode()) {
     case llvm::Instruction::Add: return *left + *right;
     case llvm::Instruction::Sub: return *left - *right;
@@ -74,9 +107,14 @@ std::optional<std::uint64_t> constantInteger(const llvm::Value *value) {
     case llvm::Instruction::Or: return *left | *right;
     case llvm::Instruction::Xor: return *left ^ *right;
     case llvm::Instruction::Shl:
-      return *right < 64 ? *left << *right : 0;
+      if (!right->uge(width)) return left->shl(right->getZExtValue());
+      return std::nullopt;
     case llvm::Instruction::LShr:
-      return *right < 64 ? *left >> *right : 0;
+      if (!right->uge(width)) return left->lshr(right->getZExtValue());
+      return std::nullopt;
+    case llvm::Instruction::AShr:
+      if (!right->uge(width)) return left->ashr(right->getZExtValue());
+      return std::nullopt;
     default: return std::nullopt;
   }
 }
@@ -105,6 +143,15 @@ std::optional<AddressKey> addressKey(
   if (const auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(stripped)) {
     auto base = addressKey(gep->getPointerOperand(), memoryBases, layout, active);
     if (base) {
+      // AddressKey/ByteFacts describe full 64-bit byte displacements. A narrower
+      // GEP index wraps only the low pointer bits, so linear byte reconstruction
+      // is not justified without a separate pointer-range proof. Keep the exact
+      // GEP identity rather than inventing a full-width constant displacement.
+      if (layout.getPointerSizeInBits(gep->getPointerAddressSpace()) != 64 ||
+          layout.getIndexSizeInBits(gep->getPointerAddressSpace()) != 64) {
+        active.erase(pointer);
+        return AddressKey{base->base, stripped, 0, false};
+      }
       llvm::APInt offset(64, 0);
       bool constantOffset = gep->accumulateConstantOffset(layout, offset);
       // LLVM's opaque-pointer GEPs normally provide the complete DataLayout
@@ -115,13 +162,15 @@ std::optional<AddressKey> addressKey(
       if (!constantOffset && gep->getNumIndices() == 1) {
         const auto *sourceType = gep->getSourceElementType();
         const auto *index = gep->getOperand(gep->getNumOperands() - 1);
-        if (const auto value = constantInteger(index)) {
-          const auto scale = layout
-                                 .getTypeAllocSize(
-                                     const_cast<llvm::Type *>(sourceType))
-                                 .getKnownMinValue();
-          if (scale != 0) {
-            offset = llvm::APInt(64, *value) * llvm::APInt(64, scale);
+        ConstantIndexBudget budget;
+        if (sourceType->isSized()) {
+          const auto size = layout.getTypeAllocSize(
+              const_cast<llvm::Type *>(sourceType));
+          const auto value = constantInteger(index, budget);
+          if (value && !size.isScalable()) {
+            // GEP sign extends or truncates the final integer index to the
+            // pointer index width before multiplying by the fixed type size.
+            offset = value->sextOrTrunc(64) * llvm::APInt(64, size.getFixedValue());
             constantOffset = true;
           }
         }
@@ -191,12 +240,18 @@ bool provablyDisjoint(const AddressKey &left, unsigned leftBytes,
                       const AddressKey &right, unsigned rightBytes) {
   if (left.base != right.base || !left.constant || !right.constant)
     return false;
-  const auto delta = right.offset - left.offset;
-  const auto signedDelta = delta <= std::numeric_limits<std::int64_t>::max()
-      ? static_cast<std::int64_t>(delta)
-      : -static_cast<std::int64_t>(~delta + 1);
-  return signedDelta >= static_cast<std::int64_t>(leftBytes) ||
-         signedDelta <= -static_cast<std::int64_t>(rightBytes);
+  const auto *base = llvm::dyn_cast<llvm::Instruction>(left.base);
+  if (!base || !base->getType()->isPointerTy()) return false;
+  const auto width = base->getModule()->getDataLayout().getIndexSizeInBits(
+      base->getType()->getPointerAddressSpace());
+  if (!width || width > 64) return false;
+  const auto mask = width == 64 ? std::numeric_limits<std::uint64_t>::max()
+                               : (std::uint64_t{1} << width) - 1;
+  // Circular half-open ranges are disjoint only if neither start lies in the
+  // other range. Both distances are unsigned and use the actual index width.
+  const auto forward = (right.offset - left.offset) & mask;
+  const auto backward = (left.offset - right.offset) & mask;
+  return forward >= leftBytes && backward >= rightBytes;
 }
 
 bool mayOverlap(const AddressKey &left, unsigned leftBytes,
@@ -396,13 +451,15 @@ bool invalidateSummaryWrites(
 bool isKnownLocalStore(const llvm::StoreInst &store,
                        const std::unordered_set<llvm::Value *> &memoryBases,
                        const llvm::DataLayout &layout) {
+  if (!store.isSimple()) return false;
   if (addressKey(store.getPointerOperand(), memoryBases, layout))
     return false;
   const auto *underlying = llvm::getUnderlyingObject(store.getPointerOperand(), 32);
   if (llvm::isa<llvm::AllocaInst>(underlying))
-    return true;
+    // A captured allocation may itself have been installed as Guest data.
+    return !llvm::PointerMayBeCaptured(underlying, true, 128);
   if (const auto *argument = llvm::dyn_cast<llvm::Argument>(underlying))
-    return argument->getType()->isPointerTy();
+    return argument->getType()->isPointerTy() && argument->hasNoAliasAttr();
   (void)layout;
   return false;
 }
@@ -808,6 +865,11 @@ void runByteForwarding(llvm::Function &function,
           facts.clear();
           continue;
         }
+        // Different loads of descriptor.data may refer to the same bytes.
+        for (auto base = facts.begin(); base != facts.end();) {
+          if (base->first != access->address.base) base = facts.erase(base);
+          else ++base;
+        }
         auto &baseFacts = facts[access->address.base];
         for (unsigned index = 0; index < access->bytes; ++index) {
           const auto offset = byteOffset(*access, index);
@@ -817,9 +879,17 @@ void runByteForwarding(llvm::Function &function,
         continue;
       }
 
+      if (llvm::isa<llvm::FenceInst>(instruction) || instruction.mayWriteToMemory()) {
+        facts.clear();
+        continue;
+      }
       auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
       if (!load) continue;
-        auto access = classifyLoad(*load, memoryBases, layout);
+      if (!load->isSimple()) {
+        facts.clear();
+        continue;
+      }
+      auto access = classifyLoad(*load, memoryBases, layout);
       if (!access || !access->address.constant) continue;
       auto base = facts.find(access->address.base);
       if (base != facts.end()) {
@@ -1063,6 +1133,11 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
           }
 
           if (auto *load = llvm::dyn_cast<llvm::LoadInst>(&instruction)) {
+            if (!load->isSimple()) {
+              facts.clear();
+              ++stats.aliasBarriers;
+              continue;
+            }
             auto access = classifyLoad(*load, memoryBases, module.getDataLayout());
             if (!access)
               continue;
@@ -1111,6 +1186,11 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
             ++stats.guestStores;
             invalidate(facts, *access, stats);
             facts.push_back(Fact{*access, access->value});
+            continue;
+          }
+          if (llvm::isa<llvm::FenceInst>(instruction) || instruction.mayWriteToMemory()) {
+            facts.clear();
+            ++stats.aliasBarriers;
           }
         }
         for (auto *successor : llvm::successors(block)) {
