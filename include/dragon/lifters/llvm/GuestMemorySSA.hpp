@@ -19,6 +19,9 @@ namespace dragon::llvmlifter {
 /// use a PHI for a loop-carried value, and other loops remain barriers.
 /// Conflicting join values may use PHIs when enabled. Little-endian constant
 /// GEP ranges may also be rebuilt byte-wise after the fact path is proven.
+/// With cross-block and PHI handling enabled, bounded edge copies may recover
+/// a proved store through a shared checked path. Original guards and unknown
+/// paths remain; CFG/live-out repair has separate conservative resource caps.
 struct MemoryForwardOptions {
   std::size_t maxRewrites = 65536;
   bool runMem2Reg = true;
@@ -39,10 +42,10 @@ struct MemoryForwardStats {
   bool available = false;
   bool complete = true;
   bool changed = false;
-  std::size_t blocksVisited = 0;
+  std::size_t blocksVisited = 0; ///< Includes newly copied edge-path blocks.
   std::size_t guestLoads = 0;
   std::size_t guestStores = 0;
-  std::size_t loadsForwarded = 0;
+  std::size_t loadsForwarded = 0; ///< Includes LOADs removed from edge copies.
   std::size_t loadsReused = 0;
   std::size_t callBarriers = 0;
   std::size_t aliasBarriers = 0;

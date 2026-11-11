@@ -211,6 +211,40 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Checked-memory incoming edges (2026-11-11, baseline `50f698c`): see
+`docs/llvm-memory-checked-edges.md`. After all ordinary GuestMemorySSA worklists,
+bounded copies specialize one proved predecessor of a shared checked LOAD.
+Exact same Guest base/64-bit byte-GEP address proofs use PHI translation plus
+restricted flag-free Add/Sub structural matching. No frame, image, alias or
+callee-entry assumptions. Visible undef/poison and unsafe flags stay unknown;
+freeze is an opaque stable SSA boundary, never stripped or reused across a
+new region execution. All original guards, unknown incoming paths, original
+LOADs and failure exits remain. Outside PHIs and all live-outs (including loop
+incoming uses) are repaired. Cross-block and PHI options must both be enabled;
+public ABI and default optimize order are unchanged. Private per-path/module
+caps bound proof visits, cloning and SSA repair; partial safe IR may remain
+with incomplete explicitly reported. New blocks cannot recursively expand the
+same run. `blocksVisited`/`phisInserted` include copied blocks/SSA repair.
+Final same-source 16-case regressions: old 153 failed assertions, v1 50 failed,
+v2 873/873 pass. V1 native gains correctly fail on Sub, not silently accepted as
+no-op compatibility. Final main/no-Z3 focus 16/873, related 70/2393; CTest
+903/903 and 768/768. Final integrated native: 2176 matches, 88/88 specified
+faults detected in 192 IR-control observations and 5987 comparator controls.
+Compare 512-byte regs, full 64 KiB, seven Exit fields, result and call count.
+Previous irreducible native matrix rerun: 1056 matches, result/memory controls
+1056 each. Its new 1-edge copy retains the original LOAD; the old local-fact
+test now checks both disabled-copy independence and explicit-edge structure.
+Real raw and matched post-GVN pipelines each complete C16/LLVM16, with full
+state and all field controls; repeat inputs are not new sample coverage.
+Matched post-GVN extra forwarding old->new: f-cff O0 0->1, f-combo O0 0->4,
+both O2 zero. Eight frozen IRs verify, six retain explicit budget incomplete.
+Actual CFF 1->1 and original switch 1->1; table LOAD/defaults remain. RIP cleanup
+is separate, and root execution match is not analysis completeness. No new
+single-instruction/IGNIL or 69-input corpus run is claimed. Backend frozen as
+`bf6322254b1239aeb65fb093fa41dcb82bc31bd087f33911f713f70d7ecd0003` under
+`~/vmc-runs/checked-edge-memory-20261111/integrated-runtime-v2/`; independent
+native/real evidence is under `~/vmc-runs/guest-memory-checked-edges-20261111/`.
+
 Local state transfers and conservative memory coverage (2026-11-11, baseline
 `26e1fce`): see `docs/llvm-local-state-repairs-20261111.md`. Deflattening scans
 backward within one predecessor for the nearest exact state STORE, allowing

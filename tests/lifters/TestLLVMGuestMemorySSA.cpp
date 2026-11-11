@@ -10,6 +10,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -737,14 +738,57 @@ TEST_CASE("S2 keeps irreducible blocks independent of incomplete incoming facts"
   llvm::Module module{"irreducible-cross-block", context};
   irreducibleMemory(module, IrreducibleAccess::CrossBlock);
   REQUIRE(integerLoads(module) == 1);
-  const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {65536, false});
-  CHECK(stats.complete);
-  CHECK(stats.blocksVisited == 4);
-  CHECK_FALSE(stats.changed);
-  CHECK(stats.loadsForwarded == 0);
-  CHECK(stats.phisInserted == 0);
-  CHECK(integerLoads(module) == 1);
-  verify(module);
+  SECTION("The ordinary fact walk still imports no incomplete loop facts") {
+    MemoryForwardOptions options{65536, false};
+    options.enablePhi = false; // Disable the separate CFG-copy fallback.
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, options);
+    CHECK(stats.complete);
+    CHECK(stats.blocksVisited == 4);
+    CHECK_FALSE(stats.changed);
+    CHECK(stats.loadsForwarded == 0);
+    CHECK(stats.phisInserted == 0);
+    CHECK(integerLoads(module) == 1);
+    verify(module);
+  }
+  SECTION("A proved incoming edge can copy the load without a loop invariant") {
+    auto &function = *module.begin();
+    auto *entry = &function.getEntryBlock();
+    auto *left = entry->getTerminator()->getSuccessor(0);
+    auto *right = entry->getTerminator()->getSuccessor(1);
+    auto *exit = right->getTerminator()->getSuccessor(1);
+    const auto stats = dragon::llvmlifter::detail::runGuestMemorySSA(module, {65536, false});
+    CHECK(stats.complete);
+    CHECK(stats.blocksVisited == 5);
+    CHECK(stats.changed);
+    CHECK(stats.loadsForwarded == 1);
+    CHECK(stats.phisInserted == 0);
+    CHECK(integerLoads(module) == 1);
+    // One of the two explicit reaching stores authorizes its own copied edge.
+    // The original right-hand LOAD must still serve the remaining edge.
+    unsigned originalEdges = 0;
+    llvm::BasicBlock *copy = nullptr;
+    for (auto *pred : {entry, left}) {
+      const unsigned edge = pred == entry ? 1 : 0;
+      auto *successor = pred->getTerminator()->getSuccessor(edge);
+      if (successor == right) ++originalEdges;
+      else copy = successor;
+    }
+    CHECK(originalEdges == 1);
+    REQUIRE(copy);
+    CHECK(copy != right);
+    CHECK(copy->getParent() == &function);
+    auto *branch = llvm::dyn_cast<llvm::BranchInst>(copy->getTerminator());
+    REQUIRE(branch);
+    REQUIRE(branch->isConditional());
+    CHECK(branch->getCondition() == function.getArg(3));
+    CHECK(branch->getSuccessor(0) == left);
+    CHECK(branch->getSuccessor(1) == exit);
+    CHECK(std::any_of(right->begin(), right->end(), [](const llvm::Instruction &op) {
+      const auto *load = llvm::dyn_cast<llvm::LoadInst>(&op);
+      return load && load->getType()->isIntegerTy(64);
+    }));
+    verify(module);
+  }
 }
 
 TEST_CASE("S2 retains memory barriers in conservative cycle coverage",

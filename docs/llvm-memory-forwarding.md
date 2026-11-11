@@ -4,13 +4,16 @@
 它可先运行 mem2reg，再识别 Static/V2 函数中的 Guest memory base。事实记录精确的
 地址、字节宽度和 SSA 值，只有证明安全时才改写 LOAD；默认 `optimize()` 顺序不变。
 
-当前实现覆盖两层，并消费一类明确的调用效果：
+当前实现覆盖以下能力，并可消费明确的调用效果：
 
 - 同一成功检查链上的精确 STORE→LOAD 转发，以及没有中间写入的 LOAD 复用；
 - 无回边的 CFG 边传播。汇合点要求每条有效入边都提供同一地址和宽度的事实；值相同
   时直接保留，值不同则在汇合块入口插入 LLVM PHI，再转发后续 LOAD。
 - 小端常量 GEP 的字节级重建。已知 STORE 覆盖 LOAD 的全部字节时，按真实字节序拼回
   整数；只覆盖一部分的读仍保留原 LOAD。
+- 不可约循环中未被原调度器访问的可达块会从空事实开始补扫，不跨块导入/导出事实。
+- 对只有一条已证明入边的共享检查路径，受限复制检查块，在副本中转发精确 STORE 值，
+  保留其它入边、原 LOAD 和所有检查/失败出口，并修复外部 PHI 与业务 live-out。
 
 没有 `readnone`/`readonly` 等 LLVM 内存效果证明的调用、未知别名、易失/原子访问和部分重叠写
 都是保守屏障；带这些属性的调用只读或不访问内存，可以保留事实。自然循环只有在入口事实与所有
@@ -23,6 +26,12 @@
 `MemoryForwardOptions` 的 `enableCrossBlock` 和 `enablePhi` 允许 C++ 调用者分别关闭
 跨块传播或冲突值 PHI；C shim/Python 使用完整的默认 S2 行为，并返回
 `phis_inserted`、`join_barriers`、`loop_barriers` 和 `byte_rebuilds` 统计。
+
+按入边复制需要上述两个选项都启用；它在原事实传播完成后运行，不向旧循环算法导出
+新不变量。地址只接受受限的 64 位 byte-GEP 和明确的逐边 SSA 等价，不假设镜像不变。
+此路径有独立的代码增长和证明预算，并可能增加 LLVM 块与 PHI；触及上限报告
+`complete=false`。建议在 mem2reg/InstCombine/GVN 后显式运行。当前合同和最新验证见
+[按具体入边恢复 Guest 内存值](llvm-memory-checked-edges.md)，下文数字保留历史阶段。
 
 ## 已证明的内部调用（可选）
 

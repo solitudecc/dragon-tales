@@ -59,6 +59,7 @@ add_executable(dragon_tests
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
         lifters/TestLLVMGuestMemorySSA.cpp
+        lifters/TestLLVMGuestMemoryEdges.cpp
         lifters/TestLLVMCallStateBarriers.cpp
         lifters/TestLLVMReachingStore.cpp
         lifters/TestLLVMCrossCallIsolation.cpp

@@ -1,6 +1,8 @@
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 #include <dragon/lifters/llvm/CallEffectSummary.hpp>
 
+#include "GuestMemoryEdges.hpp"
+
 #include "analysis/LeafCallEffects.hpp"
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/lifters/llvm/Execution.hpp>
@@ -882,6 +884,7 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     return stats;
 
   LeafCallCache leafCallCache;
+  CheckedMemoryEdgeBudget checkedEdgeBudget;
 
   for (auto &function : module) {
     if (function.isDeclaration() || function.arg_size() < 2)
@@ -1296,6 +1299,9 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     if (stats.loadsForwarded < options.maxRewrites)
       runByteForwarding(function, memoryBases, module.getDataLayout(), options,
                         stats, graph, leafCallCache);
+    if (stats.loadsForwarded < options.maxRewrites)
+      forwardCheckedMemoryEdges(function, memoryBases, module.getDataLayout(),
+                                options, stats, checkedEdgeBudget);
     if (stats.loadsForwarded >= options.maxRewrites) {
       stats.complete = false;
       ++stats.budgetExhausted;

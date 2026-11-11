@@ -180,6 +180,8 @@ class LLVMLifter {
   /// loop-carried PHI, while calls, unknown aliases and partial overlaps remain
   /// barriers otherwise. Little-endian constant ranges may be rebuilt byte-wise.
   /// The default optimization pipeline is unchanged; callers opt into this stage.
+  /// May copy bounded checked paths for proved incoming edges and repair
+  /// live-out SSA; consumers must invalidate cached CFG analyses after changes.
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const MemoryForwardOptions &options = {});
 

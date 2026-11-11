@@ -13,6 +13,7 @@ add_library(libdragon SHARED
         LLVMDeflattening.cpp
         CallEffectSummary.cpp
         GuestMemorySSA.cpp
+        GuestMemoryEdges.cpp
         LLVMPreparedRegion.cpp
         LLVMLiftProvenance.cpp
         LLVMPredicateFolding.cpp
