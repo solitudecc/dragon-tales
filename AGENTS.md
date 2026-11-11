@@ -217,6 +217,25 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Checked Guest index dependency reuse (2026-11-12, base `40f733e`, implementation
+`02a71ef`): one proveStore invocation shares LOAD/STORE IndexDependencies under
+the same fixed corridor/predecessor. Fresh/history remain distinct; any failed
+traversal aborts the candidate and no cache escapes. Budgets and expression
+admission are unchanged. Old both3/46 fail2cases/8assertions; new both3/46 pass.
+CTest1065/1065 and930/930. Independent native each1344 complete state matches,
+576fault observations/320specified detections,14784comparator controls;
+40streams/1920frames audited. Initial v1 fixture IR sentinel typo was caught
+on before execution; v2 changes only that literal to the unchanged model value,
+reruns old/new, and retains all v1 failure evidence. Nine historical before/after
+IR products remain byte-equal; old6480 native not recounted, whole6=false and
+single3/branch3=true remain. Fixed B single-pass cff0->14/combo0->10 forwards;
+strict state43 old fails/new passes, unknown/original LOADs remain. Fresh full B
+C16/LLVM16 and144controls pass with unchanged harness/inputs; later GuestSSA
+12incomplete/12budget and dispatch12incomplete/16budget remain. New constant
+table addresses are address/context gains, not proven table contents or full
+loop deflattening. No new instruction/Unicorn/full69 corpus campaign. See
+`docs/guest-index-proof-reuse-20261112.md` and its native/real reports.
+
 Guest-memory PHI edge coverage (2026-11-12, base `e5d49be`, implementation
 `5e9a75f`): ordinary differing-value merges must cover every actual CFG edge
 before creating a PHI. Backedges not yet proved and unanalyzed predecessors
