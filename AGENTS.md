@@ -217,6 +217,27 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Partial-select corridor J (2026-11-12, combined implementation `55fe295`):
+see `docs/guarded-partial-corridor-native-validation-20261112.md` and
+`docs/guarded-partial-combined-tail9-20261112.md`. An explicitly partial hint
+never proves the value set complete: original CALL, post-call reload, size
+checks, selector LOAD and same-value full fallback remain. Original13 API
+recipes pass in each frozen62ff74/d8fd56 runtime, including [1,0,0] continuation.
+Per build O0/O2 native:17280 normal full-state matches (7056 business returns,
+10224 checked failures),9600 fault observations/5056 specified detections,
+190080 comparator controls,28 streams/26880 frames reaudited. Alias layouts and
+actual helper effects are included; zero exclusions/skips/normalization.
+Old I2 45 and H94 IR compatibility plus main/no-Z3 J41 are exact, with damaged
+comparison controls. Do not recount reused I2/H/K native observations.
+Native archive7b6d8806 has997 exact payloads; root metadata06774b47 has118.
+The independent nine-pass K/J/tiny/constant/E tail on frozen I2 finals keeps
+closure T/T/F/F. ComboO2 K2 loops and J4 partial edges now expose a different
+finite-prediction residue; comboO0 i13 still remains. Sixteen structure controls
+are caught. Full56 adapters are prepared but not executed by that probe.
+Main/no-Z3 CTest1131/996 and focus66/2480. Actual final composed real replay
+and observed-loop checks remain required before main merge/completion.
+
+
 Invariant self-loop isolation K (2026-11-12): see
 `docs/llvm-invariant-self-loops.md`. Opt-in `invariant-self-loops` retains the
 first icmp/branch and isolates only pure self-preserving PHIs into a separate
