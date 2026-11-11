@@ -211,6 +211,45 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Loop-carried snapshots and original-edge batching (2026-11-11, baseline
+`01c5abd`, implementation `feafb31`): see
+`docs/llvm-loop-carried-state-contexts.md`. A useful downstream constant-PHI
+context may batch original incoming edges in one invocation; new copies/reentry
+edges are not revisited in that snapshot. Ordinary one-block fallback keeps its
+one-copy contract. Dominating old guard PHI/LOAD/freeze inputs cross a separate
+edge-snapshot PHI, never the fresh VMap; SSAUpdater repairs its predecessor use
+and all existing external/loop/original-region uses. Snapshot blocks/PHIs/branch
+count toward existing 6-block/256-copy-instruction and module 64/16384 limits;
+SSA repair has separate live-out/use/cell caps, so 256 is not final IR size.
+Reject profitless old-input contexts, truncation losing the useful join, and
+known direct self-target guards (otherwise repeated runs grow a copy chain).
+Never empty original PHIs; unknown paths remain. This is not a general loop
+fixed point; future-S old definitions still stop extension. No default pipeline,
+Graph, instruction, ABI, call-effect or table-content assumption change.
+Exact same old/new test binary: old 12/351 fails 8 cases/91 assertions, new
+12/503 passes; unchanged previous 35 plus new: 47/3301 in both builds. Final
+CTest main 963/963, no-Z3 828/828. New historical positive fixtures use i64;
+other widths/pointers, multi-old-value dedup and all-known incoming shape lack
+dedicated new positive fixtures. Original native old/new each 5760 matches/604
+faults; isolated old-B old/new each 1920/604; previous context compatibility new
+6912/486. Full original future-S precision failure stays, zero native executions
+there; pure-semantic rerun and separate isolated variant do not weaken it.
+Independent native matrices use main; no-Z3 has full CTest/focus only. Real
+raw/post each C16/LLVM16 full roots. f-cff O2 has 16 context copies/13 distinct
+actual target-load indices per call; old 16 calls reach the same set. CFF 1->17
+is duplication, original switch 1->1, unknown incoming 7/7 retained. Rewrites
+four-module order 0/16/0/3; dispatch incomplete all four, GuestSSA raw2/post4.
+64-copy budget remains, no new real-state-coverage or speed-multiplier claim.
+Root binds 381 Mac/VM semantic/test/validation sources and five native producer
+snapshots; root archive includes full main pair and gzip no-Z3 pair. Archive
+SHA 16c8ce83c4e13b7ef5e4ce03ef39e8c9286e48ee52fe5a6dc837afe14a49c6a0;
+independent SHA d59b5293accf773d2bfeb4ddec45a8836e4d75bdace7c08e9c7a6a979ced6024.
+Frozen main: `~/vmc-runs/loop-carried-root-20261111/final-runtime/`. Fully archived
+reference raw directories may be absent; adjacent `-ARCHIVED.txt` restores the
+complete both-host tar. Generated corrupt Ninja deps were preserved then rebuilt;
+initial unsynced harness source binding failed before cleanup, final 381 pass.
+No new instruction/IGNIL/69-input campaign or relaxed comparator/exclusion.
+
 Bounded state contexts (2026-11-11, baseline `947f9c1`, implementation
 `1449cd2`): see `docs/llvm-state-context-corridors.md`. An already proved guard
 edge may extend through up to 6 safe blocks / 256 total instructions, retaining

@@ -1,6 +1,6 @@
 # 循环携带值与多入边状态上下文
 
-基线 `01c5abd`。主样本仍是冻结的 Tigress x86-64 `f-cff O2`，VM 路径为
+基线 `01c5abd`，实现里程碑 `feafb31`。主样本仍是冻结的 Tigress x86-64 `f-cff O2`，VM 路径为
 `/home/cc/vmc-runs/crosscall-cff-combo-latest-20261111/f-cff/O2/fixture.elf`，
 目标函数 `kernel` 入口 `0x10080`。回归同时保留 f-cff/f-combo 的 C O0/O2 四个 ELF。
 这些路径、名称和地址只用于验收，不进入生产算法。
@@ -133,8 +133,12 @@ native 报告及 producer/model 源快照。未重跑单指令/IGNIL 和完整 6
 | `multistate-impl-20261111-artifacts.tar.gz` | `519a694452760714777d9f58edb82cf48382825322275822801ae10624450fbe` | 62（含 manifest） |
 | `loop-state-unit-tests-20261111-artifacts.tar.gz` | `d03dac03d870f0e5df58869db99d7d3e12d016f237d72b09502dd797862e3585` | 61（含 manifest） |
 | `loop-carried-reference-20261111.tar.gz` | `d59b5293accf773d2bfeb4ddec45a8836e4d75bdace7c08e9c7a6a979ced6024` | 1012 |
+| `loop-carried-root-20261111-artifacts.tar.gz` | `16c8ce83c4e13b7ef5e4ce03ef39e8c9286e48ee52fe5a6dc837afe14a49c6a0` | 46（含 manifest） |
 
 独立证据归档双端 SHA 一致，1060 个 tar members 完整读取；20 条正常 before/after
 snapshot streams 经只读全字节复审。expanded reference 目录为释放 VM 空间已移除，
 完整双端 tar 保留，VM 同名 `-ARCHIVED.txt` 含恢复命令。root 的构建/绑定归档在最终
-交接提交中记录。
+交接中包含 56 个 members、45 个数据文件及 manifest，包含冻结 main 双库和 no-Z3
+压缩双库、两套完整构建日志、381 源文件绑定、11 个关键源快照及实际已提交代码 patch。
+重建过损坏的生成物 Ninja deps 缓存，旧缓存及错误日志保留；首次 root 绑定因尚未同步
+验证脚本而在清理前失败，同步后最终 381 项全部通过，均不计作语义执行。

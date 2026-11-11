@@ -18,8 +18,9 @@
 - `FiniteValueAccumulator` / `IndirectTargetAccumulator` 提供单调值集合和目标集完备性
   契约，超预算或未知路径永久回到 Unknown，不发布部分候选。
 - `dispatch-specialize` 折叠当前 IR 中唯一可证明的常量 branch/switch 条件；
-  现在也能为共享 PHI 上一条已证明的入边复制状态检查块，保留 LOAD、标志、块外及循环
-  live-out，未知路径继续走原分支；工作量有界，未证明的 poison 条件不折叠。
+  现在也能为共享 PHI 上逐条已证明的入边复制状态检查上下文，有实际下游常量 PHI 收益时
+  可在一次调用内批处理原始入边，并用边上快照保留上次循环执行值。保留 LOAD、标志、
+  块外及循环 live-out，未知路径继续走原分支；工作量有界，未证明的 poison 条件不折叠。
   `dispatch-deflatten` 对状态 PHI、有限状态集合和同函数 load-backed selector 做证明型直连，
   并保留未知状态和未证明分发器。
 - `CallEffectSummary v2` 保留正常返回后的效果描述，供内存 SSA 消费；它不证明 callee
@@ -34,7 +35,7 @@
 不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
 
-最新同函数状态检查里程碑 `42639c6` 的完整 CTest 为 main **937/937**、无 Z3
+同函数状态检查里程碑 `42639c6` 的完整 CTest 为 main **937/937**、无 Z3
 **802/802**，独立原生 4928 次状态检查、2176 次内存兼容和 128 次外部 PHI 比较全匹配。
 同时修复了已有 checked-edge 内存副本给块外 SSA PHI 写入 null 的问题。真实 f-cff O2
 仅新增一条已知 50 状态检查入边特化，实际 CFF/table switch 仍保留；其余三个整模块仍
@@ -49,6 +50,20 @@
 **1→2 的上下文副本**，没有消除原分发器；其它三个样本没有新增该项精度，预算 incomplete
 继续保留。多条状态入边、O0 内存关系及表内容证明仍是后续缺口，详见
 [多级状态上下文](llvm-state-context-corridors.md)。
+
+最新实现里程碑 `feafb31` 增加原始入边批处理和 prior-execution PHI/LOAD/freeze
+的边上快照，避免将旧执行值映为本次副本重算值；并修复已知直接自环重复优化时无收益
+副本链不断增长的问题。旧同源 12 用例实际 8 cases / 91 assertions 失败，新版 12/503
+通过；相关组件两构建均 **47 cases / 3301 assertions**，完整 CTest 为 main
+**963/963**、无 Z3 **828/828**。原生新库原矩阵 5760、独立隔离域 1920、旧兼容
+6912 均完整状态匹配；原 future-S 精度失败保留，未删除或放宽原夹具。
+
+真实 raw/post 各 C16/LLVM16 匹配。f-cff O2 一次调用获得 16 个上下文、13 个不同
+实际 target LOAD 索引；旧版 16 次调用也得到同一集合，收益是有界批处理，不声称
+增加真实可解析状态或测得 16 倍速度。真实 CFF switch **1→17** 仍为复制，四个模块
+dispatch 均 incomplete；64 块上限未提高。下一项仍是 future-S 旧定义、超预算状态、
+O0 内存关系和表内容证明，不能称复杂平坦化已消除。详见
+[循环携带值与多入边状态上下文](llvm-loop-carried-state-contexts.md)。
 
 此前跨调用直接 STORE 阶段的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
 `857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
