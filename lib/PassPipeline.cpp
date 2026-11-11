@@ -115,6 +115,28 @@ PassPipeline::PassPipeline(bool builtins) {
   registerLLVM("instcombine",[](LLVMContext &c,const Options &){c.lifter.runInstCombine();return Result{};},false,{},none);
   registerLLVM("gvn",[](LLVMContext &c,const Options &){c.lifter.runGVN();return Result{};},false,{},none);
   registerLLVM("dce",[](LLVMContext &c,const Options &){c.lifter.runDCE();return Result{};},false,{},none);
+  registerLLVM("entry-prefix",[](LLVMContext &c,const Options &o) {
+    const auto s=c.lifter.runEntryPrefix({number(o,"max_blocks",32),
+                                        number(o,"max_instructions",2048)});
+    Result r;
+    r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
+    r.changed=s.changed;
+    r.message=s.available?s.message:"entry-prefix requires a nonempty StaticAnalysis module";
+    r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
+      {"candidate_edges",s.candidateEdges},{"peeled_edges",s.peeledEdges},
+      {"cloned_blocks",s.clonedBlocks},{"cloned_instructions",s.clonedInstructions},
+      {"original_exits",s.originalExits},{"rejected",s.rejected},
+      {"budget_exhausted",s.budgetExhausted},{"skipped_single_entry",s.skippedSingleEntry},
+      {"internal_edges",s.internalEdges},{"backedges",s.backedges},
+      {"terminal_edges",s.terminalEdges}};
+    return r;
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_blocks","max_instructions"})(o);
+    if(!error.empty())return error;
+    if(number(o,"max_blocks",32)>4096)return std::string{"max_blocks must be at most 4096"};
+    if(number(o,"max_instructions",2048)>65536)return std::string{"max_instructions must be at most 65536"};
+    return std::string{};
+  });
   registerLLVM("guest-memory",[](LLVMContext &c,const Options &o) {
     llvmlifter::MemoryForwardOptions options;
     options.maxRewrites=number(o,"max_rewrites",65536);

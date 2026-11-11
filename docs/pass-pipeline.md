@@ -15,6 +15,9 @@ C/Python 插件可编排现有变换及分析；直接访问并改写 Graph/LLVM
 显式 [guarded entry view](llvm-guarded-entry.md) 可作为独立 `LLVMLifter` 运行这些步骤。
 它检查候选入口字节并保留普通回退，使用者必须选择 manifest 的新增入口符号。
 原始模块和默认配方不变；成功检查后的条件化简不代表无条件恢复了整个分发器。
+可在该视图的原始 IR 上先运行一次显式 [entry-prefix](llvm-entry-prefix.md)，
+隔离检查成功后的首次执行前缀，再运行内存和控制流配方。复制预算按整个模块累计；
+未知调用和循环回边继续进入原块，不能把首次入口收益解释为完整去平坦化。
 
 ## 两个运行位置
 
@@ -40,6 +43,7 @@ flowchart LR
 | `graph-audit` | Graph，读取统计 | 无；报告指令、有效块/函数、缺失 IGNIL 和按块累加的 unlifted 记录数 |
 | `finite-values` | Graph，只读分析并缓存 | `max_values=64, max_blocks=4096, max_operations=1000000, max_facts=262144` |
 | `mem2reg` / `instcombine` / `gvn` / `dce` | LLVM | 无 |
+| `entry-prefix` | LLVM，显式选择 | `max_blocks=32, max_instructions=2048`；仅限 StaticAnalysis，复制有界首次入口前缀，拒绝或预算耗尽报告 Incomplete；硬上限 4096/65536 |
 | `guest-memory` | LLVM，显式选择 | `max_rewrites=65536, run_mem2reg=1, enable_cross_block=1, enable_phi=1, consume_call_effect_summaries=0, edge_worklist=0`；复用现有 GuestMemorySSA，标志只接受整数 0/1 |
 | `control-flow` | LLVM，显式选择 | 无；SCCP、状态机/普通跳转穿线、CFG 与死代码清理。详见 [控制流清理](llvm-control-flow-cleanup.md) |
 | `dispatch-specialize` | LLVM，显式选择 | `max_conditions=256, max_expression_nodes=128, allow_plain_stores=0`；唯一常量条件才改写，未知/多值保持原样；条件或表达式预算退出报告 Incomplete |

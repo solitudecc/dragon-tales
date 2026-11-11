@@ -67,6 +67,7 @@ add_executable(dragon_tests
         lifters/TestLLVMGuestLoopMembership.cpp
         lifters/TestLLVMGuestJoinOrder.cpp
         lifters/TestLLVMGuardedEntry.cpp
+        lifters/TestLLVMEntryPrefix.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
@@ -238,6 +239,11 @@ if(Python3_Interpreter_FOUND)
                  COMMAND ${Python3_EXECUTABLE}
                          ${CMAKE_CURRENT_SOURCE_DIR}/python/test_guarded_entry.py)
         set_tests_properties("Python API - guarded entry views"
+                PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
+        add_test(NAME "Python API - entry prefix specialization"
+                 COMMAND ${Python3_EXECUTABLE}
+                         ${CMAKE_CURRENT_SOURCE_DIR}/python/test_entry_prefix.py)
+        set_tests_properties("Python API - entry prefix specialization"
                 PROPERTIES ENVIRONMENT "DRAGON_C_LIB=$<TARGET_FILE:libdragon_c>")
         add_test(NAME "Python API - borrowed views keep their Graph alive"
                  COMMAND ${Python3_EXECUTABLE}

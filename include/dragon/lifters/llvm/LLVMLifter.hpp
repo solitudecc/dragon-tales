@@ -8,6 +8,7 @@
 #include <dragon/lifters/llvm/GuestMemorySSA.hpp>
 #include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
 #include <dragon/lifters/llvm/LLVMDeflattening.hpp>
+#include <dragon/lifters/llvm/LLVMEntryPrefix.hpp>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -227,6 +228,15 @@ class LLVMLifter {
       const Graph &graph, const MemoryForwardOptions &options = {});
   [[nodiscard]] MemoryForwardStats runGuestMemorySSA(
       const Graph &graph, const MemoryForwardOptions &options, bool enableEdgeWorklist);
+
+  /// Isolate one bounded execution prefix of original guarded.accept edges.
+  /// Unknown conditions, calls and reentries keep their original paths. Only
+  /// direct RET leaves may extend a switch boundary. Failed candidates leave
+  /// the source function unchanged; successful commits retain Module/Function
+  /// identity but invalidate instruction/CFG handles and cached analyses.
+  /// An already isolated single-entry root is skipped on repeated invocation.
+  [[nodiscard]] EntryPrefixStats runEntryPrefix(
+      const EntryPrefixOptions &options = {});
 
   /// Create an independent owned module with a separately named guarded entry.
   /// Only unchanged canonical StaticAnalysis/FunctionStart entries are admitted.

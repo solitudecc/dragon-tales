@@ -19,6 +19,7 @@ add_library(libdragon SHARED
         LLVMLiftProvenance.cpp
         LLVMPredicateFolding.cpp
         LLVMMBASimplification.cpp
+        LLVMEntryPrefix.cpp
         LLVMGuardedEntry.cpp
         LLVMExecution.cpp
         LLVMImportMetadata.cpp
