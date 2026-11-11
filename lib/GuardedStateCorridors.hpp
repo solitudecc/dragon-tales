@@ -8,4 +8,12 @@ GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &,
 // Opt-in STORE values are untrusted predictions, never forwarded memory facts.
 GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &,
     const GuardedTransitionsOptions &, bool storePredictions);
+// Separate opt-in incomplete predictions. Existing result layouts are unchanged.
+struct GuardedPartialCorridorsStats {
+  GuardedTransitionsStats base;
+  std::size_t partialCandidateEdges=0,partialAttemptedEdges=0;
+  std::size_t partialRewrittenEdges=0,partialUnresolvedEdges=0;
+};
+GuardedPartialCorridorsStats runGuardedPartialCorridors(llvm::Module &,
+    const GuardedTransitionsOptions & = {});
 }

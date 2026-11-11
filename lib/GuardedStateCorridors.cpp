@@ -63,16 +63,17 @@ struct Enumerator {
   BooleanScenario *scenario=nullptr;
   const llvm::DominatorTree *historicalDom=nullptr;
   std::unordered_set<llvm::Value *> checkedHistory,activeHistory;
+  bool allowPartial=false,usedPartial=false,fatalPartial=false;
   std::unordered_map<llvm::BasicBlock *,std::size_t> positions;
   std::unordered_map<Key,Values,KeyHash> memo;
   std::unordered_set<Key,KeyHash> active;
-  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr):seed(s),path(p),work(w),scenario(sc),historicalDom(hd) {
+  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr,bool partial=false):seed(s),path(p),work(w),scenario(sc),historicalDom(hd),allowPartial(partial) {
     for(std::size_t n=0;n<p.size();++n)positions.emplace(p[n],n);
   }
   bool append(Values &to,const llvm::APInt &value) {
     if(!work.charge())return false;
     if(std::find(to.begin(),to.end(),value)==to.end())to.push_back(value);
-    if(to.size()>MaxValues){limited=true;return false;}return true;
+    if(to.size()>MaxValues){limited=true;fatalPartial|=allowPartial;return false;}return true;
   }
   // Only validates the bounded SSA dependency shape of an old Boolean PHI.
   // It does not prove a value, memory contents or absence of flag-produced poison.
@@ -104,10 +105,11 @@ struct Enumerator {
   MaybeValues get(llvm::Value *value,bool historical=false,unsigned depth=0) {
     if(!work.charge())return {};
     auto *type=llvm::dyn_cast<llvm::IntegerType>(value->getType());
-    if(!type || type->getBitWidth()>128 || llvm::isa<llvm::UndefValue,llvm::PoisonValue>(value))return {};
+    if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(value)){fatalPartial|=allowPartial;return {};}
+    if(!type || type->getBitWidth()>128)return {};
     Key key{value,historical};auto found=memo.find(key);if(found!=memo.end())return found->second;
-    if(depth>MaxDepth || ++nodes>MaxNodes){limited=true;return {};}
-    if(!active.insert(key).second)return {};
+    if(depth>MaxDepth || ++nodes>MaxNodes){limited=true;fatalPartial|=allowPartial;return {};}
+    if(!active.insert(key).second){fatalPartial|=allowPartial;return {};}
     auto result=compute(value,historical,depth);active.erase(key);
     if(result)memo.emplace(key,*result);return result;
   }
@@ -171,13 +173,20 @@ struct Enumerator {
       return result.empty()?MaybeValues{}:MaybeValues{result};
     }
     if(auto *select=llvm::dyn_cast<llvm::SelectInst>(value)) {
+      if(allowPartial && llvm::isa<llvm::UndefValue,llvm::PoisonValue>(select->getCondition())){fatalPartial=true;return {};}
       if(scenario) {
         auto condition=get(select->getCondition(),historical,depth+1);
         if(!condition || condition->size()!=1)return {};
         return get((*condition)[0].isZero()?select->getFalseValue():select->getTrueValue(),historical,depth+1);
       }
       auto yes=get(select->getTrueValue(),historical,depth+1),no=get(select->getFalseValue(),historical,depth+1);
-      if(!yes || !no)return {};Values result=*yes;for(const auto &v:*no)if(!append(result,v))return {};return result;
+      if(!yes || !no) {
+        // This separate prediction mode can retain an explicitly finite select
+        // arm. It is never a complete value set and never becomes a fact.
+        if(!allowPartial || fatalPartial || work.exhausted || (!yes && !no))return {};
+        usedPartial=true;return yes?yes:no;
+      }
+      Values result=*yes;for(const auto &v:*no)if(!append(result,v))return {};return result;
     }
     if(auto *cast=llvm::dyn_cast<llvm::CastInst>(value)) {
       const auto opcode=cast->getOpcode();if(opcode!=llvm::Instruction::ZExt && opcode!=llvm::Instruction::SExt && opcode!=llvm::Instruction::Trunc)return {};
@@ -193,7 +202,7 @@ struct Enumerator {
     auto left=get(binary->getOperand(0),historical,depth+1);
     auto right=get(binary->getOperand(1),historical,depth+1);
     if(!left || !right) {
-      if(opcode!=llvm::Instruction::And || work.exhausted || scenario)return {};
+      if(opcode!=llvm::Instruction::And || work.exhausted || scenario || allowPartial)return {};
       auto *mask=llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(0));
       auto *unknown=binary->getOperand(1);
       if(!mask){mask=llvm::dyn_cast<llvm::ConstantInt>(binary->getOperand(1));unknown=binary->getOperand(0);}
@@ -224,7 +233,7 @@ struct Enumerator {
       else if(opcode==llvm::Instruction::And)v=a&b;
       else if(opcode==llvm::Instruction::Or)v=a|b;
       else if(opcode==llvm::Instruction::Xor)v=a^b;
-      else {if(b.uge(a.getBitWidth()))return {};v=a.shl(static_cast<unsigned>(b.getZExtValue()));}
+      else {if(b.uge(a.getBitWidth())){fatalPartial|=allowPartial;return {};}v=a.shl(static_cast<unsigned>(b.getZExtValue()));}
       if(!append(result,v))return {};
     }
     return result;
@@ -283,7 +292,7 @@ bool safeBlock(llvm::BasicBlock &b,bool terminal=false) {
 }
 bool generated(llvm::BasicBlock &b){return b.getTerminator()->getMetadata(Generated)!=nullptr;}
 std::vector<llvm::BasicBlock *> blocks(llvm::Function &f){std::vector<llvm::BasicBlock *> out;for(auto &b:f)out.push_back(&b);return out;}
-struct Edge {std::size_t seed;unsigned slot;std::vector<std::size_t> path;std::vector<unsigned> slots;std::vector<std::uint64_t> predictions;};
+struct Edge {std::size_t seed;unsigned slot;std::vector<std::size_t> path;std::vector<unsigned> slots;std::vector<std::uint64_t> predictions;bool partial=false;};
 // Only the shape supplies a prediction recipe. The original state LOAD and
 // table-address operations remain in the copied execution, including flags.
 struct StoreTableShape {std::uint64_t base;bool useOr;llvm::Value *guest;};
@@ -364,7 +373,7 @@ MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicB
   }
   return {};
 }
-std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions,const llvm::DominatorTree &dom) {
+std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions,const llvm::DominatorTree &dom,bool allowPartial,bool &usedPartial) {
   auto *index=indexOf(*path.back());if(!index)return {};
   Enumerator enumerate(&seed,path,work);auto addresses=enumerate.get(index);limited|=enumerate.limited;
   bool sawHistoricalPhi=enumerate.historicalPhiSeen;
@@ -374,6 +383,12 @@ std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const s
   if(!addresses && storePredictions && !work.exhausted)addresses=storeAddresses(seed,path,index,work,limited);
   if(!addresses && sawHistoricalPhi && !work.exhausted)
     addresses=correlatedAddresses(seed,path,index,work,limited,&dom);
+  // Partial select hints run only after all I2 prediction attempts fail.
+  if(!addresses && allowPartial && !work.exhausted) {
+    if(!work.charge(1+path.size()))return {};
+    Enumerator partial(&seed,path,work,nullptr,nullptr,true);auto predicted=partial.get(index);limited|=partial.limited;
+    if(predicted && partial.usedPartial && !partial.fatalPartial && !work.exhausted){addresses=std::move(predicted);usedPartial=true;}
+  }
   if(!addresses)return {};auto *jump=llvm::cast<llvm::SwitchInst>(path.back()->getTerminator());std::vector<std::uint64_t> values;
   for(const auto &address:*addresses) {
     auto n=address.getZExtValue();if(n>std::numeric_limits<std::uint64_t>::max()-8)return {};
@@ -386,10 +401,24 @@ std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const s
   return values.empty()?std::optional<std::vector<std::uint64_t>>{}:values;
 }
 }
+static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &,const GuardedTransitionsOptions &,bool,GuardedPartialCorridorsStats *);
 GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const GuardedTransitionsOptions &options) {
   return runGuardedStateCorridors(module,options,false);
 }
 GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const GuardedTransitionsOptions &options,bool storePredictions) {
+  return runStateCorridorsImpl(module,options,storePredictions,nullptr);
+}
+GuardedPartialCorridorsStats runGuardedPartialCorridors(llvm::Module &module,const GuardedTransitionsOptions &options) {
+  GuardedPartialCorridorsStats result;
+  result.base=runStateCorridorsImpl(module,options,false,&result);
+  result.partialUnresolvedEdges=result.partialCandidateEdges-result.partialRewrittenEdges;
+  if(result.partialCandidateEdges) {
+    result.base.complete=false;
+    if(result.base.message.empty())result.base.message="partial target predictions retain unknown outcomes in full fallback";
+  }
+  return result;
+}
+static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const GuardedTransitionsOptions &options,bool storePredictions,GuardedPartialCorridorsStats *partialStats) {
   GuardedTransitionsStats result;auto *metadata=module.getNamedMetadata("dragon.guarded-entry");if(!metadata)return result;result.available=true;
   auto reject=[&](const char *message,bool budget=false){result.complete=false;++result.rejected;result.budgetExhausted+=budget;result.message=message;};
   if(options.maxCandidates>4096 || options.maxRewrites>4096 || options.maxBlocks>4096 || options.maxInstructions>262144){reject("state-corridor option hard limit exceeded",true);return result;}
@@ -447,12 +476,14 @@ GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const Guar
               [&](llvm::BasicBlock *block){return std::find(path.begin(),path.end(),block)!=path.end();},dom))rootPhisRetained=false;
         }
       }
-      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
+      bool usedPartial=false;
+      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom,partialStats!=nullptr,usedPartial):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
       if(predicted) {
         if(selected.emplace(in.block,in.slot).second) {
           ++result.candidateEdges;targets.insert(q.terminal);
+          if(usedPartial)++partialStats->partialCandidateEdges;
           auto &edges=llvm::isa<llvm::BranchInst>(initial[in.block]->getTerminator())?branchEdges:switchEdges;
-          if(edges.size()<options.maxCandidates)edges.push_back({in.block,in.slot,q.path,q.slots,*predicted});else limited=true;
+          if(edges.size()<options.maxCandidates)edges.push_back({in.block,in.slot,q.path,q.slots,*predicted,usedPartial});else limited=true;
         }
         continue;
       }
@@ -473,7 +504,7 @@ GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const Guar
     if(result.rewrittenEdges>=options.maxRewrites || result.clonedBlocks>=options.maxBlocks || result.clonedInstructions>=options.maxInstructions){result.complete=false;++result.budgetExhausted;result.message="state-corridor module budget exhausted";break;}
     auto current=blocks(*function);if(current.size()<originalCount){reject("core original block identity contract violated");break;}
     auto *seed=current[edge.seed];auto *term=seed->getTerminator();std::vector<llvm::BasicBlock *> path;for(auto n:edge.path)path.push_back(current[n]);
-    ++result.attemptedEdges;bool valid=!generated(*seed) && llvm::isa<llvm::BranchInst,llvm::SwitchInst>(term) && edge.slot<term->getNumSuccessors() && term->getSuccessor(edge.slot)==path.front() && indexOf(*path.back());
+    ++result.attemptedEdges;if(edge.partial)++partialStats->partialAttemptedEdges;bool valid=!generated(*seed) && llvm::isa<llvm::BranchInst,llvm::SwitchInst>(term) && edge.slot<term->getNumSuccessors() && term->getSuccessor(edge.slot)==path.front() && indexOf(*path.back());
     for(std::size_t n=0;n<path.size();++n){if(generated(*path[n]))valid=false;if(n+1<path.size()){auto *t=path[n]->getTerminator();if(edge.slots[n]>=t->getNumSuccessors() || t->getSuccessor(edge.slots[n])!=path[n+1])valid=false;}}
     if(!valid){reject("frozen state-corridor edge no longer applicable");continue;}
     GuardedTransitionSetRequest request{seed,edge.slot,path.front(),path,edge.slots,{}};
@@ -481,7 +512,7 @@ GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const Guar
     const auto oldCount=current.size();auto changed=cloneGuardedTransitionSet(*function,request,
       {std::min<std::size_t>(32,options.maxBlocks-result.clonedBlocks),std::min<std::size_t>(2048,options.maxInstructions-result.clonedInstructions)});
     if(!changed.changed){result.complete=false;++result.rejected;result.budgetExhausted+=changed.budgetExhausted;result.message=changed.message;continue;}
-    result.changed=true;++result.rewrittenEdges;++result.fallbackSwitchesCreated;result.clonedBlocks+=changed.clonedBlocks;result.clonedInstructions+=changed.clonedInstructions;
+    result.changed=true;++result.rewrittenEdges;if(edge.partial)++partialStats->partialRewrittenEdges;++result.fallbackSwitchesCreated;result.clonedBlocks+=changed.clonedBlocks;result.clonedInstructions+=changed.clonedInstructions;
     auto updated=blocks(*function);for(std::size_t n=oldCount;n<updated.size();++n)updated[n]->getTerminator()->setMetadata(Generated,llvm::MDNode::get(module.getContext(),{}));
   }
   auto final=blocks(*function);for(auto n:targets)if(llvm::isa<llvm::SwitchInst>(final[n]->getTerminator()))++result.originalSwitchesRetained;
