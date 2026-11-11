@@ -256,12 +256,15 @@ struct ContextPath {
 
 using EntryInputs = std::vector<llvm::Value *>;
 
-EntryInputs oldEntryInputs(llvm::BasicBlock &block, llvm::BasicBlock &pred) {
+EntryInputs oldEntryInputs(const ContextPath &path, llvm::BasicBlock &pred) {
   EntryInputs result;
+  auto &block = *path.blocks.front();
   for (auto &phi : block.phis()) {
     auto *incoming = phi.getIncomingValueForBlock(&pred);
     auto *instruction = llvm::dyn_cast<llvm::Instruction>(incoming);
-    if (instruction && instruction->getParent() == &block &&
+    if (instruction &&
+        std::find(path.blocks.begin(), path.blocks.end(), instruction->getParent())
+            != path.blocks.end() &&
         std::find(result.begin(), result.end(), incoming) == result.end())
       result.push_back(incoming);
   }
@@ -273,18 +276,22 @@ bool contains(const ContextPath &path, const llvm::BasicBlock *block) {
 }
 
 // An earlier instruction may observe a previous execution of a block that the
-// forward context could otherwise include. Such an old value must not be
-// remapped to the new copy. Only selected PHI arms execute on this path.
+// forward context could otherwise include. Only a first-block selected PHI
+// input available on the original incoming edge can use an entry snapshot;
+// other old references still stop extension. Only selected PHI arms execute.
 bool observesEarlierExecution(const ContextPath &path,
                                const llvm::BasicBlock &next,
-                               const llvm::BasicBlock &pred) {
+                               const llvm::BasicBlock &pred,
+                               const llvm::DominatorTree &dom) {
   for (std::size_t index = 0; index < path.blocks.size(); ++index) {
     auto *selectedPred = index ? path.blocks[index - 1] : &pred;
     for (const auto &instruction : *path.blocks[index]) {
       if (const auto *phi = llvm::dyn_cast<llvm::PHINode>(&instruction)) {
         const auto *incoming = llvm::dyn_cast<llvm::Instruction>(
             phi->getIncomingValueForBlock(selectedPred));
-        if (incoming && incoming->getParent() == &next) return true;
+        if (incoming && incoming->getParent() == &next &&
+            (index != 0 || !dom.dominates(incoming, pred.getTerminator())))
+          return true;
         continue;
       }
       for (const auto &operand : instruction.operands())
@@ -299,7 +306,7 @@ bool canExtend(const ContextPath &path, llvm::BasicBlock &next,
                 llvm::BasicBlock &pred, llvm::DominatorTree &dom,
                 bool &exhausted) {
   if (contains(path, &next) || &next == &pred || !dom.isReachableFromEntry(&next) ||
-      observesEarlierExecution(path, next, pred))
+      observesEarlierExecution(path, next, pred, dom))
     return false;
   auto *previous = path.blocks.back();
   const auto *terminator = next.getTerminator();
@@ -601,7 +608,6 @@ bool specializeStateGuardEdge(
     if (budget.stopped) break;
     if (!condition || condition->getBitWidth() != 1 || !proof.usesIncomingPHI)
       continue;
-    const auto inputs = oldEntryInputs(block, *pred);
     const auto selected = condition->isZero() ? 1u : 0u;
     // Copying a known self-target guard only peels an unhelpful loop step.
     // Its new unconditional predecessor would become the next invocation's
@@ -613,20 +619,24 @@ bool specializeStateGuardEdge(
       useful = usefulContext(path, *pred, options, budget, proof.nodes, exhausted);
       if (!useful) path = {{&block}, {}, block.size()};
     }
+    auto inputs = oldEntryInputs(path, *pred);
     // Taking previous-execution inputs is useful only when it advances an
     // actual downstream constant context. Keep the old profitless one-block
     // refusal rather than cloning an unrelated loop just to fold its guard.
     if ((!inputs.empty() || changed) && !useful) continue;
-    const auto snapshotBlocks = inputs.empty() ? 0u : 1u;
-    const auto snapshotInstructions = inputs.empty() ? 0u : inputs.size() + 1;
     std::optional<std::size_t> repair;
     for (;;) {
+      // A shorter budgeted prefix may no longer copy an input's defining
+      // block. Such an external value no longer needs a historical snapshot.
+      inputs = oldEntryInputs(path, *pred);
       if ((!inputs.empty() || changed) &&
           (!useful || path.blocks.size() <= *useful)) {
         repair.reset();
         break;
       }
       repair = preflightRepair(path, inputs, function, exhausted);
+      const auto snapshotBlocks = inputs.empty() ? 0u : 1u;
+      const auto snapshotInstructions = inputs.empty() ? 0u : inputs.size() + 1;
       const auto copiedBlocks = path.blocks.size() + snapshotBlocks;
       const auto copiedInstructions = path.instructions + snapshotInstructions;
       if (repair && copiedBlocks <= MaxContextBlocks &&
@@ -643,6 +653,8 @@ bool specializeStateGuardEdge(
       path.forwardEdges.pop_back();
       if (repair) exhausted = true;
     }
+    const auto snapshotBlocks = inputs.empty() ? 0u : 1u;
+    const auto snapshotInstructions = inputs.empty() ? 0u : inputs.size() + 1;
     const auto copiedBlocks = path.blocks.size() + snapshotBlocks;
     const auto copiedInstructions = path.instructions + snapshotInstructions;
     if (!repair || copiedBlocks > MaxContextBlocks ||

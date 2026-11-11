@@ -3,6 +3,7 @@
 #include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
 #include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/CFG.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/NoFolder.h>
@@ -463,17 +464,60 @@ TEST_CASE("State context does not reinterpret an old future-region value as a fr
   const auto stats = runDispatcherSpecialization(fixture.module);
   CHECK(stats.changed); CHECK(stats.complete); CHECK(stats.branchesRewritten == 1);
   verify(fixture.module);
-  auto *copy = fixture.known->getTerminator()->getSuccessor(0);
-  CHECK(copy != fixture.head);
-  // A safe B/U/J prefix is useful; only adding the future-defining S would
-  // reinterpret the old incoming value as a definition in this execution.
-  CHECK(marked(*fixture.function, "corridor.table.load").size() == 1);
+  auto *inputs = fixture.known->getTerminator()->getSuccessor(0);
+  CHECK(inputs != fixture.head);
+  // A new S execution is now permitted only after the prior execution's
+  // LOAD has been captured on the known predecessor edge. Preserve this
+  // original fixture: an entry snapshot strengthens the historical-value
+  // contract rather than fixing it by refusing all future-region copies.
+  CHECK(marked(*fixture.function, "corridor.table.load").size() == 2);
+  llvm::LoadInst *copyLoad = nullptr;
+  for (auto *instruction : marked(*fixture.function, "corridor.table.load"))
+    if (instruction != fixture.tableLoad) copyLoad = llvm::cast<llvm::LoadInst>(instruction);
+  REQUIRE(copyLoad);
   llvm::FreezeInst *copyFreeze = nullptr;
   for (auto *instruction : marked(*fixture.function, "corridor.freeze"))
     if (instruction != fixture.fresh) copyFreeze = llvm::cast<llvm::FreezeInst>(instruction);
   REQUIRE(copyFreeze);
-  CHECK(copyFreeze->getOperand(0) == fixture.tableLoad);
+  auto *snapshot = llvm::dyn_cast<llvm::PHINode>(copyFreeze->getOperand(0)); REQUIRE(snapshot);
+  CHECK(snapshot->getParent() == inputs); CHECK(snapshot->getNumIncomingValues() == 1);
+  CHECK(snapshot->getIncomingBlock(0) == fixture.known);
+  CHECK(copyFreeze->getOperand(0) != copyLoad);
+  llvm::DominatorTree dom(*fixture.function);
+  auto *incoming = llvm::dyn_cast<llvm::Instruction>(snapshot->getIncomingValue(0)); REQUIRE(incoming);
+  CHECK(dom.dominates(incoming, fixture.known->getTerminator()));
+  CHECK(dom.dominates(copyFreeze, copyLoad));
+  // A repaired PHI may merge LOADs from previous original/copied S executions;
+  // it must not invent a constant, undef or a fresh unguarded LOAD at B.
+  std::vector<llvm::Value *> pending{incoming};
+  std::unordered_set<llvm::Value *> visited;
+  std::unordered_set<llvm::Value *> historicalLoads;
+  while (!pending.empty()) {
+    auto *value = pending.back(); pending.pop_back();
+    if (!visited.insert(value).second) continue;
+    if (value == fixture.tableLoad || value == copyLoad) {historicalLoads.insert(value); continue;}
+    auto *phi = llvm::dyn_cast<llvm::PHINode>(value); REQUIRE(phi);
+    for (auto &arm : phi->incoming_values()) pending.push_back(arm.get());
+  }
+  CHECK(historicalLoads.contains(fixture.tableLoad)); CHECK(historicalLoads.contains(copyLoad));
+  CHECK(fixture.head->getTerminator() == fixture.firstBranch);
+  CHECK(fixture.dispatch->getTerminator() == fixture.secondBranch);
+  CHECK(fixture.secondBranch->isConditional());
   CHECK(fixture.tableLoad->getParent() == fixture.table);
+  CHECK(fixture.table->getTerminator() == fixture.targetSwitch);
+  CHECK(fixture.targetSwitch->getDefaultDest() == fixture.fallback);
+  auto *copySwitch = llvm::dyn_cast<llvm::SwitchInst>(copyLoad->getParent()->getTerminator()); REQUIRE(copySwitch);
+  CHECK(copySwitch->getCondition() == copyLoad); CHECK(copySwitch->getDefaultDest() == fixture.fallback);
+  CHECK(copySwitch->getNumCases() == fixture.targetSwitch->getNumCases());
+  for (auto item : fixture.targetSwitch->cases()) {
+    auto found = copySwitch->findCaseValue(item.getCaseValue()); REQUIRE(found != copySwitch->case_default());
+    CHECK(found->getCaseSuccessor() == item.getCaseSuccessor());
+  }
+  for (auto *unknown : fixture.unknown) CHECK(unknown->getTerminator()->getSuccessor(0) == fixture.head);
+  CHECK(seed->getTerminator()->getSuccessor(0) == fixture.head);
+  CHECK(fixture.shortcut->getTerminator()->getSuccessor(0) == fixture.dispatch);
+  CHECK(fixture.defaultOutside->getIncomingValueForBlock(copyLoad->getParent()) == fixture.outside);
+  verify(fixture.module);
 }
 
 TEST_CASE("State context does not fold a poison-sensitive first-guard proof through freeze",
