@@ -2663,3 +2663,46 @@ v1 remains saved, production/test sources unchanged. Raw G libraries retired
 after all use ended; exact full gzips remain Mac-only with restore receipts.
 Remaining: selected path STORE PHIs, correlated Boolean states, unresolved
 CALL-return state and precise bounded resumption; never silently discard these.
+
+Guarded finite STORE and selected-path predictions (2026-11-12, implementation
+6981a44 then f54e434): opt-in guarded-store-corridors uses finite seed STORE
+values as untrusted table hints, then freshly selected path STORE PHIs when no
+historical seed hint exists. Actual memory accesses/flags/side exits and complete
+same-LOAD fallback remain. Existing SSA-only mode/default pipeline unchanged.
+H1 old builtin absence is four cases/26 assertions/five failures including Catch
+exception packaging; H2 old H1 existing builtin fails three cases/43 assertions,
+three precision requirements in both builds. Final focus46/1700 each, CTest
+1111/1111 and976/976. Each independent build10752 full-state comparisons:
+5120before+5120transformed+512CALL-unchanged,3304returns+7448boundaries;
+6144fault observations/2260specified all caught,118272comparator controls.
+Each66saved streams/16896frames reaudited; no exclusions/skips/differences.
+H1/H2 original65IR and main/no-Z394IR are byte-identical. Native full archive
+64ab1879 has1213payloads independently verified on both hosts. Metadata-v2
+54ecb71d has54payloads; H1 metadata-v1 retains old-test executables later retired
+only after complete archive verification, with exact restore receipt. Runtime H2
+main926a3abf/no-Z35e004c40; compressed payloads on Mac. NZ raw retired only after
+all use ended; main remains for formal replay. Formal real replay and new actual
+loop observations are still pending at this native-validation milestone. H2
+46-step probe rewrites14comboO0 edges but remains unclosed; do not call candidate
+or synthetic gains complete loop deflattening. See docs/llvm-guarded-path-store-predictions.md
+and docs/guarded-store-corridor-native-validation-20261112.md.
+
+H/H2 final real validation (2026-11-12): independently preregistered47 steps,
+C16/LLVM16 complete-state matches+144specified controls,207.329s, all input/source/
+runtime pins unchanged. H2 first14 and explicit resume5 comboO0 slots are real
+rewrites, but closure remains1/4. Full family/source-PC audit and16structure
+controls pass. Final cffO0 actual llc input remains34859b00, exactly the G observer
+program; root independently cross-checked its four input/output bytes and full
+counter evidence, reuse only/no new executions. The unknown Guest90592==0
+entry takes initialization counter i13 fromRBP-132 through-252 into state-168;
+not constant50 or an omitted partialPHI. Do not guess it or claim heap proof.
+Inherited GuestSSA12/12 and dispatch12/12 remain incomplete. First saved-audit
+invocations lacked PYTHONPATH then used outer root instead of candidate; both
+failures retained, only invocation corrected, comparison unchanged. Full formal
+archive f1e830cc has586payloads independently verified; probe46 bc98d22a has128,
+probe47 659840e8 has141. See docs/guarded-store-corridors-real-validation-20261112.md.
+H2 all raw runtimes retired after native/real owners confirmed use ended; full
+Mac gzips and main/NZ-v2 restore receipts remain. Also migrated superseded
+checked-edge-memory20261111 integrated-v1/integrated-v2/final-noz3 raw libraries
+to verified Mac gzips; their original directories retain metadata and exact
+RESTORE-RAW-FROM-MAC instructions. Never attempt those absent paths as if live.
