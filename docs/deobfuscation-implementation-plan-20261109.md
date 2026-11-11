@@ -51,7 +51,7 @@
 继续保留。多条状态入边、O0 内存关系及表内容证明仍是后续缺口，详见
 [多级状态上下文](llvm-state-context-corridors.md)。
 
-最新实现里程碑 `feafb31` 增加原始入边批处理和 prior-execution PHI/LOAD/freeze
+实现里程碑 `feafb31` 增加原始入边批处理和 prior-execution PHI/LOAD/freeze
 的边上快照，避免将旧执行值映为本次副本重算值；并修复已知直接自环重复优化时无收益
 副本链不断增长的问题。旧同源 12 用例实际 8 cases / 91 assertions 失败，新版 12/503
 通过；相关组件两构建均 **47 cases / 3301 assertions**，完整 CTest 为 main
@@ -64,6 +64,23 @@
 dispatch 均 incomplete；64 块上限未提高。下一项仍是 future-S 旧定义、超预算状态、
 O0 内存关系和表内容证明，不能称复杂平坦化已消除。详见
 [循环携带值与多入边状态上下文](llvm-loop-carried-state-contexts.md)。
+
+最新实现 `e911f5f` 把历史值范围扩至首块 PHI 直接携带的后续复制块定义：原定义必须
+支配选中前驱，进入边上快照；新块仍重新执行 LOAD/freeze/计算。截短时重算实际快照
+输入和成本，没有提高预算。原九模式夹具、模型、精度门槛未改，旧版真实失败的
+future-S 三模式现在到达实际 index16 LOAD；原矩阵 **5760/5760** 完整状态匹配，
+**604/604** 指定错误检出，isolated1920 与 corridor6912 兼容也通过。
+
+最终新增 12 用例在旧库有 7 cases/38 assertions 失败，新库 12/753 通过；原 future-region
+用例保留输入并升级历史 SSA/新 LOAD/回退检查。两构建聚焦均 **59/4087**，完整 CTest
+为 main **975/975**、无 Z3 **840/840**。真实 raw/post 各 C16/LLVM16 仍匹配，但真实
+13 状态、16 上下文及四模块 incomplete 均保持，**没有新增真实 CFF 消除**。
+
+O0 后续任务已具体定位为：包含真实 STORE 的检查块被复制策略拒绝，以及常量 STORE
+隔着 40 入边/16 PHI 的 hub 未到达 state LOAD。需要保留 STORE 的原顺序/次数，和逐条
+选择 hub 入边后修复 PHI；只读计数表明相关 guard/switch 位于条件 #84/#86/#162，
+不能将当前阻塞笼统归于条件预算。表项内容仍需实际写入或独立入口契约证明。详见
+[后续块历史值与 O0 具体阻塞](llvm-future-region-state-contexts.md)。
 
 此前跨调用直接 STORE 阶段的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
 `857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select

@@ -1,6 +1,6 @@
 # 后续块历史值的入口快照
 
-基线 `0b5c2ec`。本轮扩展 `dispatch-specialize` 的循环历史值处理，没有修改默认流水线、
+基线 `0b5c2ec`，实现里程碑 `e911f5f`。本轮扩展 `dispatch-specialize` 的循环历史值处理，没有修改默认流水线、
 Graph、机器指令、公共 API/ABI、输入内存约束或复制预算。
 
 ## 具体缺口与实现
@@ -129,8 +129,12 @@ f00bd54a3939150c16e22bac8634831853a02d0975386c1b11f6ca4d0056818b
 |---|---|---|
 | `future-region-unit-tests-20261111-artifacts.tar.gz` | `5d064b6019612d59c6270e1b57a153444649fe5d7a52e6fe31a8274d470692b6` | 104 regular / 111 members |
 | `future-region-reference-20261111.tar.gz` | `ab660459cd88de7eb45268f5b8b15befe84da964fd78d54bf536e45bd76253f1` | 772 regular / 808 members |
+| `future-region-root-20261111-artifacts.tar.gz` | `780c1c30754907a92812b161ee3d3ed7b30bf87e83248e694f3934779e0c75a9` | 86 regular / 103 members |
 
 root 又逐项复核 103/771 个数据文件及 native 源快照，旧用例构造保持同一输入；root
-全构建/源码绑定/冻结包将在最终交接提交中记录。已归档的 unit/reference、旧
+包内另含 85 个数据文件及 manifest：main 双库、可恢复的 no-Z3 gzip 双库、全构建日志、
+**382 个 Mac/VM 源文件**绑定、20 个 harness hash、32 个关键源快照、已提交代码 patch、
+旧用例构造绑定和可重复的 O0 只读调查。O0 调查在 VM 用相同输入重放，源码 hash、
+SSA/CFG 片段和统计与 Mac 一致，没有运行优化 Pass 或新 native。已归档的 unit/reference、旧
 state-context-root 和 loop-carried-root expanded 目录为节省 VM 空间移除；全部文件和
 旧运行库仍在经双端核对的完整 tar 中，各目录相邻 `-ARCHIVED.txt` 含恢复命令。

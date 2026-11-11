@@ -211,6 +211,46 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Future-region historical inputs (2026-11-11, baseline `0b5c2ec`, implementation
+`e911f5f`): see `docs/llvm-future-region-state-contexts.md`. First-block selected
+PHI inputs defined in later copied blocks may use entry snapshots only when the
+original definition dominates the predecessor. Old execution values never map
+to fresh S definitions; LOAD/freeze/add still execute anew. Recompute snapshot
+inputs after budget truncation; an uncopied definition remains external SSA.
+Ordinary cross-future operands, downstream historical/self PHIs, effect blocks
+and unknown/poison proofs stay conservative; no API/ABI/default/Graph/budget
+change. Preserve the earlier corridor fixture/name and upgrade its obsolete
+no-copy layout assertions to strict edge snapshot, dominance/history-tree,
+fresh LOAD, actual selector, fallback/reentry checks. Root proves unchanged
+fixture declarations/helpers/construction; v1 original 47 fails just two old
+layout assertions, not wrong native semantics. Same final unit binary: old new
+group 12/257 fails 7 cases/38 assertions; old combined 59/3556 fails 8/40; new
+12/753 and 59/4087 pass. Final focus both 59/4087; CTest main 975/975, no-Z3 840/840.
+Unchanged original nine-mode producer/model/precision gate: old3ad fails before
+native; new ec77 reaches actual index16 LOAD for phi/load/freeze and matches
+5760 full states/604 specified faults. Isolated1920/604 and corridor6912/486
+compatibility also pass; 16 complete snapshot streams and20 harness sources
+audited. New pointer/i16 positives are structural tests; native matrices use
+main/DL64, no-Z3 full CTest/focus only. Real raw/post each C16/LLVM16 and all
+reg/memory/seven-Exit controls pass; unchanged 16 contexts/13 states/7 unknown,
+rewrites 0/16/0/3, dispatch all 4 incomplete, GuestSSA raw2/post4. No new real CFF
+removal/state coverage. O0 first blocker is STORE in memory.valid9, then a
+40-pred/16-PHI/no-STORE hub separating constant writes from state LOAD; textual
+guard/switch ranks 84/86/162 precede 256. Save precise edge identity/SSA when
+extending, never assume global RBP=entrySP-8. Proposed simple-STORE copying and
+multi-join memory forwarding remain unimplemented; a new C++ option should use
+an overload to retain the old referenced options object's ABI. Table equality
+guard peeling adds no target proof. Frozen main:
+`~/vmc-runs/future-region-root-20261111/final-runtime/`. Root 382 Mac/VM source
+pins, 32 source snapshots, main pair/no-Z3 gzip pair; archive SHA
+780c1c30754907a92812b161ee3d3ed7b30bf87e83248e694f3934779e0c75a9.
+Independent archive SHA ab660459cd88de7eb45268f5b8b15befe84da964fd78d54bf536e45bd76253f1.
+Full unit/reference and older state-context/loop-carried root raw directories
+are archived-only after complete both-host/file-set checks; adjacent
+`-ARCHIVED.txt` restores all evidence and previous libraries. Initial fixture
+type/layout errors and wrong no-Z3 target spelling stay in logs, never semantic
+counts. No new instruction/IGNIL/69-input campaign or relaxed comparisons.
+
 Loop-carried snapshots and original-edge batching (2026-11-11, baseline
 `01c5abd`, implementation `feafb31`): see
 `docs/llvm-loop-carried-state-contexts.md`. A useful downstream constant-PHI
