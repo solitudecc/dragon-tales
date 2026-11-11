@@ -1,5 +1,6 @@
 #include "GuestMemoryEdges.hpp"
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/Analysis/PHITransAddr.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/CFG.h>
@@ -178,8 +179,10 @@ bool selectedEdge(llvm::BasicBlock &pred, llvm::BasicBlock &join,
   return count == 1;
 }
 
+using EntryInputs = std::vector<llvm::Value *>;
+
 bool selectedPHIsAvailable(const Corridor &corridor, llvm::BasicBlock &pred,
-                            llvm::DominatorTree &dom) {
+                            llvm::DominatorTree &dom, EntryInputs &inputs) {
   for (std::size_t position = 0; position < corridor.blocks.size(); ++position) {
     auto *selectedPred = position ? corridor.blocks[position - 1] : &pred;
     for (const auto &instruction : *corridor.blocks[position]) {
@@ -191,11 +194,17 @@ bool selectedPHIsAvailable(const Corridor &corridor, llvm::BasicBlock &pred,
         if (const auto *value = llvm::dyn_cast<llvm::Instruction>(incoming)) {
           const auto origin = std::find(corridor.blocks.begin(),
               corridor.blocks.end(), value->getParent());
-          // Only definitions from an earlier block of this selected path
-          // describe the fresh execution. Self/future arms are historical.
+          // Only the first selected PHI can import an earlier execution.
+          // Its definition must already exist on the original incoming edge;
+          // it is snapshotted separately from all freshly cloned definitions.
           if (origin != corridor.blocks.end()) {
-            if (static_cast<std::size_t>(origin - corridor.blocks.begin()) >= position)
+            if (position == 0) {
+              if (!dom.dominates(value, pred.getTerminator())) return false;
+              if (std::find(inputs.begin(), inputs.end(), incoming) == inputs.end())
+                inputs.push_back(incoming);
+            } else if (static_cast<std::size_t>(origin - corridor.blocks.begin()) >= position) {
               return false;
+            }
           } else if (!dom.dominates(value, selectedPred->getTerminator())) {
             return false;
           }
@@ -248,15 +257,21 @@ llvm::Value *incomingForEdge(llvm::PHINode &phi, const Corridor &corridor,
   return index < 0 ? nullptr : phi.getIncomingValue(index);
 }
 
+struct IndexDependencies {
+  std::unordered_set<llvm::Value *> fresh;
+  std::unordered_set<llvm::Value *> historical;
+};
+
 bool checkedIndexDependencies(
     llvm::Value *value, const Corridor &corridor, llvm::BasicBlock &pred,
     bool translate, IndexProof &proof,
-    std::unordered_set<llvm::Value *> &visited, std::size_t depth = 0) {
+    IndexDependencies &visited, std::size_t depth = 0) {
   if (!value || llvm::isa<llvm::UndefValue, llvm::PoisonValue>(value))
     return false;
-  if (visited.contains(value)) return true;
+  auto &seen = translate ? visited.fresh : visited.historical;
+  if (seen.contains(value)) return true;
   if (!proof.visit(depth)) return false;
-  visited.insert(value);
+  seen.insert(value);
   if (llvm::isa<llvm::ConstantInt>(value)) return true;
   if (const auto *argument = llvm::dyn_cast<llvm::Argument>(value))
     return argument->getType()->isIntegerTy();
@@ -265,18 +280,19 @@ bool checkedIndexDependencies(
   if (llvm::isa<llvm::FreezeInst>(instruction)) {
     // A shared, already-executed freeze is a stable SSA value. A new freeze
     // in the clone is a different execution and may choose different bits.
-    return !corridor.members.contains(instruction->getParent());
+    return !translate || !corridor.members.contains(instruction->getParent());
   }
   if (const auto *load = llvm::dyn_cast<llvm::LoadInst>(instruction))
     return load->isSimple() &&
-           !corridor.members.contains(instruction->getParent());
+           (!translate || !corridor.members.contains(instruction->getParent()));
   if (instruction->hasPoisonGeneratingFlags() ||
       instruction->mayHaveSideEffects() || instruction->mayReadOrWriteMemory())
     return false;
   if (auto *phi = llvm::dyn_cast<llvm::PHINode>(instruction)) {
     if (translate && corridor.members.contains(phi->getParent()))
       return checkedIndexDependencies(incomingForEdge(*phi, corridor, pred),
-          corridor, pred, translate, proof, visited, depth + 1);
+          corridor, pred, phi->getParent() != corridor.blocks.front(),
+          proof, visited, depth + 1);
     // An outside loop PHI is an existing SSA boundary. Inspect its finite
     // dependency graph for visible undef/poison, with visited-set convergence;
     // do not try to prove a new frame or loop invariant.
@@ -290,19 +306,20 @@ bool checkedIndexDependencies(
 
 bool structurallyTranslatedIndex(
     llvm::Value *loaded, llvm::Value *stored, const Corridor &corridor,
-    llvm::BasicBlock &pred, IndexProof &proof, std::size_t depth = 0) {
+    llvm::BasicBlock &pred, IndexProof &proof, std::size_t depth = 0,
+    bool historical = false) {
   if (!loaded || !stored || !proof.visit(depth) ||
       llvm::isa<llvm::UndefValue, llvm::PoisonValue>(loaded) ||
       llvm::isa<llvm::UndefValue, llvm::PoisonValue>(stored))
     return false;
   if (auto *phi = llvm::dyn_cast<llvm::PHINode>(loaded))
-    if (corridor.members.contains(phi->getParent()))
+    if (!historical && corridor.members.contains(phi->getParent()))
       return structurallyTranslatedIndex(
           incomingForEdge(*phi, corridor, pred), stored, corridor, pred,
-          proof, depth + 1);
+          proof, depth + 1, phi->getParent() == corridor.blocks.front());
   if (loaded == stored) {
     const auto *instruction = llvm::dyn_cast<llvm::Instruction>(loaded);
-    if (!instruction || !corridor.members.contains(
+    if (historical || !instruction || !corridor.members.contains(
             const_cast<llvm::BasicBlock *>(instruction->getParent())))
       return true;
   }
@@ -316,9 +333,9 @@ bool structurallyTranslatedIndex(
       left->hasPoisonGeneratingFlags() || right->hasPoisonGeneratingFlags())
     return false;
   return structurallyTranslatedIndex(left->getOperand(0), right->getOperand(0),
-             corridor, pred, proof, depth + 1) &&
+             corridor, pred, proof, depth + 1, historical) &&
          structurallyTranslatedIndex(left->getOperand(1), right->getOperand(1),
-             corridor, pred, proof, depth + 1);
+             corridor, pred, proof, depth + 1, historical);
 }
 
 bool needsRepair(const llvm::Use &use, const Corridor &corridor,
@@ -343,9 +360,11 @@ bool needsRepair(const llvm::Use &use, const Corridor &corridor,
 }
 
 std::optional<std::size_t> preflightRepair(
-    const Corridor &corridor, const llvm::Function &function, bool &exhausted) {
+    const Corridor &corridor, const EntryInputs &inputs,
+    const llvm::Function &function, bool &exhausted) {
   std::size_t liveOuts = 0;
-  std::size_t externalUses = 0;
+  // Snapshots add original-definition uses and one block to SSA repair.
+  std::size_t externalUses = inputs.size();
   for (auto *block : corridor.blocks)
     for (const auto &instruction : *block) {
       bool live = false;
@@ -367,12 +386,13 @@ std::optional<std::size_t> preflightRepair(
         return std::nullopt;
       }
     }
-  if (liveOuts && function.size() + corridor.blocks.size() >
+  const auto copiedBlocks = corridor.blocks.size() + !inputs.empty();
+  if (liveOuts && function.size() + copiedBlocks >
                          MaxRepairCells / liveOuts) {
     exhausted = true;
     return std::nullopt;
   }
-  return liveOuts * (function.size() + corridor.blocks.size());
+  return liveOuts * (function.size() + copiedBlocks);
 }
 
 llvm::StoreInst *proveStore(
@@ -380,9 +400,9 @@ llvm::StoreInst *proveStore(
     const Corridor &corridor, llvm::BasicBlock &pred,
     const std::unordered_set<llvm::Value *> &memoryBases,
     const llvm::DataLayout &layout, llvm::DominatorTree &dom,
-    bool &exhausted, CheckedMemoryEdgeBudget &budget) {
+    bool &exhausted, CheckedMemoryEdgeBudget &budget, EntryInputs &inputs) {
   if (corridor.members.contains(&pred) ||
-      !selectedPHIsAvailable(corridor, pred, dom))
+      !selectedPHIsAvailable(corridor, pred, dom, inputs))
     return nullptr;
   auto *base = llvm::dyn_cast<llvm::Instruction>(loadedAddress.base);
   if (!base || corridor.members.contains(base->getParent()) ||
@@ -401,28 +421,33 @@ llvm::StoreInst *proveStore(
     return nullptr;
   if (const auto *index = llvm::dyn_cast<llvm::Instruction>(storedAddress->index))
     if (corridor.members.contains(
-            const_cast<llvm::BasicBlock *>(index->getParent())))
+            const_cast<llvm::BasicBlock *>(index->getParent())) &&
+        (inputs.empty() || !dom.dominates(index, pred.getTerminator())))
       return nullptr;
   IndexProof proof{budget, exhausted};
-  std::unordered_set<llvm::Value *> loadedDependencies;
-  std::unordered_set<llvm::Value *> storedDependencies;
+  IndexDependencies loadedDependencies;
+  IndexDependencies storedDependencies;
   if (!checkedIndexDependencies(loadedAddress.index, corridor, pred, true,
                                 proof, loadedDependencies) ||
       !checkedIndexDependencies(storedAddress->index, corridor, pred, false,
                                 proof, storedDependencies))
     return nullptr;
 
-  llvm::PHITransAddr address(loadedAddress.index, layout, nullptr);
-  bool translated = true;
-  for (std::size_t index = corridor.blocks.size(); index > 1; --index)
-    if (!address.translateValue(corridor.blocks[index - 1],
-                                corridor.blocks[index - 2], &dom, true)) {
-      translated = false;
-      break;
-    }
-  if (translated && address.translateValue(corridor.blocks.front(), &pred,
-                                           &dom, true) == storedAddress->index)
-    return store;
+  // PHITransAddr has no old/fresh execution distinction. Keep its historical
+  // non-snapshot path only; snapshot paths use the explicit view below.
+  if (inputs.empty()) {
+    llvm::PHITransAddr address(loadedAddress.index, layout, nullptr);
+    bool translated = true;
+    for (std::size_t index = corridor.blocks.size(); index > 1; --index)
+      if (!address.translateValue(corridor.blocks[index - 1],
+                                  corridor.blocks[index - 2], &dom, true)) {
+        translated = false;
+        break;
+      }
+    if (translated && address.translateValue(corridor.blocks.front(), &pred,
+                                             &dom, true) == storedAddress->index)
+      return store;
+  }
   // LLVM's PHITransAddr does not translate Sub expressions. Match only an
   // existing, identical Add/Sub tree after per-edge PHI substitution. This
   // creates no instructions and neither folds flags nor strips freeze.
@@ -432,9 +457,22 @@ llvm::StoreInst *proveStore(
 
 void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
                 const Corridor &corridor, llvm::BasicBlock &pred,
-                unsigned successorIndex, MemoryForwardStats &stats) {
+                unsigned successorIndex, const EntryInputs &inputs,
+                MemoryForwardStats &stats) {
   auto &function = *load.getFunction();
   llvm::ValueToValueMapTy map;
+  llvm::DenseMap<llvm::Value *, llvm::Value *> oldInputs;
+  llvm::BasicBlock *entry = nullptr;
+  if (!inputs.empty()) {
+    entry = llvm::BasicBlock::Create(function.getContext(),
+        corridor.blocks.front()->getName() + ".guest.inputs", &function);
+    for (auto *value : inputs) {
+      auto *snapshot = llvm::PHINode::Create(value->getType(), 1,
+          "guest.edge.old", entry);
+      snapshot->addIncoming(value, &pred);
+      oldInputs[value] = snapshot;
+    }
+  }
   std::vector<llvm::BasicBlock *> clones;
   std::vector<llvm::Instruction *> definitions;
   for (auto *block : corridor.blocks) {
@@ -453,9 +491,12 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
     auto *selectedPred = index ? corridor.blocks[index - 1] : &pred;
     for (auto &phi : corridor.blocks[index]->phis()) {
       auto *incoming = phi.getIncomingValueForBlock(selectedPred);
-      const auto found = map.find(incoming);
       llvm::Value *selected = incoming;
-      if (found != map.end()) selected = found->second;
+      if (index == 0) {
+        if (auto *snapshot = oldInputs.lookup(incoming)) selected = snapshot;
+      } else if (const auto found = map.find(incoming); found != map.end()) {
+        selected = found->second;
+      }
       map[&phi] = selected;
     }
     for (auto iterator = clones[index]->begin();
@@ -489,7 +530,8 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
       }
     }
   }
-  pred.getTerminator()->setSuccessor(successorIndex, clonedJoin);
+  if (entry) llvm::BranchInst::Create(clonedJoin, entry);
+  pred.getTerminator()->setSuccessor(successorIndex, entry ? entry : clonedJoin);
   // Keep original PHI objects alive for the live-out repair. Automatic PHI
   // simplification here could delete a definition still held in the plan.
   for (auto &phi : join->phis()) phi.removeIncomingValue(&pred, false);
@@ -509,7 +551,8 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
     for (auto *use : uses) updater.RewriteUse(*use);
     stats.phisInserted += phis.size();
   }
-  stats.blocksVisited += clones.size();
+  stats.blocksVisited += clones.size() + (entry != nullptr);
+  stats.phisInserted += inputs.size();
   ++stats.loadsForwarded;
   stats.changed = true;
 }
@@ -572,8 +615,9 @@ bool forwardCorridor(
       budget.stopped = true;
       return false;
     }
+    EntryInputs inputs;
     auto *store = proveStore(load, loadedAddress, corridor, *pred,
-                             memoryBases, layout, dom, exhausted, budget);
+                             memoryBases, layout, dom, exhausted, budget, inputs);
     if (budget.stopped) return false;
     if (!store) {
       // Try all historical direct-store candidates before widening the
@@ -581,11 +625,17 @@ bool forwardCorridor(
       if (allowHubs && !corridor.members.contains(pred)) hubs.push_back(pred);
       continue;
     }
-    const auto repair = preflightRepair(corridor, *load.getFunction(), exhausted);
+    const auto repair = preflightRepair(corridor, inputs, *load.getFunction(), exhausted);
     if (!repair) continue;
-    std::size_t clonedInstructions = 0;
+    std::size_t clonedInstructions = inputs.empty() ? 0 : inputs.size() + 1;
     for (auto *block : corridor.blocks) clonedInstructions += block->size();
-    if (budget.clones == MaxClones ||
+    const auto snapshotBlocks = static_cast<std::size_t>(!inputs.empty());
+    if (corridor.blocks.size() + snapshotBlocks > MaxCorridorBlocks ||
+        clonedInstructions > MaxCorridorInstructions) {
+      exhausted = true;
+      continue;
+    }
+    if (1 + snapshotBlocks > MaxClones - budget.clones ||
         *repair > MaxRepairCells - budget.repairCells ||
         clonedInstructions > MaxClonedInstructions - budget.clonedInstructions ||
         stats.loadsForwarded >= options.maxRewrites) {
@@ -593,8 +643,8 @@ bool forwardCorridor(
       budget.stopped = true;
       return false;
     }
-    cloneEdge(load, *store, corridor, *pred, successorIndex, stats);
-    ++budget.clones;
+    cloneEdge(load, *store, corridor, *pred, successorIndex, inputs, stats);
+    budget.clones += 1 + snapshotBlocks;
     budget.repairCells += *repair;
     budget.clonedInstructions += clonedInstructions;
     dom.recalculate(*load.getFunction());
