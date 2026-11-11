@@ -119,7 +119,8 @@ PassPipeline::PassPipeline(bool builtins) {
   registerLLVM("guarded-transitions",[](LLVMContext &c,const Options &o) {
     const auto s=llvmlifter::detail::runGuardedTransitions(c.lifter.module(),
       {number(o,"max_candidates",64),number(o,"max_rewrites",32),
-       number(o,"max_blocks",128),number(o,"max_instructions",16384)});
+       number(o,"max_blocks",128),number(o,"max_instructions",16384)},
+      number(o,"business_corridors",0)!=0);
     Result r; r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
     r.changed=s.changed;r.message=s.message;
     r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
@@ -131,8 +132,9 @@ PassPipeline::PassPipeline(bool builtins) {
       {"fallback_switches_created",s.fallbackSwitchesCreated}};
     return r;
   },false,{},[](const Options &o) {
-    auto error=numeric({"max_candidates","max_rewrites","max_blocks","max_instructions"})(o);
+    auto error=numeric({"max_candidates","max_rewrites","max_blocks","max_instructions","business_corridors"})(o);
     if(!error.empty())return error;
+    if(number(o,"business_corridors",0)>1)return std::string{"business_corridors must be 0 or 1"};
     if(number(o,"max_candidates",64)>4096 || number(o,"max_rewrites",32)>4096 ||
        number(o,"max_blocks",128)>4096 || number(o,"max_instructions",16384)>262144)
       return std::string{"guarded-transitions options exceed hard limits 4096/4096/4096/262144"};

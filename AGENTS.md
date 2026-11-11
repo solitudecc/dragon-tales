@@ -2553,3 +2553,19 @@ cleanup then controller yields 24/24/4/3 local guards (19/17/4/3 distinct table
 addresses), all original fallbacks retained. The state43->business->STORE41
 shared corridor still reaches the dynamic dispatcher: no full-loop completion. See `docs/guarded-loop-transitions-20261112.md`. Never count
 intermediate guards that later LLVM cleanup merges back into switches.
+
+
+Bounded business corridor implementation (2026-11-12, baseline `0c0717f`):
+opt-in `guarded-transitions` option `business_corridors=1` discovers original
+constant Guest STORE successor slots toward actual dynamic target LOADs. A STORE
+only selects a prediction; copied effects/side exits and same-read full fallback
+remain. Each actual slot is separate; budgeted remaining slots can resume.
+Discovery admission is cached and real hint instruction visits are charged; a
+scan failure precedes every transaction. Default options/ABI unchanged. Final
+main/no-Z3 focus16/620, CTest1081/946; final old baseline6/55 fails12 assertions,
+intermediate resource regression1/13 fails5. Independent each-build native3072
+full-state matches (1536 before,1280 transformed after,256 unchanged CALL after),
+1410 specified faults caught. Real frozen full-B C16/LLVM16 and144 controls
+pass; final archives/reports pending. cffO0 explicit
+512-block profile rewrites24terminal+25business edges; strict fast-loop closure
+still fails. See docs/guarded-business-corridors-20261112.md.
