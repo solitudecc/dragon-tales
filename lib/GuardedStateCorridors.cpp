@@ -226,6 +226,32 @@ MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicB
     }
     return result;
   }
+  // The old seed scan remains first. Only when it supplies no finite hint,
+  // consider stores that will really execute in this selected path. A fresh
+  // PHI here chooses its actual incoming edge; a root input still becomes a
+  // historical value through Enumerator's normal execution-view rule.
+  for(auto block=path.rbegin();block!=path.rend();++block) {
+    for(auto it=(*block)->rbegin();it!=(*block)->rend();++it) {
+      if(!work.charge())return {};
+      auto *store=llvm::dyn_cast<llvm::StoreInst>(&*it);
+      if(!store || !store->isSimple() || !store->getValueOperand()->getType()->isIntegerTy(64) || store->getPointerAddressSpace()!=0)continue;
+      if(!work.charge(4))return {};
+      auto *address=llvm::dyn_cast<llvm::GetElementPtrInst>(store->getPointerOperand());
+      if(!address || address->getPointerOperand()!=shape->guest || !address->getSourceElementType()->isIntegerTy(8) || address->getNumIndices()!=1 || !address->getOperand(1)->getType()->isIntegerTy(64))continue;
+      if(!work.charge(path.size()))return {};
+      Enumerator enumerate(&seed,path,work);
+      auto values=enumerate.get(store->getValueOperand(),false);limited|=enumerate.limited;
+      if(work.exhausted)return {};
+      if(!values)continue;
+      Values result;
+      for(const auto &state:*values) {
+        if(!work.charge())return {};
+        const std::uint64_t scaled=state.getZExtValue()<<3;
+        result.emplace_back(64,shape->useOr?(shape->base|scaled):(shape->base+scaled));
+      }
+      return result;
+    }
+  }
   return {};
 }
 std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions) {
