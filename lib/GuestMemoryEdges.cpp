@@ -636,12 +636,17 @@ llvm::StoreInst *proveStore(
         (inputs.empty() || !dom.dominates(index, pred.getTerminator())))
       return nullptr;
   IndexProof proof{budget, exhausted};
-  IndexDependencies loadedDependencies;
-  IndexDependencies storedDependencies;
+  // One candidate has one fixed corridor/predecessor and no intervening IR
+  // mutation. Reuse successful historical dependency checks between its
+  // translated LOAD index and STORE index, instead of charging the shared
+  // proof budget twice for the same already-executed SSA graph. Fresh and
+  // historical keys remain separate; any failed traversal rejects this
+  // entire candidate before the cache can be reused by another candidate.
+  IndexDependencies dependencies;
   if (!checkedIndexDependencies(loadedAddress.index, corridor, pred, true,
-                                proof, loadedDependencies) ||
+                                proof, dependencies) ||
       !checkedIndexDependencies(storedAddress->index, corridor, pred, false,
-                                proof, storedDependencies))
+                                proof, dependencies))
     return nullptr;
 
   // PHITransAddr has no old/fresh execution distinction. Keep its historical
