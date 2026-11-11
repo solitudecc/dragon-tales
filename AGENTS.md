@@ -211,6 +211,40 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Guest address/clobber correctness (2026-11-11, baseline `d1a8467`, implementation
+milestone `6f8c51b`): see `docs/guest-memory-proof-hardening-20261111.md`.
+Bounded APInt constant-index evaluation keeps IR widths, then sign-extends or
+truncates before fixed-size GEP scaling. Unsafe flags/shifts, scalable sizes and
+unsupported pointer/index layouts remain dynamic; no host-u64 guess. Local
+evaluation caps (128 bits/256 nodes/64 depth) return Unknown without new public
+budget fields. Only explicit noalias arguments and uncaptured private allocas
+preserve Guest facts over non-Guest stores. Ordinary byte facts invalidate other
+loaded Guest bases; ordinary word/byte paths clear facts for unknown writes,
+atomic/volatile accesses and synchronization. Modular disjointness uses unsigned
+distances, avoiding negation of INT64_MIN. No ABI/default pipeline change.
+Old width regressions fail 45 assertions (7/154), alias regressions 60 (4/188);
+actual old production TU UBSan fails the half-range probe. Final main/no-Z3 focus
+11/360, related 81/2753, CTest 916/916 and 781/781 all pass, including actual-TU
+sanitizer distance and 100 modular analysis probes. Independent native fixed
+440-input matrix has 1760 observations: old 400 wrong (all before correct), new
+zero wrong. All 48 specified faults in 64 IR-control observations and 5283
+comparator controls detected; compare 512-byte regs, 64 KiB Guest, 64-byte side,
+seven Exit fields, result and call count. Regs and Guest stay separate; extra
+pointer aliases are valid inputs. Captured-alloca cases are generic IR analysis
+controls, not a claim about V2 caller-owned mapping semantics. Native scope is
+host-compatible DL64; the separately failed DL32 pointer-return compatibility
+probe is retained and never counted as a native success. Non-native layouts,
+scalable/undef/poison and half-range addresses use structural/APInt/UBSan checks.
+Checked-edge compatibility 2176 matches/88 controls; real raw and post-GVN each
+C16/LLVM16 with all register/memory/Exit controls. Existing forwarding counts
+0/0/1/0 and post-GVN extra 1/0/4/0 remain; original 2 and post 4 modules still
+report analysis incomplete. Actual CFF and original switches each remain 1->1.
+No new CFF coverage, machine-lifter/IGNIL campaign or 69-input corpus claim.
+Final backend `aeb13989cb31557effcde48872f3f6b6c5b0938fc737f11457bb3ba925130937`,
+shim `a623a1490d57b9df708194ef9b6a59eec47a5a9c1dc03c72f65e3e98ed4eae6c`.
+Runtime/logs: `~/vmc-runs/guest-memory-address-proofs-20261111/`; independent
+native/real records: `~/vmc-runs/guest-memory-address-reference-20261111/`.
+
 Checked-memory incoming edges (2026-11-11, baseline `50f698c`): see
 `docs/llvm-memory-checked-edges.md`. After all ordinary GuestMemorySSA worklists,
 bounded copies specialize one proved predecessor of a shared checked LOAD.

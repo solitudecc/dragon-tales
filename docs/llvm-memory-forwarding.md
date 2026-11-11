@@ -33,6 +33,12 @@
 `complete=false`。建议在 mem2reg/InstCombine/GVN 后显式运行。当前合同和最新验证见
 [按具体入边恢复 Guest 内存值](llvm-memory-checked-edges.md)，下文数字保留历史阶段。
 
+地址常量计算保持每个 LLVM 整数的位宽，再按 GEP 的符号扩展/固定缩放规则建立地址键。
+不支持的布局、scalable 大小、危险标志及局部证明预算保持动态身份。普通指针参数写入
+只有显式 noalias 才保留事实，私有 alloca 需证明未逃逸；两份 Guest-base LOAD 不是无别名
+证明。普通 word/byte 流对原子写、同步与非 simple 访问采用相同屏障。详情和最终原生
+错误消除数据见[地址与失效证明修补](guest-memory-proof-hardening-20261111.md)。
+
 ## 已证明的内部调用（可选）
 
 需要把静态内部调用当作内存 SSA 中的无写入边界时，C++ 调用者可以传入同一份

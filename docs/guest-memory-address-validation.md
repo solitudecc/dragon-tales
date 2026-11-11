@@ -88,7 +88,62 @@ python3 scripts/validation/guest_memory_address_diff.py \
 
 旧错误控制使用 `--expect-old-bugs`；输出目录必须不存在。脚本保存源文件、IR、所有
 命令及 stdout/stderr、加载库 ldd、哈希、每次结果与原始快照，不重用已生成的 LLVM
-native 模块。最终集成库结果和兼容重放待根代理冻结实际库后补记。
+native 模块。
+
+## 最终集成验证
+
+最终 runtime 是 VM
+`~/vmc-runs/guest-memory-address-proofs-20261111/final-runtime/`，backend SHA-256 为
+`aeb13989cb31557effcde48872f3f6b6c5b0938fc737f11457bb3ba925130937`，shim 为
+`a623a1490d57b9df708194ef9b6a59eec47a5a9c1dc03c72f65e3e98ed4eae6c`。
+producer 只链接这份冻结集成库，未额外替换生产组件或链接另一份 LLVM。
+
+同一 **440 输入 / 1760 次** before/after O0/O2 观测，最终全部匹配，
+`normal_mismatches=0 / semantic_ok=true / ok=true / errors=[]`。
+同源旧库的 **400 次错误→最终 0 次**，不是新增真实混淆程序覆盖。
+64 个故障 IR 观测精确检出 48/48 个指定错误，其余 16 次保持匹配；5283 个比较器
+控制也全部通过。无跳过、排除或字段归一化。
+
+全部十种精确宽度形式和 NoAlias/private Alloca 精度控制均发生真实转发。十一种未知写入
+或同步边界保留原 LOAD、没有错误转发；循环 word 场景仅复制已证明入口边，原循环 LOAD
+仍保留，四个迭代次数和三类 alias 输入都由完整状态模型检查。
+旧/新 producer 与 Python 模型源哈希相同，25 份 before IR **逐字节相同**，没有把错误
+模板换成支持的形式来取得最终通过。保留审计为 `final-retained-audit.json`。
+
+已有 checked-edge 组件完整重跑：**2176 次**正常观测零差异，192 个故障 IR 观测精确检出
+**88/88** 个指定错误，5987 个比较器控制通过。原 LOAD 存活、三条未知入边保留和必要
+精度门均未放松。这属于相同组件输入的兼容复验。
+
+同四个冻结 ELF 在原显式顺序与额外 post-GVN SSA 顺序分别重新执行，每种均为
+**C16/LLVM16** 完整根匹配；寄存器和内存单字段控制各 **16/16**，七个 Exit 字段控制
+共 **112/112** 检出，Graph、输入和实际库哈希不变。两种顺序的结果分别保存在
+`final-real-original/` 和 `final-real-post-gvn/`，没有合计成新的唯一 ELF 覆盖。
+
+与保留的 `d1a8467` 同顺序记录相比，转发计数保持一致：
+
+| 顺序中的 GuestMemorySSA | f-cff O0 | f-cff O2 | f-combo O0 | f-combo O2 |
+| --- | ---: | ---: | ---: | ---: |
+| 原始步骤 | 0→0 | 0→0 | 1→1 | 0→0 |
+| 额外 post-GVN 步骤 | 1→1 | 0→0 | 4→4 | 0→0 |
+
+原顺序 f-combo O0/O2 的分析仍 incomplete；post-GVN 顺序四模块均保留分析 incomplete，
+对应 counter 与 INCOMPLETE status=2 也一致。它们是 Pass 预算边界，不是根函数执行
+不完整。实际 CFF 和原程序 switch 均 **1→1**，没有未分类目标 switch；表 LOAD、
+运行时目标检查和 default 仍保留。RIP 入口路由清理不能记为消除 CFF。
+
+## 最终证据
+
+VM 根目录为 `~/vmc-runs/guest-memory-address-reference-20261111/`，其中最终新矩阵为
+`final-native-attempt001/`，旧矩阵为 `old-native-attempt003/`，checked 兼容矩阵为
+`final-checked-compat/`。原始输入、模型、IR、完整快照流、每条字段差异、编译命令和实际
+runtime 绑定均保留；第一次失败构建与布局微探针也保留，没有改写成最终成功。
+
+报告、源、IR、快照和命令日志的压缩包为 VM 同目录的 `final-evidence-v2.tar.gz`，本地为
+`/Users/c/Desktop/deob/validation-artifacts/guest-memory-address-reference-20261111/final-evidence-v2.tar.gz`。
+两端 SHA-256 均为
+`b649ef4457c1e44803bc8173da1be9ad7d3f3570821a62b1cfa29da7a97b1917`。
+`final-archive-manifest.json` 记录逐文件哈希；重复的已编译 ELF/objects 和 runtime 没有
+打包，执行时引用的原件及其哈希仍在 VM 保留，这不改变语义输入集合或比较字段。
 
 这验证可选 LLVM 分析/改写的局部语义，不是新的机器指令/Unicorn、一般堆或整语料库
 语义证明。全量 CTest、no-Z3 构建和合并由根代理集中完成。
