@@ -80,3 +80,24 @@ Its full archive SHA256 is
 `64ab18793a776c9f146859b8115f994b79e8b0758578502fc9ba92f7c912a7c6`;
 the integration reviewer independently checked all 1213 payload files. Formal
 real-module replay remains pending at this validation milestone.
+
+## Final real replay
+
+The independently preregistered 47-step replay completed C16/LLVM16 complete-state
+matches and detected all 144 specified controls, with no new exclusions, skips or
+normalization. See [the frozen real report](guarded-store-corridors-real-validation-20261112.md).
+The complete formal archive SHA256 is
+`f1e830cced2b004c192eb389b4a965d28735fae685cad9c19131fab902221be0`;
+all 586 payloads were independently verified by integration. The reviewer also
+checked the exact four final export/native-compiler input bindings and all four
+cff O0 input/output bytes against the earlier observer. That cff O0 IR is exactly
+unchanged, so its four actual loop observations are reused, not rerun or recounted.
+
+The first H2 invocation recovers fourteen combo O0 slots; one explicitly budgeted
+resume recovers five more. Closure remains one of four programs. The residual
+Guest90592==0 path uses initialization counter i13 (Guest[RBP-132], initialized
+to zero and incremented in `memory.valid109`) as dispatch state when the list
+has not been established. It is not another constant-50 arm. This dynamic entry
+and all unresolved/default paths remain; no heap-initialization or callee-effect
+assumption was added. The remaining live-out/precision limits are recorded in
+the raw reports rather than summarized as successful fixed-point resolution.

@@ -2686,3 +2686,23 @@ loop observations are still pending at this native-validation milestone. H2
 46-step probe rewrites14comboO0 edges but remains unclosed; do not call candidate
 or synthetic gains complete loop deflattening. See docs/llvm-guarded-path-store-predictions.md
 and docs/guarded-store-corridor-native-validation-20261112.md.
+
+H/H2 final real validation (2026-11-12): independently preregistered47 steps,
+C16/LLVM16 complete-state matches+144specified controls,207.329s, all input/source/
+runtime pins unchanged. H2 first14 and explicit resume5 comboO0 slots are real
+rewrites, but closure remains1/4. Full family/source-PC audit and16structure
+controls pass. Final cffO0 actual llc input remains34859b00, exactly the G observer
+program; root independently cross-checked its four input/output bytes and full
+counter evidence, reuse only/no new executions. The unknown Guest90592==0
+entry takes initialization counter i13 fromRBP-132 through-252 into state-168;
+not constant50 or an omitted partialPHI. Do not guess it or claim heap proof.
+Inherited GuestSSA12/12 and dispatch12/12 remain incomplete. First saved-audit
+invocations lacked PYTHONPATH then used outer root instead of candidate; both
+failures retained, only invocation corrected, comparison unchanged. Full formal
+archive f1e830cc has586payloads independently verified; probe46 bc98d22a has128,
+probe47 659840e8 has141. See docs/guarded-store-corridors-real-validation-20261112.md.
+H2 all raw runtimes retired after native/real owners confirmed use ended; full
+Mac gzips and main/NZ-v2 restore receipts remain. Also migrated superseded
+checked-edge-memory20261111 integrated-v1/integrated-v2/final-noz3 raw libraries
+to verified Mac gzips; their original directories retain metadata and exact
+RESTORE-RAW-FROM-MAC instructions. Never attempt those absent paths as if live.
