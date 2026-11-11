@@ -2605,5 +2605,9 @@ Final focus main/noZ3 each28/927, full1093/958. Old new-API regressions each6/20
 with5 failures (builtin absent) and legacy passing. Old/new24 single-path IRs
 byte-identical on main. Real probes yield six-case guards on all four modules;
 cffO0 conditional fastSCC closure true, others false. Native/real complete-state
-validation and actual fast-loop observation are ongoing; not final loop acceptance.
+validation is complete: each build7680 full-state observations/944 specified
+faults/84480 comparator controls,40 streams10240frames. Real retry C16/LLVM16
+and144 controls pass; first run disk-stopped at64MiB and remains a failed archive.
+Only cffO0 conditional closure true; actual fast-loop observation is pending,
+so this is not final loop acceptance.
 See docs/guarded-target-sets-20261112.md.
