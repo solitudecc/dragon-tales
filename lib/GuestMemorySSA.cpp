@@ -1033,6 +1033,9 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
     };
     std::vector<PendingRewrite> pendingRewrites;
     std::size_t plannedRewrites = stats.loadsForwarded;
+    std::map<llvm::BasicBlock *, std::size_t> blockOrder;
+    for (auto &block : function)
+      blockOrder.emplace(&block, blockOrder.size());
     for (auto *block : reachable) {
       if (block == &function.getEntryBlock()) continue;
       pending[block] = 0;
@@ -1046,6 +1049,11 @@ MemoryForwardStats runGuestMemorySSA(llvm::Module &module,
         if (const auto backedges = backedgePreds.find(successor);
             backedges == backedgePreds.end() || !backedges->second.contains(pred))
           edges.emplace_back(pred, &predFacts);
+      // The first incoming fact set supplies candidates and PHI operand order.
+      // Select it by IR order, never by the host allocation address of a block.
+      std::sort(edges.begin(), edges.end(), [&](const auto &left, const auto &right) {
+        return blockOrder.at(left.first) < blockOrder.at(right.first);
+      });
 
       std::vector<Fact> merged;
       if (!edges.empty()) {
