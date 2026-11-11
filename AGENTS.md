@@ -52,7 +52,7 @@ disagrees, known deliberate differences, reporting - are in
 ## 2. Build and test environment
 
 Development happens on macOS; **building and testing happens on an Ubuntu VM**
-(aarch64, 3 GB RAM): `ssh cc@192.168.10.169` (key-based; ask the owner if keys
+(aarch64, owner expanded RAM to 8 GB; about 7.2 GiB visible): `ssh cc@192.168.10.169` (key-based; ask the owner if keys
 are missing). It has LLVM 21.1.8, Z3 4.13.3, Unicorn 2.1.4 (+ Python bindings),
 pyelftools, pefile, gcc, `i686-`/`x86_64-w64-mingw32-gcc`, `llc-21`.
 
@@ -64,6 +64,12 @@ pyelftools, pefile, gcc, `i686-`/`x86_64-w64-mingw32-gcc`, `llc-21`.
 - Real-world binaries for whole-program checks: `~/bench/lua32.exe`,
   `~/bench/lua64.exe` (mingw -O2, with symbols), `~/bench/lua_a64` (native gcc
   -O2), built from Lua 5.4.7 sources in `~/bench/lua-5.4.7`.
+
+Current owned VM worktree is **`~/dragon-tales-overlap`**, with `build` and
+`build-noz3`. Leave the original dirty `~/dragon-tales` checkout untouched.
+The reset/apply workflow below applies only to the owned worktree. Disk space
+is tight: link the two builds sequentially, and retire evidence only after a
+complete dual-host archive and file-set/hash verification.
 
 Workflow that works: edit locally, `git diff origin/main > all.patch`
 (**diff against origin/main**, not HEAD, if you have unpushed commits),
@@ -210,6 +216,42 @@ Gotchas:
   command-line option registration with the main suite's static LLVM linkage.
 
 ## 4. Validation tools (`scripts/validation/`)
+
+STORE contexts and multi-level Guest hubs (2026-11-11, baseline `a0b92a3`,
+implementation `a5eb193`): see `docs/llvm-o0-state-memory.md` and
+`docs/store-hub-independent-validation-20261111.md`. Explicit numeric
+`allow_plain_stores=1` permits ordered simple AS0 i8/i16/i32/i64/i128 writes in
+state-context copies. Old overloads/default0 and public struct layouts remain;
+no memory facts or no-alias assumptions follow from copying a write. Guest
+checked edges select each PHI along bounded read-only hubs and repair cross-
+original-block uses. Module-wide legacy-direct opportunities run before new
+hub searches, with the same budgets. Unexpanded single-predecessor chains keep
+their old repair scope; stronger scope and EH rejection apply only to expanded
+paths. Do not conflate two candidate-only regressions: real old4/v2=3 was excess
+repairCells work (271812 vs cap262144, old248428); independent cross-function
+edge starvation was new hub search spending a shared budget before a later
+direct opportunity. V3 fixes both. Same-input real v3/old output is byte-equal.
+Final main/no-Z3 focus129/6720; CTest1000/1000 and865/865. Same binaries:
+STORE old11/83 has10cases31fail due unavailable option (not wrong semantics),
+new11/503; hub old13/476 has7cases93fail, new13/636; priority old1/26 pass,
+v2 three failed assertions, v3 1/26 pass. Native new STORE enabled/default each
+4160 complete-state matches/1262 specified faults; hub5632/734; exclusions,
+skips, normalization zero. Old same-source native baselines and all20 final
+normal streams/fault streams independently checked. Native uses main only;
+no-Z3 has full CTest/focus. Frozen raw/post each C16/LLVM16+all Exit/memory/regs
+controls. Raw index70032 precision gate still fails (wrapper1 retained); post
+adds actual f-cff O0 source0x102d8 index70032, preserving original66cases/default
+and LOAD. CFF1->2 is a copy, switches_rewritten0; four dispatch modules still
+incomplete. Post memory forwards1/0/4/0 retains old f-combo4. No general loop
+fixed point, table immutability, new instruction campaign, full69 corpus or CFF
+removal claimed. Artifacts: `~/vmc-runs/store-hub-root-20261111/` and final
+reference/subtask archives; historical future-region EC77 runtime now lives in
+complete tar780c1c30 with adjacent restore notice, intermediate v1/v2 libraries
+are lossless .so.gz inside the complete root archive, final V3 stays expanded.
+Reference raw directory and nine duplicate root files were retired only after
+fresh exact file-set/hash checks and complete dual-host backups; adjacent
+ARCHIVED/PARTIAL-ARCHIVED notices provide restore commands. Never treat
+archived paths as still-present runtime locations.
 
 Future-region historical inputs (2026-11-11, baseline `0b5c2ec`, implementation
 `e911f5f`): see `docs/llvm-future-region-state-contexts.md`. First-block selected

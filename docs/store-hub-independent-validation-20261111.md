@@ -185,6 +185,11 @@ index 为相邻 `store-hub-reference-final-v3-20261111.index.json`。两个 tar 
 /Users/c/Desktop/deob/validation-artifacts/store-hub-reference-20261111/
 ```
 
+所有目标运行结束后，root 再核对最终展开目录全部1142个文件的完整集合、大小和
+SHA，才清理该展开目录以释放空间。VM 两份完整 tar 和 Mac 副本均保留；读取本节
+记录的原始路径前，先按相邻 `store-hub-reference-20261111-ARCHIVED.txt` 恢复。
+退役后核验记录为 `~/vmc-runs/store-hub-reference-final-retirement.json`。
+
 STORE attempt001 的 C++ fixture 引用误解引用错误和 hub attempt001 的 IRBuilder
 构造错误均在目标执行前发生，日志保留、native=0。旧新 API 不兼容、编译失败、
 结构精度失败和实际语义差异分别报告。没有本轮新指令/IGNIL/69 输入全语料验证声明。

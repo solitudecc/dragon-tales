@@ -82,6 +82,21 @@ O0 后续任务已具体定位为：包含真实 STORE 的检查块被复制策�
 不能将当前阻塞笼统归于条件预算。表项内容仍需实际写入或独立入口契约证明。详见
 [后续块历史值与 O0 具体阻塞](llvm-future-region-state-contexts.md)。
 
+最新实现 `a5eb193` 已补上上述两个 O0 基础组件：显式 `allow_plain_stores=1` 保留
+simple STORE 的原顺序/次数，再逐边通过多层只读 PHI hub 证明 Guest LOAD 的来源。
+原接口和默认 0 不变，复制写操作不等于增加内存/别名假设。相关聚焦两构建均
+**129 cases/6720 assertions**，完整 CTest 为 **1000/1000**、无 Z3 **865/865**；
+新库三组独立 native 共 **13952** 次完整状态匹配，所有指定错误控制检出。
+
+真实 raw/post 各 C16/LLVM16 及完整错误控制仍通过。post 中 f-cff O0 已有实际
+target LOAD 索引 **70032**，保留原 66 cases/default/LOAD；CFF **1→2** 是副本，
+没有消除原分发器。raw 缺少所需 state PHI，严格精度门槛仍失败并保留 wrapper1。
+f-combo O0 原有 4 次转发曾在候选降到 3，现修正修复工作量和模块搜索优先级后
+恢复；同输入 v3/旧版完整 IR 逐字节相同。预算没有提高。后续仍需在原始 IR 中
+恢复更多逐边状态/地址关系，以及为表内容提供实际写入或独立入口契约证明；一般
+循环内存不动点、全部状态恢复和复杂平坦化消除均未完成。详见
+[O0 状态与内存修补](llvm-o0-state-memory.md)。
+
 此前跨调用直接 STORE 阶段的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
 `857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
 地址关系、完整 GuestMemory 常量写和显式调用摘要；去平坦化覆盖有限状态集合、同函数
