@@ -138,3 +138,11 @@ UBSan 与完整 CMake/CTest 由主 agent 集中运行并另报。
 本轮不新增单指令/IGNIL campaign 或 69 输入语料库完整语义证明。
 
 VM 证据目录：`~/vmc-runs/state-guard-reference-20261111/`。
+
+最终包为 VM `~/vmc-runs/state-guard-reference-20261111-evidence.tar.gz` 与本地
+`/Users/c/Desktop/deob/validation-artifacts/state-guard-reference-20261111/`
+下的同名文件。双端 SHA-256
+`34c23462796874e580f7a2f3046bd9f77cd9e3a9bb1c2dd48e124fcd7aae8c5d`；
+989 个内部文件全部核验通过。根代理另外核对 8 份最终 native 源码快照与仓库一致。
+生产实现里程碑为 `42639c6`，其 main/no-Z3 完整 CTest **937/937、802/802**；
+完整来源绑定和聚合日志见[组件记录](llvm-state-guard-edges.md)。

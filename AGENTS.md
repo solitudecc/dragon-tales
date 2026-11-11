@@ -211,6 +211,32 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+State guard incoming edges (2026-11-11, baseline `13f0563`, implementation
+`42639c6`): see `docs/llvm-state-guard-edges.md`. Opt-in dispatch-specialize can
+clone one proved incoming context per original shared conditional block. Keep
+loads, flags, outer guards, unknown edges and all outside/loop SSA uses. Snapshot
+original branches once; private clone/proof/repair caps report incomplete. Poison
+flags, unknown freeze, calls, writes and synchronization remain conservative. No
+default pipeline, Graph, machine lift or public ABI changes. Both new state copies
+and old GuestMemoryEdges had null successor PHIs for unmapped external SSA values:
+use explicit VMap lookup with original-value fallback, not MapValue's
+RF_IgnoreMissingLocals. Same final old tests: 21/1659, 13 cases/329 assertions
+fail; final main/no-Z3 focus each 21/2218, CTest 937/937 and 802/802. V1 candidate
+SIGSEGV and old invalid-memory-IR controls are retained, never semantic passes.
+Independent native state 4928, checked compatibility 2176, external-PHI 128 all
+match full state; specified faulty-IR detections 312/88/32. Frozen real raw and
+post-GVN pipelines each C16/LLVM16 complete roots; only f-cff O2 gains one known
+state-50 guard edge. Actual CFF and original switches remain 1->1. Three whole
+modules retain dispatch condition-budget incomplete; GuestSSA incomplete raw 2 /
+post 4. Do not mix whole-pipeline old 0->new 1 with separate IR-probe old 2->new 3, or count
+strict saved-IR reviews as new executions. No new instruction/IGNIL/69 campaign.
+Frozen main runtime is `~/vmc-runs/state-guard-root-20261111/final-runtime/` (v2
+symlink); no-Z3 libraries and failed-v1 backend are retained gzip-compressed.
+Root logs SHA-256 76daf19f67b31356f7b267acc8419f2784b5945c828b57dbd921c2b8d35d3829;
+independent archive 34c23462796874e580f7a2f3046bd9f77cd9e3a9bb1c2dd48e124fcd7aae8c5d.
+Mac/VM 16 source bindings and 8 native-source snapshots match. Local artifacts are
+under `/Users/c/Desktop/deob/validation-artifacts/state-guard-*-20261111/`.
+
 Guest address/clobber correctness (2026-11-11, baseline `d1a8467`, implementation
 milestone `6f8c51b`): see `docs/guest-memory-proof-hardening-20261111.md`.
 Bounded APInt constant-index evaluation keeps IR widths, then sign-extends or

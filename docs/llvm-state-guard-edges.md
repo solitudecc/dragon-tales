@@ -1,6 +1,6 @@
 # 按入边证明的状态检查特化
 
-基线 `13f0563`。本轮扩展显式选择的 `dispatch-specialize`，不改变默认优化顺序、
+基线 `13f0563`，实现里程碑 `42639c6`。本轮扩展显式选择的 `dispatch-specialize`，不改变默认优化顺序、
 Graph、机器指令语义或 Guest/C ABI。
 
 ## 解决的问题
@@ -105,4 +105,16 @@ main 最后重构建触发过 Ninja 日志恢复；最终完整重编后，两�
 `ee09b919a0a5da5c6a8b89da34a50a47f95afc7fbe572d4f734db8df07386584`。
 本地目录分别为 `/Users/c/Desktop/deob/validation-artifacts/state-guard-impl-20261111/`
 与 `/Users/c/Desktop/deob/validation-artifacts/state-guard-unit-tests-20261111/`。
-最终集成日志与独立对拍包将在归档完成后补充双端路径和哈希。
+独立对拍完整包为 VM `~/vmc-runs/state-guard-reference-20261111-evidence.tar.gz`，
+本地 `/Users/c/Desktop/deob/validation-artifacts/state-guard-reference-20261111/`
+下的同名文件；双端 SHA-256 为
+`34c23462796874e580f7a2f3046bd9f77cd9e3a9bb1c2dd48e124fcd7aae8c5d`，
+989 个内部文件逐项核验通过。根代理另外确认其中 8 份实际 native 源码快照与最终仓库匹配。
+
+最终构建、聚焦、完整 CTest、测量自检和源码/库绑定日志包为 VM
+`~/vmc-runs/state-guard-root-20261111/final-validation-logs.tar.gz`，本地
+`/Users/c/Desktop/deob/validation-artifacts/state-guard-root-20261111/` 下的同名文件。
+双端 SHA-256 为 `76daf19f67b31356f7b267acc8419f2784b5945c828b57dbd921c2b8d35d3829`，
+23 个内部证据文件逐项核验通过；16 份最终生产、测试与验证源码在 Mac/VM 哈希一致。
+main runtime 的 `final-runtime` 为冻结 v2 目录的符号链接，no-Z3 两库另以 gzip 保存在
+同根的 `final-runtime-noz3/`，均有原始与压缩哈希。未复制为额外语义样本。

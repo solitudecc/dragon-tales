@@ -18,6 +18,8 @@
 - `FiniteValueAccumulator` / `IndirectTargetAccumulator` 提供单调值集合和目标集完备性
   契约，超预算或未知路径永久回到 Unknown，不发布部分候选。
 - `dispatch-specialize` 折叠当前 IR 中唯一可证明的常量 branch/switch 条件；
+  现在也能为共享 PHI 上一条已证明的入边复制状态检查块，保留 LOAD、标志、块外及循环
+  live-out，未知路径继续走原分支；工作量有界，未证明的 poison 条件不折叠。
   `dispatch-deflatten` 对状态 PHI、有限状态集合和同函数 load-backed selector 做证明型直连，
   并保留未知状态和未证明分发器。
 - `CallEffectSummary v2` 保留正常返回后的效果描述，供内存 SSA 消费；它不证明 callee
@@ -31,6 +33,14 @@
 函数名或固定地址匹配。它们覆盖普通控制流平坦化、常量/有限状态分发、线性 MBA 和代数型
 不透明谓词的基础场景；堆对象不透明链表、`ObfuscateNext`、VM 虚拟化、任意非线性 MBA、
 自修改代码和未知外部副作用仍需要后续按样本编写 Pass。
+
+最新同函数状态检查里程碑 `42639c6` 的完整 CTest 为 main **937/937**、无 Z3
+**802/802**，独立原生 4928 次状态检查、2176 次内存兼容和 128 次外部 PHI 比较全匹配。
+同时修复了已有 checked-edge 内存副本给块外 SSA PHI 写入 null 的问题。真实 f-cff O2
+仅新增一条已知 50 状态检查入边特化，实际 CFF/table switch 仍保留；其余三个整模块仍
+触及原分析条件预算。后续缺口仍是跨多级共享检查的状态/地址关系和实际表内容的证明，
+不能把完整执行匹配解释为复杂去平坦化已经完成。细节见
+[状态检查入边特化](llvm-state-guard-edges.md)。
 
 此前跨调用直接 STORE 阶段的验证在 Ubuntu VM `~/dragon-tales-overlap` 完成：Z3 构建 CTest
 `857/857`，无 Z3 构建 `722/722`。Guest memory SSA 现在覆盖 typed/nested/PHI/select
