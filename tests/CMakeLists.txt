@@ -56,6 +56,7 @@ add_executable(dragon_tests
         lifters/TestLLVMSameFunctionDeflattening.cpp
         lifters/TestLLVMConditionalState.cpp
         lifters/TestLLVMStateGuardEdges.cpp
+        lifters/TestLLVMStateContextCorridors.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
