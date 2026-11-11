@@ -10,8 +10,10 @@ class Module;
 namespace dragon::llvmlifter {
 
 /// Bounds for the opt-in, proof-only dispatcher specialization pass. The pass
-/// rewrites only conditions that are uniquely constant in the current IR;
-/// finite but differing targets remain candidates and are never guessed.
+/// Rewrites globally constant conditions, or clones a bounded shared branch
+/// block for one incoming edge whose condition is proved constant. The latter
+/// keeps the block's computations and repairs live-outs; unknown inputs retain
+/// the original branch. Finite but differing targets are never guessed.
 struct DispatcherSpecializationOptions {
   std::size_t maxConditions = 256;
   std::size_t maxExpressionNodes = 128;
@@ -22,8 +24,10 @@ struct DispatcherSpecializationStats {
   bool complete = true;
   bool changed = false;
   std::size_t conditionsVisited = 0;
+  /// Includes a condition proved in a selected incoming-edge context.
   std::size_t uniqueConditions = 0;
   std::size_t switchesVisited = 0;
+  /// Includes folded branch copies; their original shared branch may remain.
   std::size_t branchesRewritten = 0;
   std::size_t switchesRewritten = 0;
   std::size_t unresolvedSwitches = 0;

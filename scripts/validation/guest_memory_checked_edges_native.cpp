@@ -226,6 +226,7 @@ unsigned unknownPreserved(const View &view) {
 }
 } // namespace
 
+#ifndef DRAGON_CHECKED_EDGE_PRODUCER_LIBRARY
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   const std::filesystem::path out(argv[1]);
@@ -266,3 +267,4 @@ int main(int argc, char **argv) {
     dump(module, out / (std::string("control-") + control + ".ll"));
   }
 }
+#endif

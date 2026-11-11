@@ -438,8 +438,12 @@ void cloneEdge(llvm::LoadInst &load, llvm::StoreInst &store,
       if (corridor.members.contains(successor)) continue;
       for (auto &phi : successor->phis()) {
         auto *incoming = phi.getIncomingValueForBlock(original);
-        auto *mapped = llvm::MapValue(incoming, map,
-            llvm::RF_IgnoreMissingLocals | llvm::RF_NoModuleLevelChanges);
+        // Values defined outside the corridor remain the same SSA values.
+        // MapValue can return null for an unmapped local, even with
+        // RF_IgnoreMissingLocals; that flag is handled by RemapInstruction.
+        auto *mapped = incoming;
+        if (const auto found = map.find(incoming); found != map.end())
+          mapped = found->second;
         phi.addIncoming(mapped, clone);
       }
     }

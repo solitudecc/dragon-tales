@@ -1,6 +1,9 @@
 #include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
 
+#include "StateGuardEdges.hpp"
+
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
@@ -154,10 +157,15 @@ DispatcherSpecializationStats runDispatcherSpecialization(
     return stats;
   }
 
+  detail::StateGuardEdgeBudget edgeBudget;
   for (auto &function : module) {
     if (function.isDeclaration()) continue;
-    for (auto &block : function) {
-      auto *terminator = block.getTerminator();
+    // Snapshot originals before any edge copies are appended. A new copy is
+    // never a candidate in the invocation that created it.
+    std::vector<llvm::Instruction *> terminators;
+    for (auto &block : function) terminators.push_back(block.getTerminator());
+    llvm::DominatorTree dom(function);
+    for (auto *terminator : terminators) {
       if (auto *branch = llvm::dyn_cast<llvm::BranchInst>(terminator)) {
         if (!branch->isConditional()) continue;
         ++stats.conditionsVisited;
@@ -170,13 +178,17 @@ DispatcherSpecializationStats runDispatcherSpecialization(
         Active active;
         auto condition = uniqueConstant(branch->getCondition(), nodes,
                                         options.maxExpressionNodes, active);
-        if (!condition || condition->getBitWidth() != 1) continue;
+        if (!condition || condition->getBitWidth() != 1) {
+          detail::specializeStateGuardEdge(*branch, dom, options, stats, edgeBudget);
+          continue;
+        }
         ++stats.uniqueConditions;
         auto *target = condition->isZero() ? branch->getSuccessor(1)
                                            : branch->getSuccessor(0);
         dropUnselectedIncoming(*branch->getParent(), branch, target);
         llvm::BranchInst::Create(target, branch);
         branch->eraseFromParent();
+        dom.recalculate(function);
         ++stats.branchesRewritten;
         stats.changed = true;
         continue;
@@ -209,6 +221,7 @@ DispatcherSpecializationStats runDispatcherSpecialization(
       dropUnselectedIncoming(*switchInst->getParent(), switchInst, target);
       llvm::BranchInst::Create(target, switchInst);
       switchInst->eraseFromParent();
+      dom.recalculate(function);
       ++stats.switchesRewritten;
       stats.changed = true;
     }

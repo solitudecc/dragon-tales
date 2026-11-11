@@ -10,6 +10,7 @@ add_library(libdragon SHARED
         FiniteDispatch.cpp
         LLVMLifter.cpp
         LLVMDispatchSpecialization.cpp
+        StateGuardEdges.cpp
         LLVMDeflattening.cpp
         CallEffectSummary.cpp
         GuestMemorySSA.cpp
