@@ -2545,6 +2545,11 @@ same SSA value as fallback. Manifest bytes are hints, never immutability proof.
 Default pipeline and ABI unchanged. Main/no-Z3 each 10 cases/397 assertions;
 full CTest 1075/1075 and 940/940. Final Python exact-builtin regression fails
 old b6a910; new internal API absent old library (actual undefined-reference log).
-Independent native and real full-root validation are ONGOING; no full-loop CFF
-completion claim. See `docs/guarded-loop-transitions-20261112.md`. Never count
+Final independent native each build: 3072 before + 6144 after full-state matches
+(4608 business returns and 4608 size-failure exits), 2496 specified faults caught;
+104 streams/13312 frames re-audited. Same 768 inputs, no new unique-case count.
+Frozen four-ELF new C16/LLVM16 full-state replay and 144 controls pass. Explicit
+cleanup then controller yields 24/24/4/3 local guards (19/17/4/3 distinct table
+addresses), all original fallbacks retained. The state43->business->STORE41
+shared corridor still reaches the dynamic dispatcher: no full-loop completion. See `docs/guarded-loop-transitions-20261112.md`. Never count
 intermediate guards that later LLVM cleanup merges back into switches.

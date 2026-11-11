@@ -2,7 +2,7 @@
 
 基线 `1778d5ab248c5e2bf0dd434bb2ff3c5276107a72`。本次新增显式
 `guarded-transitions` pass；默认六步流水线、Graph、机器指令语义和 C/Python ABI 不变。
-**独立 native 与完整真实样本重放仍在进行，不是完整循环去平坦化的最终验收。**
+实现提交 `4c66276`。独立 native 与完整真实样本重放现已通过；本组件仍不是完整循环去平坦化的最终验收。
 
 ## 实现
 
@@ -42,7 +42,7 @@ EH/debug/address-taken 等不支持形状拒绝。
 
 实际构建是基线加保存的候选 patch。VM 证据根
 `~/vmc-runs/guarded-loop-transitions-20261112/`，保留 source-v1/v2/v3、old-api/old-api-v2
-原始日志、退出码及 source pins。后续归档与原生数字另行提交。
+原始日志、退出码及 source pins。完整来源及最终原生结果见下文。
 
 ## 真实结构探针与未完成部分
 
@@ -60,4 +60,33 @@ f-cff O2 的 24 个 guards 合回 switch，不能把中间数量当最终收益�
 
 后续验收必须覆盖全部正常业务转移与循环闭合、保留原业务 switch/未知目标/错误回退，
 并分开报告快路径与回退。没有新指令/Unicorn campaign 或 69 输入全语料重跑；opt-in
-LLVM 层的独立模型、错误控制和真实执行验证尚未完成，不能用本次 CTest 代替。
+LLVM 层的独立模型、错误控制和真实执行验证分别记录，不能用 CTest 代替。
+
+## 最终独立执行与归档
+
+主/无 Z3 每个构建：3072 before + 6144 after = 9216 完整状态匹配（4608 业务返回、
+4608 已声明 size 失败出口），固定独立输入仍为 768；4096 错误 IR observations 中
+2496 个指定错误全部检出，101376 比较器控制通过。core 与自动 controller 分组验证；
+每构建104个完整压缩流/13312帧另行重读审计，不重复计执行。24个 after IR 在两构建
+逐字节一致。见[独立原生报告](guarded-transition-native-validation-20261112.md)。
+
+真实四ELF新执行C16/LLVM16完整状态匹配、144/144错误控制检出；原输入、Graph、
+比较器不变。显式31步配方最后先5步清理、再1次controller，最终guard为24/24/4/3
+（不同表地址19/17/4/3）。原12次GuestSSA/12次dispatch的incomplete仍保留。
+详见[真实重放及失败顺序对照](guarded-transitions-real-validation-20261112.md)。
+
+root另行复核所有包的准确文件集合、每个payload的长度/SHA，以及四个运行库gzip
+完整解压后的长度/SHA。Mac根 `/Users/c/Desktop/deob/validation-artifacts/`，VM根
+`~/vmc-runs/`；同名子目录保留原始产物及核验收据。
+
+| 归档 | payload数量 | SHA256 |
+|---|---:|---|
+| guarded-loop-transitions-20261112/guarded-loop-transitions-metadata-v1.tar.gz | 71 | 774267604478eeb7f0614d3fcbdca018bb973fd9431509f47097cc94cd4256dc |
+| guarded-loop-transitions-20261112/state43-explicit-agent-v1.tar.gz | 46 | b8d1fb570d2bcc1a1e205a2f07281c261eddbd0818cd3f8eddabd714b79cd957 |
+| guarded-transition-native-20261112.tar.gz | 998 | 27051380c9ecedcec06ab7e222ef636dad308f75c32bb1a03640a8690df6aa17 |
+| guarded-transitions-real-20261112.tar.gz | 227 | cca1e8bb8a80eb962ff22b5812dc85684ad42a0c78e16a11a8710a83a20c47d8 |
+| guarded-transitions-full-real-20261112/recipe-B.tar.gz | 413 | 0e8e85ab9a9886c68586dbca4d74f976c3541de32c96cc9aee33ae04e9dacd14 |
+
+下一组件是自动识别业务 STORE 到动态 selector 的有界路径。state43成功后业务块写
+state41仍回原分发器；显式8块路径试验能生成带校验的直连，但不能把这个诊断计作
+已完成自动恢复，也不把未来组件的结果合并进上述本阶段执行数字。
