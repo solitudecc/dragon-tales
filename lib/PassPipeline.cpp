@@ -159,6 +159,29 @@ PassPipeline::PassPipeline(bool builtins) {
       return std::string{"guarded-state-corridors options exceed hard limits 4096/4096/4096/262144"};
     return std::string{};
   });
+  registerLLVM("guarded-store-corridors",[](LLVMContext &c,const Options &o) {
+    const auto s=llvmlifter::detail::runGuardedStateCorridors(c.lifter.module(),
+      {number(o,"max_candidates",64),number(o,"max_rewrites",32),
+       number(o,"max_blocks",128),number(o,"max_instructions",16384)},true);
+    Result r; r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
+    r.changed=s.changed;r.message=s.message;
+    r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
+      {"candidate_edges",s.candidateEdges},{"attempted_edges",s.attemptedEdges},
+      {"rewritten_edges",s.rewrittenEdges},{"unresolved_edges",s.unresolvedEdges},
+      {"rejected",s.rejected},{"budget_exhausted",s.budgetExhausted},
+      {"cloned_blocks",s.clonedBlocks},{"cloned_instructions",s.clonedInstructions},
+      {"original_switches_retained",s.originalSwitchesRetained},
+      {"fallback_switches_created",s.fallbackSwitchesCreated},
+      {"fast_switches_created",s.rewrittenEdges}};
+    return r;
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_candidates","max_rewrites","max_blocks","max_instructions"})(o);
+    if(!error.empty())return error;
+    if(number(o,"max_candidates",64)>4096 || number(o,"max_rewrites",32)>4096 ||
+       number(o,"max_blocks",128)>4096 || number(o,"max_instructions",16384)>262144)
+      return std::string{"guarded-store-corridors options exceed hard limits 4096/4096/4096/262144"};
+    return std::string{};
+  });
   registerLLVM("guarded-target-sets",[](LLVMContext &c,const Options &o) {
     const auto s=llvmlifter::detail::runGuardedTargetSets(c.lifter.module(),
       {number(o,"max_candidates",64),number(o,"max_rewrites",32),number(o,"max_blocks",128),number(o,"max_instructions",16384)});

@@ -5,4 +5,7 @@ namespace dragon::llvmlifter::detail {
 // instruction flags, side exits and full fallbacks remain executable.
 GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &,
     const GuardedTransitionsOptions & = {});
+// Opt-in STORE values are untrusted predictions, never forwarded memory facts.
+GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &,
+    const GuardedTransitionsOptions &, bool storePredictions);
 }

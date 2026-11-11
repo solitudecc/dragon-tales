@@ -174,9 +174,64 @@ bool safeBlock(llvm::BasicBlock &b,bool terminal=false) {
 bool generated(llvm::BasicBlock &b){return b.getTerminator()->getMetadata(Generated)!=nullptr;}
 std::vector<llvm::BasicBlock *> blocks(llvm::Function &f){std::vector<llvm::BasicBlock *> out;for(auto &b:f)out.push_back(&b);return out;}
 struct Edge {std::size_t seed;unsigned slot;std::vector<std::size_t> path;std::vector<unsigned> slots;std::vector<std::uint64_t> predictions;};
-std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited) {
+// Only the shape supplies a prediction recipe. The original state LOAD and
+// table-address operations remain in the copied execution, including flags.
+struct StoreTableShape {std::uint64_t base;bool useOr;llvm::Value *guest;};
+std::optional<StoreTableShape> storeTableShape(llvm::Value *index,Work &work) {
+  if(!work.charge(8))return {};
+  auto *sum=llvm::dyn_cast<llvm::BinaryOperator>(index);
+  if(!sum || (sum->getOpcode()!=llvm::Instruction::Add && sum->getOpcode()!=llvm::Instruction::Or))return {};
+  auto *base=llvm::dyn_cast<llvm::ConstantInt>(sum->getOperand(1));auto *scaled=sum->getOperand(0);
+  if(!base){base=llvm::dyn_cast<llvm::ConstantInt>(sum->getOperand(0));scaled=sum->getOperand(1);}
+  if(!base || !base->getType()->isIntegerTy(64))return {};
+  auto *multiply=llvm::dyn_cast<llvm::BinaryOperator>(scaled);if(!multiply)return {};
+  llvm::Value *state=nullptr;
+  if(multiply->getOpcode()==llvm::Instruction::Shl) {
+    auto *amount=llvm::dyn_cast<llvm::ConstantInt>(multiply->getOperand(1));
+    if(amount && amount->equalsInt(3))state=multiply->getOperand(0);
+  } else if(multiply->getOpcode()==llvm::Instruction::Mul) {
+    for(unsigned n=0;n<2;++n)if(auto *factor=llvm::dyn_cast<llvm::ConstantInt>(multiply->getOperand(n));factor && factor->equalsInt(8))state=multiply->getOperand(1-n);
+  }
+  auto *load=llvm::dyn_cast_or_null<llvm::LoadInst>(state);
+  if(!load || !load->isSimple() || !load->getType()->isIntegerTy(64) || load->getPointerAddressSpace()!=0)return {};
+  auto *address=llvm::dyn_cast<llvm::GetElementPtrInst>(load->getPointerOperand());
+  if(!address || !address->getSourceElementType()->isIntegerTy(8) || address->getNumIndices()!=1 || !address->getOperand(1)->getType()->isIntegerTy(64))return {};
+  auto *guest=llvm::dyn_cast<llvm::LoadInst>(address->getPointerOperand());auto *function=load->getFunction();
+  if(!guest || !guest->isSimple() || !guest->getType()->isPointerTy() || function->arg_size()<2 || guest->getPointerOperand()!=function->getArg(1))return {};
+  return StoreTableShape{base->getZExtValue(),sum->getOpcode()==llvm::Instruction::Or,guest};
+}
+MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,
+    llvm::Value *index,Work &work,bool &limited) {
+  auto shape=storeTableShape(index,work);if(!shape)return {};
+  // A hint does not assert that this STORE aliases the later state LOAD.
+  // Scan the actual seed in reverse and retain its nearest finite Guest STORE.
+  for(auto it=seed.rbegin();it!=seed.rend();++it) {
+    if(!work.charge())return {};
+    auto *store=llvm::dyn_cast<llvm::StoreInst>(&*it);
+    if(!store || !store->isSimple() || !store->getValueOperand()->getType()->isIntegerTy(64) || store->getPointerAddressSpace()!=0)continue;
+    if(!work.charge(4))return {};
+    auto *address=llvm::dyn_cast<llvm::GetElementPtrInst>(store->getPointerOperand());
+    if(!address || address->getPointerOperand()!=shape->guest || !address->getSourceElementType()->isIntegerTy(8) || address->getNumIndices()!=1 || !address->getOperand(1)->getType()->isIntegerTy(64))continue;
+    Enumerator enumerate(&seed,path,work);
+    // The seed already executed. Never select one of its historical PHIs with
+    // the later fresh path's incoming edge or guess a cyclic/unknown arm.
+    auto values=enumerate.get(store->getValueOperand(),true);limited|=enumerate.limited;
+    if(work.exhausted)return {};
+    if(!values)continue;
+    Values result;
+    for(const auto &state:*values) {
+      if(!work.charge())return {};
+      const std::uint64_t scaled=state.getZExtValue()<<3;
+      result.emplace_back(64,shape->useOr?(shape->base|scaled):(shape->base+scaled));
+    }
+    return result;
+  }
+  return {};
+}
+std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions) {
   auto *index=indexOf(*path.back());if(!index)return {};
   Enumerator enumerate(&seed,path,work);auto addresses=enumerate.get(index);limited|=enumerate.limited;
+  if(!addresses && storePredictions && !work.exhausted)addresses=storeAddresses(seed,path,index,work,limited);
   if(!addresses)return {};auto *jump=llvm::cast<llvm::SwitchInst>(path.back()->getTerminator());std::vector<std::uint64_t> values;
   for(const auto &address:*addresses) {
     auto n=address.getZExtValue();if(n>std::numeric_limits<std::uint64_t>::max()-8)return {};
@@ -190,6 +245,9 @@ std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const s
 }
 }
 GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const GuardedTransitionsOptions &options) {
+  return runGuardedStateCorridors(module,options,false);
+}
+GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const GuardedTransitionsOptions &options,bool storePredictions) {
   GuardedTransitionsStats result;auto *metadata=module.getNamedMetadata("dragon.guarded-entry");if(!metadata)return result;result.available=true;
   auto reject=[&](const char *message,bool budget=false){result.complete=false;++result.rejected;result.budgetExhausted+=budget;result.message=message;};
   if(options.maxCandidates>4096 || options.maxRewrites>4096 || options.maxBlocks>4096 || options.maxInstructions>262144){reject("state-corridor option hard limit exceeded",true);return result;}
@@ -239,7 +297,7 @@ GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const Guar
       if(!work.charge(q.path.size()))return scanFailure();
       std::vector<llvm::BasicBlock *> path;for(auto n:q.path)path.push_back(initial[n]);
       bool rootPhisRetained=true;for(auto &phi:path.front()->phis()){if(!work.charge())return scanFailure();if(phi.getNumIncomingValues()<=1)rootPhisRetained=false;}
-      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
+      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited,storePredictions):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
       if(predicted) {
         if(selected.emplace(in.block,in.slot).second) {
           ++result.candidateEdges;targets.insert(q.terminal);
