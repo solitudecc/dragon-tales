@@ -1,4 +1,5 @@
 #include "GuardedTransition.hpp"
+#include "GuardedTransitionRootPHI.hpp"
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
@@ -89,6 +90,8 @@ struct Plan {
   GuardedTransitionRequest request;
   std::vector<llvm::Value *> snapshots;
   std::vector<llvm::Instruction *> definitions;
+  std::vector<llvm::PHINode *> singleIncomingPhis;
+  std::size_t singlePhiUses = 0;
   std::size_t copyCost = 0;
   llvm::BasicBlock *caseTarget = nullptr;
   std::vector<std::pair<llvm::ConstantInt *,llvm::BasicBlock *>> fastCases;
@@ -178,8 +181,20 @@ bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
       };
       if (auto *phi = llvm::dyn_cast<llvm::PHINode>(&i)) {
         int incoming = phi->getBasicBlockIndex(pred);
-        if (incoming < 0 || (n == 0 && phi->getNumIncomingValues() <= 1))
-          return fail(r, "missing selected PHI arm or empty original PHI");
+        if (incoming < 0)
+          return fail(r, "missing selected PHI arm");
+        if (n == 0 && phi->getNumIncomingValues() <= 1) {
+          if (!eliminableSingleIncomingRootPHI(*phi, *q.seed,
+                [&](llvm::BasicBlock *block) { return positions.contains(block); }, dom))
+            return fail(r, "single incoming root PHI has unsupported historical input");
+          for (auto &use : phi->uses()) {
+            (void)use;
+            if (++p.singlePhiUses > MaxUses)
+              return fail(r, "single incoming PHI use budget exhausted", true);
+          }
+          p.singleIncomingPhis.push_back(phi);
+          continue; // Erased in the trial before cloning; never an SSA repair def.
+        }
         if (!check(phi->getIncomingValue(incoming), true)) return false;
       } else {
         for (auto &operand : i.operands()) if (!check(operand, false)) return false;
@@ -191,7 +206,8 @@ bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
   p.copyCost = instructions + (p.setMode ? 1 : 2) + (p.snapshots.empty() ? 0 : p.snapshots.size() + 1);
   if (blocks > o.maxBlocks || p.copyCost > o.maxInstructions)
     return fail(r, "guard and snapshot copy budget exhausted", true);
-  std::size_t liveOuts = 0, uses = p.snapshots.size();
+  std::size_t liveOuts = 0, uses = p.snapshots.size() + p.singlePhiUses;
+  if (uses > MaxUses) return fail(r, "live-out use budget exhausted", true);
   for (auto *def : p.definitions) {
     bool live = false;
     for (auto &use : def->uses()) {
@@ -212,6 +228,12 @@ bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
 }
 bool apply(Plan &p, llvm::Function &f, GuardedTransitionResult &r) {
   const auto &q = p.request;
+  // Only trial PHIs are replaced. The original function/body is untouched
+  // until the complete transformed trial verifies and commits successfully.
+  for (auto *phi : p.singleIncomingPhis) {
+    phi->replaceAllUsesWith(phi->getIncomingValue(0));
+    phi->eraseFromParent();
+  }
   llvm::ValueToValueMapTy map;
   llvm::DenseMap<llvm::Value *, llvm::Value *> oldInputs;
   llvm::BasicBlock *snapshots = nullptr;

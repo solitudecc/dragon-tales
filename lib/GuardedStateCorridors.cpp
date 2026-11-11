@@ -1,5 +1,6 @@
 #include "GuardedStateCorridors.hpp"
 #include "GuardedTransition.hpp"
+#include "GuardedTransitionRootPHI.hpp"
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Dominators.h>
@@ -58,18 +59,47 @@ struct BooleanScenario {
 struct Enumerator {
   llvm::BasicBlock *seed;
   const std::vector<llvm::BasicBlock *> &path;
-  Work &work;std::size_t nodes=0;bool limited=false,booleanUnknown=false;
+  Work &work;std::size_t nodes=0;bool limited=false,booleanUnknown=false,historicalPhiSeen=false;
   BooleanScenario *scenario=nullptr;
+  const llvm::DominatorTree *historicalDom=nullptr;
+  std::unordered_set<llvm::Value *> checkedHistory,activeHistory;
   std::unordered_map<llvm::BasicBlock *,std::size_t> positions;
   std::unordered_map<Key,Values,KeyHash> memo;
   std::unordered_set<Key,KeyHash> active;
-  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr):seed(s),path(p),work(w),scenario(sc) {
+  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr):seed(s),path(p),work(w),scenario(sc),historicalDom(hd) {
     for(std::size_t n=0;n<p.size();++n)positions.emplace(p[n],n);
   }
   bool append(Values &to,const llvm::APInt &value) {
     if(!work.charge())return false;
     if(std::find(to.begin(),to.end(),value)==to.end())to.push_back(value);
     if(to.size()>MaxValues){limited=true;return false;}return true;
+  }
+  // Only validates the bounded SSA dependency shape of an old Boolean PHI.
+  // It does not prove a value, memory contents or absence of flag-produced poison.
+  // LOAD/freeze are existing execution boundaries; the original IR still runs.
+  bool safeHistoricalBoolean(llvm::Value *value,unsigned depth=0) {
+    if(!work.charge())return false;
+    if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(value))return false;
+    if(checkedHistory.contains(value))return true;
+    if(depth>MaxDepth || ++nodes>MaxNodes){limited=true;return false;}
+    if(!activeHistory.insert(value).second)return false;
+    bool valid=false;
+    if(llvm::isa<llvm::ConstantInt,llvm::Argument,llvm::FreezeInst>(value))valid=true;
+    else if(auto *load=llvm::dyn_cast<llvm::LoadInst>(value)) {
+      valid=load->isSimple();
+      for(auto &operand:load->operands()) {
+        if(!work.charge())return false;
+        if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(operand.get()))valid=false;
+      }
+    } else if(llvm::isa<llvm::PHINode,llvm::SelectInst,llvm::CastInst,
+                         llvm::BinaryOperator,llvm::ICmpInst>(value)) {
+      valid=true;
+      for(auto &operand:llvm::cast<llvm::Instruction>(value)->operands())
+        if(!safeHistoricalBoolean(operand.get(),depth+1)){valid=false;break;}
+    }
+    activeHistory.erase(value);
+    if(valid)checkedHistory.insert(value);
+    return valid;
   }
   MaybeValues get(llvm::Value *value,bool historical=false,unsigned depth=0) {
     if(!work.charge())return {};
@@ -118,6 +148,21 @@ struct Enumerator {
       // select a real edge. Otherwise a shared terminal could consume the
       // opportunity without specializing any business incoming context.
       if(!historical)return {};
+      if(phi->getType()->isIntegerTy(1)) {
+        historicalPhiSeen=true;
+        if(scenario && historicalDom) {
+          if(!historicalDom->dominates(phi,seed->getTerminator()) ||
+             !safeHistoricalBoolean(phi))return {};
+          // A previously executed PHI has one value, not the union of all
+          // possible predecessor values in a single Boolean scenario.
+          Key key{phi,true};auto assigned=scenario->values.find(key);
+          if(assigned==scenario->values.end()) {
+            if(!scenario->missing)scenario->missing=key;
+            return {};
+          }
+          return Values{llvm::APInt(1,assigned->second)};
+        }
+      }
       Values result;
       for(auto &incoming:phi->incoming_values()) {
         auto values=get(incoming,true,depth+1);if(!values)return {};
@@ -188,14 +233,15 @@ struct Enumerator {
 // Only called after the old SSA enumeration failed. Every complete Boolean
 // assignment must yield finite values; unknown integer arms never disappear.
 MaybeValues correlatedAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,
-    llvm::Value *index,Work &work,bool &limited) {
+    llvm::Value *index,Work &work,bool &limited,const llvm::DominatorTree *historicalDom=nullptr,bool *sawHistoricalPhi=nullptr) {
   std::deque<BooleanScenario> pending(1);
   std::unordered_set<Key,KeyHash> keys;
   Values result;std::size_t complete=0;
   while(!pending.empty()) {
     if(!work.charge(1+path.size()))return {};
     auto scenario=std::move(pending.front());pending.pop_front();
-    Enumerator enumerate(&seed,path,work,&scenario);auto values=enumerate.get(index);limited|=enumerate.limited;
+    Enumerator enumerate(&seed,path,work,&scenario,historicalDom);auto values=enumerate.get(index);limited|=enumerate.limited;
+    if(sawHistoricalPhi)*sawHistoricalPhi|=enumerate.historicalPhiSeen;
     if(work.exhausted)return {};
     if(scenario.missing) {
       auto key=*scenario.missing;
@@ -318,11 +364,16 @@ MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicB
   }
   return {};
 }
-std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions) {
+std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions,const llvm::DominatorTree &dom) {
   auto *index=indexOf(*path.back());if(!index)return {};
   Enumerator enumerate(&seed,path,work);auto addresses=enumerate.get(index);limited|=enumerate.limited;
-  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited);
+  bool sawHistoricalPhi=enumerate.historicalPhiSeen;
+  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited,nullptr,&sawHistoricalPhi);
+  // Preserve every prior successful prediction, including STORE hints. The
+  // new old-PHI identity retry is strictly a failure fallback.
   if(!addresses && storePredictions && !work.exhausted)addresses=storeAddresses(seed,path,index,work,limited);
+  if(!addresses && sawHistoricalPhi && !work.exhausted)
+    addresses=correlatedAddresses(seed,path,index,work,limited,&dom);
   if(!addresses)return {};auto *jump=llvm::cast<llvm::SwitchInst>(path.back()->getTerminator());std::vector<std::uint64_t> values;
   for(const auto &address:*addresses) {
     auto n=address.getZExtValue();if(n>std::numeric_limits<std::uint64_t>::max()-8)return {};
@@ -387,8 +438,16 @@ GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const Guar
       if(!eligible(in.block)){if(work.exhausted)return scanFailure();continue;}
       if(!work.charge(q.path.size()))return scanFailure();
       std::vector<llvm::BasicBlock *> path;for(auto n:q.path)path.push_back(initial[n]);
-      bool rootPhisRetained=true;for(auto &phi:path.front()->phis()){if(!work.charge())return scanFailure();if(phi.getNumIncomingValues()<=1)rootPhisRetained=false;}
-      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited,storePredictions):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
+      bool rootPhisRetained=true;
+      for(auto &phi:path.front()->phis()) {
+        if(!work.charge())return scanFailure();
+        if(phi.getNumIncomingValues()<=1) {
+          if(!work.charge(path.size()))return scanFailure();
+          if(!eliminableSingleIncomingRootPHI(phi,*initial[in.block],
+              [&](llvm::BasicBlock *block){return std::find(path.begin(),path.end(),block)!=path.end();},dom))rootPhisRetained=false;
+        }
+      }
+      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
       if(predicted) {
         if(selected.emplace(in.block,in.slot).second) {
           ++result.candidateEdges;targets.insert(q.terminal);

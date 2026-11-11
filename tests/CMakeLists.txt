@@ -79,6 +79,8 @@ add_executable(dragon_tests
     lifters/TestLLVMGuardedStoreCorridors.cpp
     lifters/TestLLVMGuardedPathStores.cpp
     lifters/TestLLVMGuardedCorrelatedBooleans.cpp
+    lifters/TestLLVMGuardedHistoricalBooleans.cpp
+    lifters/TestLLVMGuardedSingleIncoming.cpp
         lifters/TestLLVMStaticRegion.cpp
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
