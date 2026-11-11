@@ -2589,5 +2589,8 @@ New exposed constants require another explicit pass, never hidden iteration.
 Old public tests compile but builtin absent: main/noZ3 each6cases/12assert with
 6 failures; capability absence is not an old semantic mismatch. New related
 focus each22/741; CTest1087/1087 and952/952. Independent native and real replay
-are ongoing; do not merge this implementation milestone until they finish.
+are complete: each build3584 full-state observations/1794 specified faults/39424
+comparator controls,48 saved streams6144frames. Real C16/LLVM16 and144 controls
+pass; cffO0 folds25 literalbranches/removes49blocks, comboO0 1/5, O2 unchanged.
+All49/24/5/3 guards retained; all four strict closure gates still false.
 See docs/llvm-constant-branches.md. Full loop closure remains unclaimed.
