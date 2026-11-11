@@ -2,6 +2,7 @@
 
 #include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Dominators.h>
@@ -92,10 +93,10 @@ bool selectedPHIsAvailable(const llvm::BasicBlock &block,
     auto *incoming = phi.getIncomingValue(index);
     if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(incoming)) return false;
     if (const auto *instruction = llvm::dyn_cast<llvm::Instruction>(incoming)) {
-      // Such a value belongs to an earlier execution of the original block,
-      // not to this copy. Never remap old LOAD/freeze/loop state to new bits.
-      if (instruction->getParent() == &block ||
-          !dom.dominates(instruction, pred.getTerminator()))
+      // A dominating value from this block is a previous execution's value.
+      // It may cross this edge only through an explicit entry snapshot, never
+      // through the VMap for the new execution.
+      if (!dom.dominates(instruction, pred.getTerminator()))
         return false;
     }
   }
@@ -253,6 +254,20 @@ struct ContextPath {
   std::size_t instructions = 0;
 };
 
+using EntryInputs = std::vector<llvm::Value *>;
+
+EntryInputs oldEntryInputs(llvm::BasicBlock &block, llvm::BasicBlock &pred) {
+  EntryInputs result;
+  for (auto &phi : block.phis()) {
+    auto *incoming = phi.getIncomingValueForBlock(&pred);
+    auto *instruction = llvm::dyn_cast<llvm::Instruction>(incoming);
+    if (instruction && instruction->getParent() == &block &&
+        std::find(result.begin(), result.end(), incoming) == result.end())
+      result.push_back(incoming);
+  }
+  return result;
+}
+
 bool contains(const ContextPath &path, const llvm::BasicBlock *block) {
   return std::find(path.blocks.begin(), path.blocks.end(), block) != path.blocks.end();
 }
@@ -362,7 +377,7 @@ ContextPath contextPath(llvm::BranchInst &branch, llvm::BasicBlock &pred,
   return result;
 }
 
-bool usefulContext(const ContextPath &path, llvm::BasicBlock &pred,
+std::optional<std::size_t> usefulContext(const ContextPath &path, llvm::BasicBlock &pred,
                     const DispatcherSpecializationOptions &options,
                     StateGuardEdgeBudget &budget, std::size_t &edgeNodes,
                     bool &exhausted) {
@@ -379,23 +394,25 @@ bool usefulContext(const ContextPath &path, llvm::BasicBlock &pred,
       proof.contextBlocks = &prefix;
       const auto value = proof.evaluate(&phi);
       edgeNodes += proof.nodes;
-      if (budget.stopped) return false;
+      if (budget.stopped) return std::nullopt;
       if (!value) continue;
-      if (index != 0) return true;
+      if (index != 0) return index;
       constants.emplace(&phi, *value);
     }
   }
   // Copying an unrelated successor check does not advance a proved state
   // relation. Keep the old single-block shape unless a downstream join gains
   // an actual constant PHI context, with poison and old-execution rules intact.
-  return false;
+  return std::nullopt;
 }
 
 std::optional<std::size_t> preflightRepair(
-    const ContextPath &path, const llvm::Function &function,
+    const ContextPath &path, const EntryInputs &inputs,
+    const llvm::Function &function,
     bool &exhausted) {
   std::size_t liveOuts = 0;
-  std::size_t externalUses = 0;
+  // Each snapshot adds a use of an already live-out original definition.
+  std::size_t externalUses = inputs.size();
   for (auto *block : path.blocks)
     for (const auto &instruction : *block) {
       bool live = false;
@@ -418,21 +435,34 @@ std::optional<std::size_t> preflightRepair(
         return std::nullopt;
       }
     }
-  if (liveOuts && function.size() + path.blocks.size() > MaxRepairCells / liveOuts) {
+  const auto blocks = path.blocks.size() + !inputs.empty();
+  if (liveOuts && function.size() + blocks > MaxRepairCells / liveOuts) {
     exhausted = true;
     return std::nullopt;
   }
-  return liveOuts * (function.size() + path.blocks.size());
+  return liveOuts * (function.size() + blocks);
 }
 
 void cloneEdge(llvm::BranchInst &branch, llvm::BasicBlock &pred,
                 unsigned successorIndex, unsigned selected,
-                const ContextPath &path) {
+                const ContextPath &path, const EntryInputs &inputs) {
   auto &block = *branch.getParent();
   auto &function = *block.getParent();
   llvm::ValueToValueMapTy map;
   std::vector<llvm::BasicBlock *> clones;
   std::vector<llvm::Instruction *> definitions;
+  llvm::BasicBlock *entry = nullptr;
+  llvm::DenseMap<llvm::Value *, llvm::Value *> oldInputs;
+  if (!inputs.empty()) {
+    entry = llvm::BasicBlock::Create(function.getContext(),
+        block.getName() + ".state.inputs", &function);
+    for (auto *value : inputs) {
+      auto *snapshot = llvm::PHINode::Create(value->getType(), 1,
+          "state.edge.old", entry);
+      snapshot->addIncoming(value, &pred);
+      oldInputs[value] = snapshot;
+    }
+  }
   auto mapped = [&](llvm::Value *value) -> llvm::Value * {
     if (llvm::Value *copy = map.lookup(value)) return copy;
     return value; // Preserve external SSA values, including unknown freezes.
@@ -445,8 +475,17 @@ void cloneEdge(llvm::BranchInst &branch, llvm::BasicBlock &pred,
   }
   for (std::size_t index = 0; index < path.blocks.size(); ++index) {
     auto *selectedPred = index ? path.blocks[index - 1] : &pred;
-    for (auto &phi : path.blocks[index]->phis())
-      map[&phi] = mapped(phi.getIncomingValueForBlock(selectedPred));
+    for (auto &phi : path.blocks[index]->phis()) {
+      auto *incoming = phi.getIncomingValueForBlock(selectedPred);
+      if (index == 0) {
+        // First-block inputs are values already produced on the incoming
+        // edge. A region-local input must not be mapped to its fresh copy.
+        auto *snapshot = oldInputs.lookup(incoming);
+        map[&phi] = snapshot ? snapshot : incoming;
+      } else {
+        map[&phi] = mapped(incoming);
+      }
+    }
     for (auto iterator = clones[index]->begin();
          iterator != clones[index]->end() && llvm::isa<llvm::PHINode>(*iterator);)
       (iterator++)->eraseFromParent();
@@ -486,7 +525,9 @@ void cloneEdge(llvm::BranchInst &branch, llvm::BasicBlock &pred,
         phi.addIncoming(mapped(phi.getIncomingValueForBlock(original)), clone);
     }
   }
-  pred.getTerminator()->setSuccessor(successorIndex, clones.front());
+  if (entry) llvm::BranchInst::Create(clones.front(), entry);
+  pred.getTerminator()->setSuccessor(successorIndex,
+                                    entry ? entry : clones.front());
   // Retain the original PHI objects until every outside/loop use is repaired.
   for (auto &phi : block.phis()) phi.removeIncomingValue(&pred, false);
 
@@ -540,6 +581,9 @@ bool specializeStateGuardEdge(
   bool exhausted = false;
   bool changed = false;
   for (auto *pred : predecessors) {
+    // Never manufacture an empty original PHI. New copy/reentry predecessors
+    // are not in this snapshot, and remain on the original dispatcher.
+    if (budget.stopped || llvm::pred_size(&block) < 2) break;
     unsigned successorIndex = 0;
     if (!seen.insert(pred).second || !dom.isReachableFromEntry(pred) ||
         !selectedEdge(*pred, block, successorIndex) ||
@@ -557,16 +601,38 @@ bool specializeStateGuardEdge(
     if (budget.stopped) break;
     if (!condition || condition->getBitWidth() != 1 || !proof.usesIncomingPHI)
       continue;
+    const auto inputs = oldEntryInputs(block, *pred);
     const auto selected = condition->isZero() ? 1u : 0u;
+    // Copying a known self-target guard only peels an unhelpful loop step.
+    // Its new unconditional predecessor would become the next invocation's
+    // candidate again, producing an endless chain of equivalent copies.
+    if (branch.getSuccessor(selected) == &block) continue;
     auto path = contextPath(branch, *pred, selected, dom, exhausted);
-    if (path.blocks.size() > 1 &&
-        !usefulContext(path, *pred, options, budget, proof.nodes, exhausted))
-      path = {{&block}, {}, block.size()};
+    std::optional<std::size_t> useful;
+    if (path.blocks.size() > 1) {
+      useful = usefulContext(path, *pred, options, budget, proof.nodes, exhausted);
+      if (!useful) path = {{&block}, {}, block.size()};
+    }
+    // Taking previous-execution inputs is useful only when it advances an
+    // actual downstream constant context. Keep the old profitless one-block
+    // refusal rather than cloning an unrelated loop just to fold its guard.
+    if ((!inputs.empty() || changed) && !useful) continue;
+    const auto snapshotBlocks = inputs.empty() ? 0u : 1u;
+    const auto snapshotInstructions = inputs.empty() ? 0u : inputs.size() + 1;
     std::optional<std::size_t> repair;
     for (;;) {
-      repair = preflightRepair(path, function, exhausted);
-      if (repair && path.blocks.size() <= MaxClones - budget.clones &&
-          path.instructions <= MaxClonedInstructions - budget.clonedInstructions &&
+      if ((!inputs.empty() || changed) &&
+          (!useful || path.blocks.size() <= *useful)) {
+        repair.reset();
+        break;
+      }
+      repair = preflightRepair(path, inputs, function, exhausted);
+      const auto copiedBlocks = path.blocks.size() + snapshotBlocks;
+      const auto copiedInstructions = path.instructions + snapshotInstructions;
+      if (repair && copiedBlocks <= MaxContextBlocks &&
+          copiedInstructions <= MaxContextInstructions &&
+          copiedBlocks <= MaxClones - budget.clones &&
+          copiedInstructions <= MaxClonedInstructions - budget.clonedInstructions &&
           *repair <= MaxRepairCells - budget.repairCells)
         break;
       // An extension must not hide the old one-block proved rewrite. Retry
@@ -577,8 +643,12 @@ bool specializeStateGuardEdge(
       path.forwardEdges.pop_back();
       if (repair) exhausted = true;
     }
-    if (!repair || path.blocks.size() > MaxClones - budget.clones ||
-        path.instructions > MaxClonedInstructions - budget.clonedInstructions ||
+    const auto copiedBlocks = path.blocks.size() + snapshotBlocks;
+    const auto copiedInstructions = path.instructions + snapshotInstructions;
+    if (!repair || copiedBlocks > MaxContextBlocks ||
+        copiedInstructions > MaxContextInstructions ||
+        copiedBlocks > MaxClones - budget.clones ||
+        copiedInstructions > MaxClonedInstructions - budget.clonedInstructions ||
         *repair > MaxRepairCells - budget.repairCells) {
       if (repair) {
         exhausted = true;
@@ -586,16 +656,18 @@ bool specializeStateGuardEdge(
       }
       continue;
     }
-    cloneEdge(branch, *pred, successorIndex, selected, path);
-    budget.clones += path.blocks.size();
-    budget.clonedInstructions += path.instructions;
+    cloneEdge(branch, *pred, successorIndex, selected, path, inputs);
+    budget.clones += copiedBlocks;
+    budget.clonedInstructions += copiedInstructions;
     budget.repairCells += *repair;
     ++stats.uniqueConditions;
     ++stats.branchesRewritten;
     stats.changed = true;
     dom.recalculate(function);
     changed = true;
-    break;
+    // Retain the historical one-copy contract for the ordinary single-block
+    // fallback. Batching is reserved for actual downstream state contexts.
+    if (!useful || path.blocks.size() <= *useful) break;
   }
   if (exhausted) reportBudget(stats, budget);
   return changed;
