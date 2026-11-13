@@ -41,8 +41,9 @@ hash. Local archive:
 `/Users/c/Desktop/deob/validation-artifacts/guarded-state-values-20261113/guarded-state-values-metadata-v1.tar.gz`.
 Raw runtimes are retained separately.
 
-Independent full-state native and real four-module structure checks are being
-completed and will be committed separately. This milestone does not establish
+Independent full-state native results are now recorded in
+`guarded-state-values-native-validation-20261113.md`; real four-module structure
+checks and the final composed replay remain pending. This milestone does not establish
 complete loop de-flattening; final composed replay and observed-loop evidence
 remain required before main merge. No new machine-instruction, Unicorn or
 69-input corpus campaign is claimed.

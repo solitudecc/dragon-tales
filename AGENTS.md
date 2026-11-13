@@ -217,6 +217,19 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+State-value independent native (2026-11-13, implementation `568de7e`): both
+frozen a2f82bdd/b4fae0a3 runtimes pass original13 API recipes and each4928 full
+state observations (1664 business/3264 checked failure),1848fault observations/
+838specified detections,54208comparison controls. Each44streams/6776frames
+independently reaudited,0exclusions/skips/normalization. Seven modes1078distinct
+inputs include actual aliasing, unknown helper writes, seed effects, loops,
+freeze/flags/duplicate PHIs and wrong state/target predictions. Cross-build41IR/
+13reports are exact,41damaged byte controls detected. Archive87345978 has680
+root independently verified payloads; separate before-only runs are not added.
+See `docs/guarded-state-values-native-validation-20261113.md`. This establishes
+fixture semantics, not real four-module closure or observed loops; those remain
+pending before main merge.
+
 State-value guards (2026-11-13, frozen base `f33d36a` plus patch228c0ebb):
 opt-in same-SSA state prediction after seed effects, original ICmp fallback and
 actual target-LOAD fallback. Every commit reports Incomplete; no counter range
