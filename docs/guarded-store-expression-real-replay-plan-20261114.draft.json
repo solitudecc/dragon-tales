@@ -1,0 +1,176 @@
+{
+  "schema": "dragon-store-expression-real-replay-plan-v1",
+  "ready": false,
+  "archive": {
+    "path": "/home/cc/vmc-runs/practical-holdouts-B-20261113-v1.tar.xz",
+    "sha256": "9c623d69bf90ded9c486a70861224c85966bb9698a97f3a9ba791e0cd3f77359"
+  },
+  "frozen_root": "/home/cc/vmc-runs/practical-region-holdouts-20261113/frozen-normal",
+  "tools": {
+    "opt": {
+      "path": "/usr/lib/llvm-21/bin/opt",
+      "sha256": "1b14756300be39def609d911ce32cbb0f9b6f4ba2b4dd2a8c17e570edcdb9cd5"
+    },
+    "llc": {
+      "path": "/usr/lib/llvm-21/bin/llc",
+      "sha256": "1d149698022254d8d5697ba778fd7614f96d77df5bf0b4055984df0141be02e0"
+    },
+    "cc": {
+      "path": "/usr/bin/aarch64-linux-gnu-gcc-15",
+      "sha256": "5b06a5b85cab901e2af3e8f351a6d4e8e6a93af24797bd8c01e5391ac6b4e63b"
+    },
+    "binder": {
+      "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/replay-bind",
+      "sha256": "REPLACE_AFTER_BINDER_BUILD"
+    }
+  },
+  "cases": [
+    {
+      "id": "manual-O0",
+      "family": "manual",
+      "c_level": "O0",
+      "raw_parse_identifier": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/manual-O0-raw.ll",
+      "raw_input": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/manual-O0-raw.ll",
+        "sha256": "c09ea7fb6f90d55a14a9587fcfdbeb791bba1745511b47552111d84109fedf80"
+      },
+      "hints": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/manual-O0-hints.json",
+        "sha256": "718746cbbe664cf5a6b54332545d9c0dfb347bea874d41c0cce4c95b69f0733b"
+      },
+      "after": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/manual-O0-after.ll",
+        "sha256": "3fdfd84a468d29b1f80556f2f81b5177e833524ffaad639336dd4ea7eb7b9709"
+      },
+      "parsed_before": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/manual-O0-after.ll.parsed-before.ll",
+        "sha256": "3fdfd84a468d29b1f80556f2f81b5177e833524ffaad639336dd4ea7eb7b9709"
+      },
+      "raw": {
+        "member": "practical-region-holdouts-20261113/normal-manual/manual/2026111307/plain/O0/product-O2/raw.ll",
+        "sha256": "c09ea7fb6f90d55a14a9587fcfdbeb791bba1745511b47552111d84109fedf80"
+      },
+      "driver": {
+        "member": "practical-region-holdouts-20261113/normal-manual/manual/2026111307/plain/O0/product-O2/driver.c",
+        "sha256": "4f55bf725699cd2c524f9aa859cc17ec54bfd9de7dc1cf24f3dea28e2f33c055"
+      },
+      "elf_sha256": "c0ab1f83e6235e6bc629bbcb7b1c4ef261bff0a7023209345d00fbbf60407dbd",
+      "archive_raw_sha_matches": [
+        "normal-manual/manual/2026111307/plain/O0/product-O0/raw.ll",
+        "normal-manual/manual/2026111307/plain/O0/product-O2/raw.ll"
+      ]
+    },
+    {
+      "id": "manual-O2",
+      "family": "manual",
+      "c_level": "O2",
+      "raw_parse_identifier": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/manual-O2-raw.ll",
+      "raw_input": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/manual-O2-raw.ll",
+        "sha256": "34460cf3d3d450b5819df52e4002d10152b6e1ad65ccd52bb747d2833efdd191"
+      },
+      "hints": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/manual-O2-hints.json",
+        "sha256": "d432bf7e82464e004c9a97a826145c1103c772d6d27454e0f793ab1cd162c0ec"
+      },
+      "after": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/manual-O2-after.ll",
+        "sha256": "d45af6e62b9587ceae16591be1b8b75d1466edbfa636413badcfd174f175581e"
+      },
+      "parsed_before": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/manual-O2-after.ll.parsed-before.ll",
+        "sha256": "0bcae867e039fc959ac2d88ba20b54b32508e20751e1fa99ea4ce8112283a08b"
+      },
+      "raw": {
+        "member": "practical-region-holdouts-20261113/normal-manual/manual/2026111307/plain/O2/product-O2/raw.ll",
+        "sha256": "34460cf3d3d450b5819df52e4002d10152b6e1ad65ccd52bb747d2833efdd191"
+      },
+      "driver": {
+        "member": "practical-region-holdouts-20261113/normal-manual/manual/2026111307/plain/O2/product-O2/driver.c",
+        "sha256": "e0fb71e08b117ddb6c929dc60ff66af938073695ced0fe68b6f50aa9c69c75bb"
+      },
+      "elf_sha256": "f1065b49db0fcc984a56aece7258e7976b2b6257852f348fad191f1e8b8840fe",
+      "archive_raw_sha_matches": [
+        "normal-manual/manual/2026111307/plain/O2/product-O0/raw.ll",
+        "normal-manual/manual/2026111307/plain/O2/product-O2/raw.ll"
+      ]
+    },
+    {
+      "id": "flatten-switch-O0",
+      "family": "flatten-switch",
+      "c_level": "O0",
+      "raw_parse_identifier": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/flatten-switch-O0-raw.ll",
+      "raw_input": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/flatten-switch-O0-raw.ll",
+        "sha256": "89ab0c69cda2b9b5c17c31f283299835bf50cc6a7faa362ccfc1093b25a36b2b"
+      },
+      "hints": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/flatten-switch-O0-hints.json",
+        "sha256": "c36a464a9edfd6b11f7ff4677002d56735ba1ebc8a586f849563531fd87e6018"
+      },
+      "after": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/flatten-switch-O0-after.ll",
+        "sha256": "bd7b5e7e6384f53603eb265451e78ce6f07dbcf322683a04713d743d8ad461a0"
+      },
+      "parsed_before": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/flatten-switch-O0-after.ll.parsed-before.ll",
+        "sha256": "15b6e7ef035d374cf5d6498f5937ae2ebffa8a5a90abedcad22a88fd815f6764"
+      },
+      "raw": {
+        "member": "practical-region-holdouts-20261113/normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O0/product-O2/raw.ll",
+        "sha256": "89ab0c69cda2b9b5c17c31f283299835bf50cc6a7faa362ccfc1093b25a36b2b"
+      },
+      "driver": {
+        "member": "practical-region-holdouts-20261113/normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O0/product-O2/driver.c",
+        "sha256": "05e58fdeca28a67ad922451280c49b56a191bbf796b4389c56ee78d04ffdc7f6"
+      },
+      "elf_sha256": "cdb9552b686417fcb691986c1c28ac4baf5bb6ef71dcd1874a8e89244c80022e",
+      "archive_raw_sha_matches": [
+        "normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O0/product-O0/raw.ll",
+        "normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O0/product-O2/raw.ll"
+      ]
+    },
+    {
+      "id": "flatten-switch-O2",
+      "family": "flatten-switch",
+      "c_level": "O2",
+      "raw_parse_identifier": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/flatten-switch-O2-raw.ll",
+      "raw_input": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/flatten-switch-O2-raw.ll",
+        "sha256": "15b75e16cbcf7cda4fcea10711b6749e9595efceaa2ae30ef77808824c6ce252"
+      },
+      "hints": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-inputs/flatten-switch-O2-hints.json",
+        "sha256": "44830a4132bbd98a78eab232d6ed0c8d2b8189895ede01139fa4e47106505ce3"
+      },
+      "after": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/flatten-switch-O2-after.ll",
+        "sha256": "713cd74da6b504dcabdf5a8663b44c11a027920eddd21c7dd63d59c49003781a"
+      },
+      "parsed_before": {
+        "path": "/home/cc/vmc-runs/guarded-store-expressions-20261113/real-v2/flatten-switch-O2-after.ll.parsed-before.ll",
+        "sha256": "90438c4162b5d2ca3efa3c724f42f4a0468643b7728d0cd5503f0ecbc181f090"
+      },
+      "raw": {
+        "member": "practical-region-holdouts-20261113/normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O2/product-O2/raw.ll",
+        "sha256": "15b75e16cbcf7cda4fcea10711b6749e9595efceaa2ae30ef77808824c6ce252"
+      },
+      "driver": {
+        "member": "practical-region-holdouts-20261113/normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O2/product-O2/driver.c",
+        "sha256": "e0fb71e08b117ddb6c929dc60ff66af938073695ced0fe68b6f50aa9c69c75bb"
+      },
+      "elf_sha256": "bb98e3f3841bfe7b9a5ee813577c2c317d841b3674b48966ba6244a434dcaa6b",
+      "archive_raw_sha_matches": [
+        "normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O2/product-O0/raw.ll",
+        "normal-flatten-switch/flatten-switch/2026111307/flatten-switch/O2/product-O2/raw.ll"
+      ]
+    }
+  ],
+  "limits": {
+    "guest_steps": 1000000,
+    "subprocess_seconds": 180,
+    "start_free": 536870912,
+    "running_free": 67108864
+  },
+  "scope": "128 native versus exact original-B Unicorn full-state;64 Unicorn versus Python spec;0 new native C checks; archive raw/driver selected by exact SHA and recorded same-module product-O2 lineage"
+}

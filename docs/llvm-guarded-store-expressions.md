@@ -80,6 +80,6 @@ The original A/B evidence remains separate.
 The real pass still constructs0/4/16/25 conditional contexts in manual O0/O2
 and flatten-switch O0/O2. These copies do not establish complete de-flattening:
 C-O2 conditional fast views have no closed business SCC after excluding the
-original central dispatcher/misses. Final evidence sealing is recorded
-separately before merging. No new instruction or full69-input corpus campaign
+original central dispatcher/misses. Final evidence is sealed in the
+[validation checkpoint](guarded-store-expressions-validation-20261114.md). No new instruction or full69-input corpus campaign
 is claimed for this opt-in LLVM component.
