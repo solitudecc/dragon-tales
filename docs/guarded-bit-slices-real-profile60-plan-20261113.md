@@ -101,3 +101,35 @@ macOS archive is
 `/Users/c/Desktop/deob/validation-artifacts/guarded-bit-slices-real-20261113/guarded-bit-slices-real60-preparation-v1-20261113.tar.gz`.
 It references the already sealed actual59 and repaired-v2 input archives;
 it contains no formal runtime, producer binary or new candidate frame.
+
+## Formal compile-ready phase
+
+The later root GO authorized compilation only. The new main runtime is
+`/home/cc/vmc-runs/guarded-bit-slices-20261113/runtime-main-v1`:
+backend SHA `c23bf0a5c092a5a94d3bb076f0207bb09d52970727130a68d12ad663c8ab8758`,
+manifest SHA `3bc8b63f2e89c039fc56d54c8386c60a98d4fab39d35f9ec6b83d76d3e748c08`.
+Both source binaries compiled sequentially, with explicit main
+`LD_LIBRARY_PATH` and rpath. `ldd` resolves that exact backend path, and
+`readelf` confirms the declared rpath. Complete source and four-case59/v2
+input pins were rechecked after compilation. No producer entry point, pass,
+target-native program or full replay was run.
+
+`prepared-v1/COMPILED-READY-v1.json` SHA is
+`ded534e397a065be2756a2fc2b46eb71d4f7b51bdb8cbdea1401a340d085c0cf`.
+Its `candidate_execution_authorized` remains false, waiting for the formal
+dual-build native archive SHA and a separate root diagnostic GO.
+
+| binary | bytes | SHA-256 |
+| --- | ---: | --- |
+| `probe-bits` | 486600 | `30c1f1c5d34523b6bb0bbd298d23ddd8651bce7968cab26e8a3fc096c92e2420` |
+| `parse-import` | 358720 | `9014252b3677972704055d1b594704d13119d5d4942f19b5fdec71164eda8093` |
+
+The five sources, two binaries, ready manifest, commands, compiler logs and
+loader-resolution evidence are sealed as 20 regular members in
+`~/vmc-runs/guarded-bit-slices-real60-compile-ready-v1-20261113.tar.gz` and
+`/Users/c/Desktop/deob/validation-artifacts/guarded-bit-slices-real-20261113/guarded-bit-slices-real60-compile-ready-v1-20261113.tar.gz`.
+Archive SHA is
+`cbfc42404aca717ff2933a819c12ddffab201837f639899f7e3b7056ce6acd64`
+(208966 bytes). Both hosts independently checked every member's length/SHA
+and the complete regular-file set. This compact archive contains no runtime
+libraries or new candidate frames.
