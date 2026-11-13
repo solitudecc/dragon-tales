@@ -359,7 +359,7 @@ struct SliceLoopFixture {
       sw->addCase(b.getInt64(7), head);
       sw->addCase(b.getInt64(8), head);
     } else b.CreateBr(head);
-    if (mode != "unmarked") seed->getTerminator()->setMetadata(Generated, llvm::MDNode::get(c, {}));
+    if (mode != "unmarked" && mode != "fresh-head") seed->getTerminator()->setMetadata(Generated, llvm::MDNode::get(c, {}));
     b.SetInsertPoint(seedFallback);
     if (seedTarget) {
       auto *sw = b.CreateSwitch(seedTarget, other);
@@ -390,7 +390,9 @@ struct SliceLoopFixture {
     store(history, historyAddress);
     auto *count = load(iterationAddress, "iteration.count");
     store(b.CreateAdd(count, b.getInt64(1), "iteration.increment"), iterationAddress);
-    auto *flagged = llvm::cast<llvm::BinaryOperator>(b.CreateAdd(state, b.getInt64(0), "retained.flags"));
+    llvm::Value *effectiveState = state;
+    if (mode == "fresh-head") effectiveState = b.CreateLShr(frozen, b.getInt64(63), "head.state");
+    auto *flagged = llvm::cast<llvm::BinaryOperator>(b.CreateAdd(effectiveState, b.getInt64(0), "retained.flags"));
     flagged->setHasNoSignedWrap(); flagged->setHasNoUnsignedWrap();
     if (mode == "call-inside") b.CreateCall(external, {function->getArg(0), guest});
     if (mode == "fence") b.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent);
@@ -628,4 +630,30 @@ TEST_CASE("Bit slice edge ordinary loop seeds preserve fresh values and refuse o
   marked.block("seed")->getTerminator()->setMetadata(Generated, llvm::MDNode::get(context, {}));
   marked.block("seed")->getTerminator()->setMetadata(Checked, llvm::MDNode::get(context, {}));
   auto before = marked.text(); CHECK_FALSE(marked.run().changed); CHECK(marked.text() == before);
+}
+
+TEST_CASE("Bit slice discovery keeps a fresh header loop ahead of a predictable suffix", "[llvm][guarded-bit-slices][guarded-bit-loop-discovery]") {
+  for (bool generatedSeed : {false, true}) for (std::int64_t cap : {1, 32}) {
+    INFO(generatedSeed << " " << cap);
+    SliceLoopFixture f("fresh-head");
+    if (generatedSeed) f.block("seed")->getTerminator()->setMetadata(Generated,
+        llvm::MDNode::get(f.module.getContext(), {}));
+    // The address depends on this fresh LOAD/slice, not on the header state
+    // PHI. The shorter head->dispatch suffix is also a valid prediction.
+    auto *slice = llvm::dyn_cast_or_null<llvm::BinaryOperator>(f.instruction("head.state")); REQUIRE(slice);
+    CHECK(slice->getParent() == f.block("head"));
+    CHECK(slice->getOperand(0) == f.instruction("fresh.freeze"));
+    auto r = f.run("guarded-bit-slices", {{"max_candidates", cap}});
+    REQUIRE(r.changed); REQUIRE(r.counters.at("loop_contexts") == 1);
+    CHECK(r.counters.at("loop_backedges") == 1);
+    auto *fast = f.freshSwitch(); f.checkFallback(*fast);
+    auto *root = f.block("head.transition"); REQUIRE(root);
+    CHECK(fast->getParent() != root);
+    auto *freshSlice = llvm::dyn_cast_or_null<llvm::BinaryOperator>(f.instruction("head.state.transition")); REQUIRE(freshSlice);
+    CHECK(freshSlice->getOperand(0) == f.instruction("fresh.freeze.transition"));
+    CHECK(f.instruction("iteration.increment.transition"));
+    CHECK(f.instruction("prefix.increment.transition") == nullptr);
+    for (auto c : fast->cases()) if (c.getCaseValue()->getZExtValue() < 200) CHECK(c.getCaseSuccessor() == root);
+    f.checkEveryPhi();
+  }
 }

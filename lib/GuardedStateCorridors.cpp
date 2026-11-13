@@ -366,7 +366,7 @@ bool safeBlock(llvm::BasicBlock &b,bool terminal=false) {
 }
 bool generated(llvm::BasicBlock &b){return b.getTerminator()->getMetadata(Generated)!=nullptr;}
 std::vector<llvm::BasicBlock *> blocks(llvm::Function &f){std::vector<llvm::BasicBlock *> out;for(auto &b:f)out.push_back(&b);return out;}
-struct Edge {std::size_t seed;unsigned slot;std::vector<std::size_t> path;std::vector<unsigned> slots;std::vector<std::uint64_t> predictions;bool partial=false;};
+struct Edge {std::size_t seed;unsigned slot;std::vector<std::size_t> path;std::vector<unsigned> slots;std::vector<std::uint64_t> predictions;bool partial=false,loop=false;};
 // Only the shape supplies a prediction recipe. The original state LOAD and
 // table-address operations remain in the copied execution, including flags.
 struct StoreTableShape {std::uint64_t base;bool useOr;llvm::Value *guest;};
@@ -592,7 +592,8 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
     queue.push_back({n,{n},{},instructionCounts[n]});visited[n].insert(n);
   }
   if(work.exhausted)return scanFailure();
-  std::vector<Edge> branchEdges,switchEdges;std::set<std::pair<std::size_t,unsigned>> selected;std::size_t searches=0;
+  std::vector<Edge> branchEdges,switchEdges;
+  std::set<std::pair<std::size_t,unsigned>> selected,selectedLoops,selectedPartial;std::size_t searches=0;
   while(!queue.empty()) {
     auto q=std::move(queue.front());queue.pop_front();
     for(const auto &in:incoming[q.path.front()]) {
@@ -617,13 +618,47 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
       bool usedPartial=false;
       auto predicted=rootPhisRetained && (!continuations || checkedSeed)?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom,partialStats!=nullptr,usedPartial,partialMasks,bitSlices):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
       if(predicted) {
-        if(selected.emplace(in.block,in.slot).second) {
-          ++result.candidateEdges;targets.insert(q.terminal);
-          if(usedPartial)++partialStats->partialCandidateEdges;
-          auto &edges=llvm::isa<llvm::BranchInst>(initial[in.block]->getTerminator())?branchEdges:switchEdges;
-          if(edges.size()<options.maxCandidates)edges.push_back({in.block,in.slot,q.path,q.slots,*predicted,usedPartial});else limited=true;
+        bool closesLoop=false;
+        if(bitSlices) {
+          auto *jump=llvm::cast<llvm::SwitchInst>(initial[q.terminal]->getTerminator());
+          for(auto value:*predicted) {
+            if(!work.charge())return scanFailure();
+            auto item=jump->findCaseValue(llvm::ConstantInt::get(llvm::Type::getInt64Ty(module.getContext()),value));
+            if(item!=jump->case_default() && item->getCaseSuccessor()==path.front())closesLoop=true;
+          }
         }
-        continue;
+        const auto key=std::pair{in.block,in.slot};
+        const bool fresh=selected.emplace(key).second;
+        const bool upgrade=bitSlices && closesLoop && selectedLoops.emplace(key).second;
+        if(fresh || upgrade) {
+          if(fresh)++result.candidateEdges;targets.insert(q.terminal);
+          if(bitSlices) {
+            if(usedPartial && selectedPartial.emplace(key).second)++partialStats->partialCandidateEdges;
+            if(!usedPartial && selectedPartial.erase(key))--partialStats->partialCandidateEdges;
+          } else if(usedPartial)++partialStats->partialCandidateEdges;
+          const bool branch=llvm::isa<llvm::BranchInst>(initial[in.block]->getTerminator());
+          auto &edges=branch?branchEdges:switchEdges;
+          if(upgrade && !fresh)for(auto it=edges.begin();it!=edges.end();++it) {
+            if(!work.charge())return scanFailure();
+            if(it->seed==in.block && it->slot==in.slot){edges.erase(it);break;}
+          }
+          if(edges.size()==options.maxCandidates) {
+            limited=true;
+            if(closesLoop) {
+              auto replace=edges.end();
+              for(auto it=edges.begin();it!=edges.end();++it) {
+                if(!work.charge())return scanFailure();
+                if(!it->loop)replace=it;
+              }
+              if(replace!=edges.end())edges.erase(replace);
+            }
+          }
+          if(edges.size()<options.maxCandidates)edges.push_back({in.block,in.slot,q.path,q.slots,*predicted,usedPartial,closesLoop});
+        }
+        // A fresh slice may be predictable outside the copied suffix without
+        // depending on a root PHI. Keep that straight candidate, but continue
+        // the bounded original search so it cannot hide a natural loop root.
+        if(!bitSlices || closesLoop)continue;
       }
       // A pre-existing generated block is a seed only, never part of the
       // copied corridor. This pass's own appended blocks cannot be new seeds.
@@ -637,8 +672,17 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
       auto next=q;next.path.insert(next.path.begin(),in.block);next.slots.insert(next.slots.begin(),in.slot);next.instructions+=instructionCounts[in.block];queue.push_back(std::move(next));
     }
   }
-  std::vector<Edge> edges=std::move(branchEdges);
-  for(auto &edge:switchEdges){if(edges.size()==options.maxCandidates){limited=true;break;}edges.push_back(std::move(edge));}
+  std::vector<Edge> edges;
+  if(bitSlices) {
+    for(bool loop:{true,false})for(auto *more:{&branchEdges,&switchEdges})for(auto &edge:*more) {
+      if(!work.charge())return scanFailure();
+      if(edge.loop!=loop)continue;
+      if(edges.size()==options.maxCandidates){limited=true;break;}edges.push_back(std::move(edge));
+    }
+  } else {
+    edges=std::move(branchEdges);
+    for(auto &edge:switchEdges){if(edges.size()==options.maxCandidates){limited=true;break;}edges.push_back(std::move(edge));}
+  }
   initial.clear();ordinal.clear();
   if(limited){result.complete=false;++result.budgetExhausted;result.message="state-corridor expression or search budget exhausted";}
   for(const auto &edge:edges) {

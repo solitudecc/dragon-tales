@@ -35,5 +35,16 @@ backedge slots. A candidate reports Incomplete; counts are not full dispatcher
 coverage. Other profiles, the default LLVM pipeline and the public ABI are
 unchanged.
 
+A successful short suffix prediction does not stop this profile's bounded
+reverse search. A candidate with an actual predicted switch case returning to
+its first corridor block takes priority over straight candidates. The two
+existing branch/switch candidate containers keep their previous caps: a loop
+may replace the last retained straight candidate when a container is full.
+The first loop for an already seen original seed/slot can replace its earlier
+straight variant. Same-priority discovery order is stable; branch seeds precede
+switch seeds within each priority. All extra scans consume the original shared
+work budget, and any cap/search exhaustion remains Incomplete. Rewrite-time
+original-edge checks still apply; no generated clone is rediscovered.
+
 Validation results, frozen inputs and limits are recorded separately. This
 contract alone does not claim complete real-program loop de-flattening.
