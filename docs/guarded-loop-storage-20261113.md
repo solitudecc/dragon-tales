@@ -1,6 +1,13 @@
-# Retired completed K/I2 runtime copies
+# Archived loop-validation evidence
 
-The current validation and new real replay use the frozen state-values
+Current validation uses the M main `953dc024` /no-Z3 `d8260b58` runtimes.
+Their raw libraries remain available. The following entries describe completed
+old evidence and the exact restoration sources; retired paths must be restored
+and hash-checked before an old-version reproduction.
+
+## Completed K/I2 runtime copies
+
+At that maintenance stage, validation and the new real replay used state-values
 `a2f82bdd` / `b4fae0a3` runtimes. The completed K/I2 raw libraries were archived
 to release space for the real pipeline. No source, current runtime or test
 result was deleted.
@@ -43,6 +50,54 @@ same exact-file, dual-host, original-manifest and process-mapping checks:
 Their six-payload archives, original manifests and retirement receipts are in
 `completed-L2-runtimes-20261113` and
 `completed-pre-freeze-values-runtimes-20261113` under both artifact roots.
-Only their exact listed `.so` paths were removed. Current repaired ed2/7e4
-libraries in `guarded-state-definedness-20261113` remain available. Restore the
-archived bytes before reproducing either older library version.
+Only their exact listed `.so` paths were removed. Repaired ed2/7e4 libraries
+remained available until the later completed-definedness retirement below.
+Restore the archived bytes before reproducing an older library version.
+
+## Completed corrected-definedness libraries
+
+Archive SHA-256:
+`62f07840906233a7162f344ba674ddfe72499b4303d0376df253e9046824fcfd`.
+The six payloads contain the four ed2/7e4 libraries and their two unchanged
+original manifests, totaling400073126 bytes. Both hosts independently verify
+the exact member set, every length and every SHA. After checking the original
+manifests and that no process mapped these libraries, retirement removed only
+the four selected `.so` files, totaling400072216 bytes. New M libraries were
+not selected. Both original manifests, restoration notices and the precise
+pre/post/retirement receipts remain.
+
+The archive and receipts are under
+`~/vmc-runs/completed-definedness-runtimes-20261113/` and
+`/Users/c/Desktop/deob/validation-artifacts/completed-definedness-runtimes-20261113/`.
+
+## Archived old64 and fixed57 expanded snapshots
+
+Before the new M/V diagnostic started, only84 explicitly approved old heavy
+`.ll`/`.json` paths were retired. Root independently compared every selected
+payload byte with its already dual-host-verified archive:
+
+| Namespace | Archive SHA-256 | Paths /logical bytes |
+|---|---|---|
+| `guarded-state-values-real-20261113` | `8e495c18d9a77d4abbafc7fc0a87cfbc410f8324165c403f1ae2ff1aff171ded` |52 /530350783 |
+| `guarded-state-values-vonly-fixed-20261113` | `8381dc20397da977e18c5eca320138c3dd78758142150049878a4fbe6a1d2a4a` |32 /315697294 |
+
+Exact allowlist SHA-256:
+`43933170f9ff4d9e41e300a8921aa4c05873c09e82847d0c85efc599c5149d6c`.
+Its84 paths cover76 distinct inodes; eight previously deduplicated V/after pairs
+have both names explicitly listed. Logical bytes total846048077; the estimated
+physical release is752594944 bytes. Observed free-space changes are recorded
+separately because maintenance may run concurrently.
+
+All unlisted file bytes were rechecked and remain unchanged. Small diagnostics,
+timeouts, failures, controls, hints, sources, anchors and original manifests
+remain. Original L2 inputs/anchors, current runtimes, native evidence and the
+new58 namespace were not selected. New58's frozen inputs refer to original L2,
+with no dependency on these retired duplicate old snapshots. The old failures
+remain reproducible from their complete archives; this is storage maintenance,
+not a discarded failed experiment. Restore exact members before rerunning an
+old diagnostic.
+
+The exact allowlist, root approval, precheck, restore maps and completion receipt
+are under `retired-old-real-large-20261113` on both artifact hosts. The new
+diagnostic retains its original512 MiB startup gate and180-second case limit;
+the earlier zero-case disk-preflight refusal remains recorded.

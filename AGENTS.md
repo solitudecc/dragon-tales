@@ -217,6 +217,19 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Partial-mask independent native validation (2026-11-13): main953dc024 and
+no-Z3d8260b58 each8736 complete-state matches (5912business/2824checked exits),
+5376fault observations/3564specified detections,96096comparator controls;
+42streams/14112frames audited per build. All2016distinct inputs, unknown CALL
+effects, historical/fresh values, mutable tables, aliasing and original180s
+limits remain. Each53IR/17reports are cross-build byte-equal,53damaged-IR controls
+detected. Before-only2016 observations per O level stay separate; no native
+undef/poison execution. Archive27438ad5 has737payloads independently exact-verified
+on both hosts. Fresh real58 and combination-loop observations remain pending.
+See docs/guarded-partial-masks-native-validation-20261113.md. Old corrected
+ed2/7e4 raw libraries now live in dual-host archive62f07840; only its exact four
+so files were retired after all consumers ended. Current M runtimes remain.
+
 Partial Boolean-mask implementation (2026-11-13, baseline cdb4f6b): a separate
 opt-in `guarded-partial-masks` retry adds untrusted Cartesian Boolean/zero-mask
 target predictions after legacy predictors fail. Original operations, actual
