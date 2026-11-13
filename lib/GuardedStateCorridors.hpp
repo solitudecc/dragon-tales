@@ -27,4 +27,8 @@ struct GuardedCheckedCorridorsStats {
 // actual selected loop slot; all original controllers retain their behavior.
 GuardedCheckedCorridorsStats runGuardedCheckedCorridors(llvm::Module &,
     const GuardedTransitionsOptions & = {});
+// Separate opt-in result-bit-pattern hints for bounded integer right slices.
+// Ordinary original seeds are eligible as well as existing generated seeds.
+GuardedCheckedCorridorsStats runGuardedBitSlices(llvm::Module &,
+    const GuardedTransitionsOptions & = {});
 }
