@@ -87,3 +87,74 @@ Both sources link sequentially with explicit formal LD/rpath; owned build
 libraries are not dependencies. Observation, binding and barrier results
 remain pending until the separate single invocation completes. No removal
 of flattening is claimed by this preparation.
+
+## Completed single invocation
+
+After root's separate space-recovery GO, the independent run-v2 completes
+exactly one default `guest-memory` call in 12.700 seconds. Its before/after
+whole LLVM and complete JSON are byte-identical. The privately imported
+original LOAD remains the same live object under WeakTrackingVH, and its
+original trunc32 user remains unchanged. No value is forwarded or reused;
+the requested relation acquires no new constant fact in this run.
+
+The full module report is Incomplete (`status=2`, `complete=0`), available 1,
+changed 0, blocks_visited 1289, guest_loads 343, guest_stores 154,
+loads_forwarded 0, loads_reused 0, alias_barriers 12311, call_barriers 20,
+loop_barriers 48, partial_overlaps 41, join_barriers 0, phis_inserted 0,
+byte_rebuilds 0 and budget_exhausted 1. Leaf/summary preserved/rejected counters
+are all 0. These counters cover the entire module. They do not identify the
+target LOAD's processing phase, whether its query was reached before a cap,
+or a particular target-level call/alias/loop refusal.
+
+This result does not support the simple hypothesis that adding one invocation
+of the existing default component is enough to forward this target. It also
+does not prove that the target is fundamentally unprovable for arbitrary
+Guest memory: the run is incomplete and has a budget observation. No heap,
+VM or special-protection cause is inferred from aggregate barriers. No new
+general semantic defect is established by an honest unchanged/Unknown result.
+The old T/T/T/F result and all existing checks remain retained.
+
+Before and after LLVM verification succeeds. Independent full LL/JSON
+references and the zero-pass actual post-import bindings all pass, with no
+normalization. Original source text differs from the first imported complete
+render; both are retained, and complete source JSON still matches exactly.
+The independently matched canonical before and after LL SHA is
+`5934491eaaaef4e549f48d1b9cf2dca5ea15173cd2e6cf6d167ffd31829587a7`;
+both JSON frames retain original SHA
+`7dea2eed0845656d1ddd27e96be0fe14d5ebfd45111ee2e2779cddfb08dd0b4b`.
+Reference-before, query, reference-after and actual-import-only CLI times are
+10.285 / 12.700 / 5.665 / 7.852 seconds respectively. The last import runs 0
+passes. Pipeline retries, Bit/C59 reruns, target-native executions and fresh
+full replays are all 0. No budget or model is expanded.
+
+V2 readiness SHA is
+`276e0510ed557787b4eae93bd27fcd97301a6869bc19e6b488b0e0cc3c31c34c`.
+Query binary SHA is
+`e4fc7acb61ff2c47ef4b2f93977b1dd378b3f41993a4f42baa84681c74422e74`;
+reference binary SHA is
+`8aaa35f4b5eb7fdd885160a8b78616364ec68da27ebab3ea1aa25ed0d8f79bb7`.
+Final query source SHA is
+`d2d8d1ca4060b9742492032f7fdb8e812e91d6ac37cd42bdcd5982b6b7c9ea89`;
+reference source SHA is
+`818e735aa64b5071e320b761cf2271c7765473eaf995663c642785fd22b1c279`.
+The final query also retains raw after IR on a pipeline failure; the original
+source-v1/preflight/syntax records remain unmodified.
+
+## Dual-host actual evidence seal
+
+All 59 payloads and the manifest are 60 regular named members. Both hosts
+independently verify every full length/SHA and the complete member set. The
+VM rechecks every current raw file after archiving. macOS additionally checks
+full before/after LL and JSON equality and the actual one-call/WeakVH record.
+No raw artifact is retired.
+
+- VM: `/home/cc/vmc-runs/real61-guest-memory-load-query-20261113.tar.gz`
+- macOS: `/Users/c/Desktop/deob/validation-artifacts/real61-guest-memory-load-query-20261113/real61-guest-memory-load-query-20261113.tar.gz`
+- Archive SHA: `5a4691abb9a94d1effb2657cfb7cea3fc32bd57189e3e7f2a4a565b928526f93`
+- Archive bytes: 22912570; logical payload bytes: 227655802.
+- Actual result SHA: `e4eee2e8ab6d7b1fa4072a65912b6f68b5b446afb5c5f2a1f513265dc9ec94b9`.
+
+A next target-level investigation may locate the proof stage and its refusal
+or cap using the actual object identity. It is not authorized here to raise
+budgets, rerun the component, rebuild a large library or expand an analysis
+model to make the last sample pass.
