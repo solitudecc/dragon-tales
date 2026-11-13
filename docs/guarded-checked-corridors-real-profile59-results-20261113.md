@@ -95,3 +95,21 @@ IR-only diagnostic. The unchanged full59 native scope remains C16/LLVM16,
 complete 1 MiB Guest arenas, seven Exit fields and 144 specified controls;
 none of those new full59 comparisons has run. Its original all-four strict
 structure and storage gates remain enforced by the adapter.
+
+## Complete execution namespace seal
+
+The complete 59 execution namespace was subsequently sealed without rerunning
+a pass. Both hosts verified all 187 original payloads and the added manifest
+as 188 regular archive members, including every named hardlink alias after
+dereferencing. Archive SHA-256 is
+`dfd1e910bc28c282b786a2a06e8a5194157b52cf28948dcc906b4d9fda5e9c43`
+(51,471,087 compressed bytes; 594,907,430 original logical payload bytes).
+VM archive is `~/vmc-runs/guarded-checked-corridors-real-20261113.tar.gz`;
+macOS archive is
+`/Users/c/Desktop/deob/validation-artifacts/guarded-checked-corridors-real-20261113/guarded-checked-corridors-real-20261113.tar.gz`.
+Ubuntu and macOS full-member verification receipts accompany the archive.
+The externally frozen runtime remains separately pinned, rather than silently
+counted as part of this namespace seal. The repaired v2 observer archive is
+separate at `2b21f62fcacc6d0a0cfbdf1f454fb75314beb78319015c6be7e4b8061699bb0c`;
+this later seal does not turn the preserved defective v1 observer into a sound
+validation result.
