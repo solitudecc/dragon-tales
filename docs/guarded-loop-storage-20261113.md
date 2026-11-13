@@ -30,3 +30,19 @@ archive `f1e830cc` into a new preparation directory, checking each original
 length/hash. Original retired H2 paths remained retired. Its initial missing-file
 assertion and the later old-instrumenter refusal are preserved in the cffO2
 observer evidence; neither is counted as a native observation.
+
+
+Two later completed runtime groups were also archived and retired with the
+same exact-file, dual-host, original-manifest and process-mapping checks:
+
+| Old runtime group | Archive SHA-256 | Retired libraries / bytes |
+|---|---|---|
+| `guarded-partial-addresses-20261112` | `67fc2636aa62d8447f52a7aafe1b5fadfe4cb36e917798a9287a51b5046398b6` | 4 /396452056 |
+| `guarded-state-values-20261113` (pre-freeze a2/b4) | `cb60c4d4660a7034abf65fada61cb88600dc63c76f41de1abdc9af486134c25b` | 4 /400135192 |
+
+Their six-payload archives, original manifests and retirement receipts are in
+`completed-L2-runtimes-20261113` and
+`completed-pre-freeze-values-runtimes-20261113` under both artifact roots.
+Only their exact listed `.so` paths were removed. Current repaired ed2/7e4
+libraries in `guarded-state-definedness-20261113` remain available. Restore the
+archived bytes before reproducing either older library version.

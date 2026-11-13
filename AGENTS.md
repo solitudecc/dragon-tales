@@ -217,6 +217,21 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Repaired state-condition native (2026-11-13, implementation `ab0a1fe`):
+frozen ed2aa795/7e4c8448 each4928 normal full-state matches (1664business/
+3264checkedfailure),1848fault observations/838specified detections,54208
+comparison controls,44streams/6776frames independently reaudited. New strict
+13recipes require actualFreeze(EQ originalstate,k); old API control reaches
+all13driver calls then is correctly rejected for missing freeze,0native.
+Main/no-Z3 41IR+13reports exact,41badbyte controls. Archivec609bed5-v2 has664
+root verified payloads and matches the final closed expanded file set; initial
+permission/seal failures remain separate. No undef native execution or prior
+counts added. See `docs/guarded-state-values-defined-condition-native-20261113.md`.
+Real structural audit has a separately identified historical-PHI flaw under
+repair; do not use old T/T/T/F as completion evidence. Fresh57 and actual combo
+loop observations remain pending. Old L2 and pre-freeze values runtime copies
+have exact dual-host restoration archives67fc2636/cb60c4d4; see storage notes.
+
 State-condition definedness fix (2026-11-13, frozen base9b3a00b+61892ff1):
 freeze only newly introduced EQ i1 before its branch; retain original state/
 icmp/effects/uses. A masked undef LOAD can make oldcmp alwaysfalse while newEQ

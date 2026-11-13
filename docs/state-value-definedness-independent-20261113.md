@@ -44,6 +44,8 @@ annotation; its failed run is retained. Only that known annotation is handled
 when comparing the original branch operands. Full native bytes are unchanged.
 
 Independent diagnosis and checker evidence are under
-`~/vmc-runs/state-value-definedness-independent-20261113/`. The separate frozen
-native profile `guarded-state-values-defined-condition-native-20261113` awaits
-the repaired production runtimes; no new native success is claimed here.
+`~/vmc-runs/state-value-definedness-independent-20261113/`. At that diagnosis freeze the separate
+native profile `guarded-state-values-defined-condition-native-20261113` awaited
+the repaired runtimes. Its subsequent replay is recorded separately in
+`guarded-state-values-defined-condition-native-20261113.md`; the diagnostic
+archive itself claims no new native success.

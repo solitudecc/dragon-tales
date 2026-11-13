@@ -57,8 +57,8 @@ contains40. Local copies are under
 `/Users/c/Desktop/deob/validation-artifacts/guarded-state-definedness-20261113/`
 and `state-value-definedness-independent-20261113/` respectively.
 
-The unchanged fully defined native model is being rerun against both new
-libraries using a separately frozen strict condition checker; results will be
-committed separately. Earlier fixture counts do not validate arbitrary undef
+The unchanged fully defined native model has now passed both new libraries
+using the separately frozen strict condition checker. Results are recorded in
+`guarded-state-values-defined-condition-native-20261113.md`. Earlier fixture counts do not validate arbitrary undef
 IR and are not substituted for new-runtime results. Real-loop audits/replay and
 main merge remain pending. No instruction/Unicorn/full69 corpus run is claimed.
