@@ -5,6 +5,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/Error.h>
@@ -29,6 +30,26 @@ struct Work {
   std::size_t count=0;bool exhausted=false;
   bool charge(std::size_t n=1){if(n>MaxWork-count){exhausted=true;return false;}count+=n;return true;}
 };
+// These scalar math intrinsics may be observed only after original execution.
+// This whitelist is not a general call-effect or definedness proof.
+bool integerFunnelShift(llvm::Instruction &instruction,Work &work) {
+  if(!work.charge(6))return false;
+  auto *intrinsic=llvm::dyn_cast<llvm::IntrinsicInst>(&instruction);
+  if(!intrinsic || (intrinsic->getIntrinsicID()!=llvm::Intrinsic::fshl &&
+                    intrinsic->getIntrinsicID()!=llvm::Intrinsic::fshr) ||
+     !intrinsic->getType()->isIntegerTy() || intrinsic->arg_size()!=3 ||
+     intrinsic->getNumOperandBundles() || intrinsic->isConvergent() ||
+     intrinsic->mayReadOrWriteMemory() || intrinsic->mayHaveSideEffects())return false;
+  auto *callee=intrinsic->getCalledFunction();
+  if(!callee || !callee->isDeclaration() || callee->isConvergent() ||
+     callee->isVarArg() || callee->getFunctionType()!=intrinsic->getFunctionType())return false;
+  for(auto &argument:intrinsic->args()) {
+    if(!work.charge())return false;
+    if(argument->getType()!=intrinsic->getType() ||
+       llvm::isa<llvm::UndefValue,llvm::PoisonValue>(argument.get()))return false;
+  }
+  return true;
+}
 struct Hints {std::string function;std::map<std::uint64_t,std::uint8_t> bytes;};
 int hex(char c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;}
 bool hints(llvm::StringRef text,Hints &result) {
@@ -89,6 +110,7 @@ struct Enumerator {
   Work &work;std::size_t nodes=0;bool limited=false,booleanUnknown=false,historicalPhiSeen=false,failed=false;
   BooleanScenario *scenario=nullptr;
   const llvm::DominatorTree *historicalDom=nullptr;
+  const llvm::DominatorTree *observationDom=nullptr;
   std::unordered_set<llvm::Value *> checkedHistory,activeHistory;
   bool allowPartial=false,partialMasks=false,bitSlices=false,usedPartial=false,fatalPartial=false;
   StoreExpressionOverride *storeExpression=nullptr;
@@ -96,7 +118,7 @@ struct Enumerator {
   std::unordered_map<llvm::BasicBlock *,std::size_t> positions;
   std::unordered_map<Key,Values,KeyHash> memo;
   std::unordered_set<Key,KeyHash> active;
-  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr,bool partial=false,bool masks=false,bool slices=false,StoreExpressionOverride *overrides=nullptr,bool strict=false):seed(s),path(p),work(w),scenario(sc),historicalDom(hd),allowPartial(partial),partialMasks(masks),bitSlices(slices),storeExpression(overrides),strictFailures(strict || overrides) {
+  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr,bool partial=false,bool masks=false,bool slices=false,StoreExpressionOverride *overrides=nullptr,bool strict=false,const llvm::DominatorTree *observations=nullptr):seed(s),path(p),work(w),scenario(sc),historicalDom(hd),observationDom(observations),allowPartial(partial),partialMasks(masks),bitSlices(slices),storeExpression(overrides),strictFailures(strict || overrides) {
     for(std::size_t n=0;n<p.size();++n)positions.emplace(p[n],n);
   }
   bool append(Values &to,const llvm::APInt &value) {
@@ -121,6 +143,12 @@ struct Enumerator {
         if(!work.charge())return false;
         if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(operand.get()))valid=false;
       }
+    } else if(auto *intrinsic=llvm::dyn_cast<llvm::IntrinsicInst>(value)) {
+      // A dominating original result is an untrusted observation boundary.
+      // Never evaluate it, derive a value/poison fact, or admit a path call.
+      valid=observationDom && !positions.contains(intrinsic->getParent()) &&
+            observationDom->dominates(intrinsic,seed->getTerminator()) &&
+            integerFunnelShift(*intrinsic,work);
     } else if(llvm::isa<llvm::PHINode,llvm::SelectInst,llvm::CastInst,
                          llvm::BinaryOperator,llvm::ICmpInst>(value)) {
       valid=true;
@@ -369,14 +397,14 @@ struct Enumerator {
 // Only called after the old SSA enumeration failed. Every complete Boolean
 // assignment must yield finite values; unknown integer arms never disappear.
 MaybeValues correlatedAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,
-    llvm::Value *index,Work &work,bool &limited,const llvm::DominatorTree *historicalDom=nullptr,bool *sawHistoricalPhi=nullptr,bool strictFailures=false) {
+    llvm::Value *index,Work &work,bool &limited,const llvm::DominatorTree *historicalDom=nullptr,bool *sawHistoricalPhi=nullptr,bool strictFailures=false,const llvm::DominatorTree *observationDom=nullptr) {
   std::deque<BooleanScenario> pending(1);
   std::unordered_set<Key,KeyHash> keys;
   Values result;std::size_t complete=0;
   while(!pending.empty()) {
     if(!work.charge(1+path.size()))return {};
     auto scenario=std::move(pending.front());pending.pop_front();
-    Enumerator enumerate(&seed,path,work,&scenario,historicalDom,false,false,false,nullptr,strictFailures);auto values=enumerate.get(index);limited|=enumerate.limited;
+    Enumerator enumerate(&seed,path,work,&scenario,historicalDom,false,false,false,nullptr,strictFailures,observationDom);auto values=enumerate.get(index);limited|=enumerate.limited;
     if(sawHistoricalPhi)*sawHistoricalPhi|=enumerate.historicalPhiSeen;
     if(strictFailures && (enumerate.failed || enumerate.limited))return {};
     if(work.exhausted)return {};
@@ -409,10 +437,14 @@ llvm::Value *indexOf(llvm::BasicBlock &block) {
   if(!base || !base->isSimple() || !base->getType()->isPointerTy() || f->arg_size()<2 || base->getPointerOperand()!=f->getArg(1))return nullptr;
   return llvm::isa<llvm::ConstantInt>(gep->getOperand(1))?nullptr:gep->getOperand(1);
 }
-bool safeBlock(llvm::BasicBlock &b,bool terminal=false) {
+bool safeBlock(llvm::BasicBlock &b,bool terminal=false,bool executedSeed=false,Work *work=nullptr) {
   if(b.isEHPad() || b.hasAddressTaken() || !(terminal?llvm::isa<llvm::SwitchInst>(b.getTerminator()):llvm::isa<llvm::BranchInst>(b.getTerminator())))return false;
   for(auto &i:b) {
-    if(llvm::isa<llvm::CallBase,llvm::AllocaInst,llvm::FenceInst,llvm::AtomicRMWInst,llvm::AtomicCmpXchgInst>(i))return false;
+    if(llvm::isa<llvm::CallBase>(i)) {
+      if(!executedSeed || !work || !integerFunnelShift(i,*work))return false;
+      continue;
+    }
+    if(llvm::isa<llvm::AllocaInst,llvm::FenceInst,llvm::AtomicRMWInst,llvm::AtomicCmpXchgInst>(i))return false;
     if(auto *l=llvm::dyn_cast<llvm::LoadInst>(&i);l && !l->isSimple())return false;
     if(auto *s=llvm::dyn_cast<llvm::StoreInst>(&i);s && !s->isSimple())return false;
   }
@@ -503,10 +535,10 @@ MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicB
 }
 MaybeValues storeExpressionAddresses(llvm::BasicBlock &seed,
     const std::vector<llvm::BasicBlock *> &path,llvm::Value *index,
-    Work &work,bool &limited) {
+    Work &work,bool &limited,const llvm::DominatorTree &dom) {
   if(!work.charge(1+path.size()))return {};
   StoreExpressionOverride probe;
-  Enumerator shape(&seed,path,work,nullptr,nullptr,false,false,false,&probe);
+  Enumerator shape(&seed,path,work,nullptr,nullptr,false,false,false,&probe,false,&dom);
   auto placeholder=shape.get(index);limited|=shape.limited;
   if(!placeholder || !probe.atom || probe.invalid || !probe.used ||
      shape.failed || shape.limited || work.exhausted)return {};
@@ -525,14 +557,14 @@ MaybeValues storeExpressionAddresses(llvm::BasicBlock &seed,
        address->getNumIndices()!=1 || !address->getOperand(1)->getType()->isIntegerTy(64) ||
        llvm::isa<llvm::UndefValue,llvm::PoisonValue>(address->getOperand(1)))return {};
     if(!work.charge(path.size()))return {};
-    Enumerator stored(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,true);
+    Enumerator stored(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,true,&dom);
     auto values=stored.get(store->getValueOperand(),historical);limited|=stored.limited;
     // Unknown is not a memory fact. Structural/poison/cycle/budget failures
     // cannot be silently discarded while trying an older finite STORE.
     if(stored.failed || stored.limited || work.exhausted){abort=true;return {};}
     if(!values)return {};
     StoreExpressionOverride replacement;replacement.atom=probe.atom;replacement.values=&*values;
-    Enumerator predicted(&seed,path,work,nullptr,nullptr,false,false,false,&replacement);
+    Enumerator predicted(&seed,path,work,nullptr,nullptr,false,false,false,&replacement,false,&dom);
     auto addresses=predicted.get(index);limited|=predicted.limited;
     if(!addresses || replacement.invalid || !replacement.used || predicted.failed ||
        predicted.limited || work.exhausted){abort=true;return {};}
@@ -554,17 +586,17 @@ MaybeValues storeExpressionAddresses(llvm::BasicBlock &seed,
 }
 std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions,const llvm::DominatorTree &dom,bool allowPartial,bool &usedPartial,bool partialMasks,bool bitSlices,bool storeExpressions) {
   auto *index=indexOf(*path.back());if(!index)return {};
-  Enumerator enumerate(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,storeExpressions);auto addresses=enumerate.get(index);limited|=enumerate.limited;
+  Enumerator enumerate(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,storeExpressions,storeExpressions?&dom:nullptr);auto addresses=enumerate.get(index);limited|=enumerate.limited;
   if(storeExpressions && (enumerate.failed || enumerate.limited || work.exhausted))return {};
   bool sawHistoricalPhi=enumerate.historicalPhiSeen;
-  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited,nullptr,&sawHistoricalPhi,storeExpressions);
+  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited,nullptr,&sawHistoricalPhi,storeExpressions,storeExpressions?&dom:nullptr);
   // Preserve every prior successful prediction, including STORE hints. The
   // new old-PHI identity retry is strictly a failure fallback.
   if(!addresses && storePredictions && !work.exhausted)addresses=storeAddresses(seed,path,index,work,limited);
   if(!addresses && sawHistoricalPhi && !work.exhausted)
-    addresses=correlatedAddresses(seed,path,index,work,limited,&dom,nullptr,storeExpressions);
+    addresses=correlatedAddresses(seed,path,index,work,limited,&dom,nullptr,storeExpressions,storeExpressions?&dom:nullptr);
   if(!addresses && storeExpressions && !work.exhausted) {
-    addresses=storeExpressionAddresses(seed,path,index,work,limited);
+    addresses=storeExpressionAddresses(seed,path,index,work,limited,dom);
     if(addresses)usedPartial=true;
   }
   // Partial select hints run only after all I2 prediction attempts fail.
@@ -691,10 +723,12 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
   std::set<std::size_t> targets;
   auto scanFailure=[&](){reject("state-corridor total scan budget exhausted",true);result.unresolvedEdges=result.candidateEdges;result.originalSwitchesRetained=targets.size();return result;};
   std::vector<signed char> admission(initial.size(),-1);
-  auto eligible=[&](std::size_t n){
+  std::vector<signed char> seedAdmission(storeExpressions?initial.size():0,-1);
+  auto eligible=[&](std::size_t n,bool seedRole=false){
     auto *b=initial[n];auto *term=b->getTerminator();if(!llvm::isa<llvm::BranchInst,llvm::SwitchInst>(term))return false;
-    if(admission[n]<0){if(!work.charge(instructionCounts[n]))return false;admission[n]=safeBlock(*b,llvm::isa<llvm::SwitchInst>(term))?1:0;}
-    return admission[n]!=0;
+    auto &cache=storeExpressions && seedRole?seedAdmission:admission;
+    if(cache[n]<0){if(!work.charge(instructionCounts[n]))return false;cache[n]=safeBlock(*b,llvm::isa<llvm::SwitchInst>(term),storeExpressions && seedRole,&work)?1:0;}
+    return cache[n]!=0;
   };
   auto continuationSeed=[&](std::size_t n) {
     auto *block=initial[n];auto *term=block->getTerminator();
@@ -728,7 +762,7 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
       const bool checkedSeed=continuations &&
         (continuationSeed(in.block) || (preferLoops && !generated(*initial[in.block])));
       if(generated(*initial[in.block]) && !checkedSeed)continue;
-      if(!eligible(in.block)){if(work.exhausted)return scanFailure();continue;}
+      if(!eligible(in.block,true)){if(work.exhausted)return scanFailure();continue;}
       if(!work.charge(q.path.size()))return scanFailure();
       std::vector<llvm::BasicBlock *> path;for(auto n:q.path)path.push_back(initial[n]);
       bool rootPhisRetained=true;
@@ -788,6 +822,9 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
       // A pre-existing generated block is a seed only, never part of the
       // copied corridor. This pass's own appended blocks cannot be new seeds.
       if(continuations && generated(*initial[in.block]))continue;
+      // A seed has already run. Recheck the copied-path role before extending
+      // through it, so an admitted original math call is never cloned.
+      if(storeExpressions && !eligible(in.block)){if(work.exhausted)return scanFailure();continue;}
       // A switch may be a selected seed edge, but is not traversed as an
       // intermediate dispatcher: that would duplicate a whole central region.
       if(!llvm::isa<llvm::BranchInst>(initial[in.block]->getTerminator()))continue;

@@ -4,6 +4,7 @@
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/NoFolder.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/Format.h>
@@ -13,6 +14,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace {
 using namespace dragon::passes;
@@ -459,6 +461,109 @@ TEST_CASE("STORE expression mapped target subsets retain actual bounds and full 
     auto *finite = b.CreateSelect(fixture.function->getArg(3), b.getInt64(1024), b.getInt64(1072), "finite.index");
     fixture.instruction("table.index")->replaceAllUsesWith(finite); fixture.verify();
     auto before = fixture.text(); auto result = fixture.run(pass);
+    CHECK_FALSE(result.changed); CHECK(fixture.text() == before);
+  }
+}
+
+
+namespace {
+// Extend only this test input. Existing ten cases and their fixture modes are
+// unchanged. The caller has already run before the fresh controller corridor.
+void addFunnelObservation(ExpressionFixture &fixture, unsigned width, bool right,
+                          std::uint64_t count, const std::string &mode = "seed") {
+  auto *chosen = llvm::dyn_cast_or_null<llvm::SelectInst>(fixture.instruction("encoded.next")); REQUIRE(chosen);
+  const bool earlier = mode == "earlier" || mode == "external-earlier";
+  const bool inPath = mode == "path";
+  llvm::Instruction *insert = earlier ? fixture.block("entry")->getTerminator()
+      : inPath ? fixture.block("head")->getTerminator() : chosen;
+  Builder b(insert); auto *word = llvm::IntegerType::get(fixture.module.getContext(), width);
+  auto *source = b.CreateZExtOrTrunc(fixture.function->getArg(2), word, "observation.source");
+  const auto typedCount = llvm::APInt(64, count).zextOrTrunc(width);
+  llvm::Value *args[] = {source, b.CreateXor(source, llvm::ConstantInt::get(word,
+      llvm::APInt::getAllOnes(width)), "observation.other"), llvm::ConstantInt::get(word, typedCount)};
+  for (unsigned n = 0; n < 3; ++n) {
+    if (mode == "poison-" + std::to_string(n)) args[n] = llvm::PoisonValue::get(word);
+    if (mode == "undef-" + std::to_string(n)) args[n] = llvm::UndefValue::get(word);
+  }
+  const auto id = right ? llvm::Intrinsic::fshr : llvm::Intrinsic::fshl;
+  auto *intrinsic = llvm::Intrinsic::getOrInsertDeclaration(&fixture.module, id, {word});
+  llvm::FunctionCallee callee = intrinsic;
+  if (mode == "external" || mode == "external-earlier")
+    callee = fixture.module.getOrInsertFunction("external_funnel",
+        llvm::FunctionType::get(word, {word, word, word}, false));
+  std::vector<llvm::OperandBundleDef> bundles;
+  if (mode == "bundle") bundles.emplace_back("test.observation", std::vector<llvm::Value *>{source});
+  auto *observed = b.CreateCall(callee, args, bundles, "observation.funnel");
+  if (mode == "convergent") observed->setConvergent();
+  if (!inPath) {
+    // For a defined integer x, x*(x+1) has even parity. This pass must retain
+    // the actual arithmetic/condition; observing the funnel result is not a
+    // license to replace the condition or either state STORE alternative.
+    auto *next = b.CreateAdd(observed, llvm::ConstantInt::get(word, 1), "observation.next");
+    auto *product = b.CreateMul(observed, next, "observation.product");
+    auto *bit = b.CreateAnd(product, llvm::ConstantInt::get(word, 1), "observation.parity");
+    auto *condition = b.CreateICmpEQ(bit, llvm::ConstantInt::get(word, 0), "observation.condition");
+    chosen->setCondition(condition);
+  }
+  fixture.verify();
+}
+void checkFunnelObservation(ExpressionFixture &fixture, unsigned width, bool right,
+                            std::uint64_t count, const char *location) {
+  unsigned calls = 0;
+  for (auto &block : *fixture.function) for (auto &instruction : block)
+    if (auto *call = llvm::dyn_cast<llvm::CallInst>(&instruction)) {
+      ++calls; CHECK(call->getParent() == fixture.block(location));
+      CHECK_FALSE(block.getTerminator()->getMetadata(Generated));
+      auto *callee = call->getCalledFunction(); REQUIRE(callee);
+      CHECK(callee->getIntrinsicID() == (right ? llvm::Intrinsic::fshr : llvm::Intrinsic::fshl));
+      CHECK(call->getType()->isIntegerTy(width));
+      auto *amount = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2)); REQUIRE(amount);
+      CHECK(amount->getValue() == llvm::APInt(64, count).zextOrTrunc(width));
+    }
+  CHECK(calls == 1);
+  auto *condition = llvm::dyn_cast_or_null<llvm::ICmpInst>(fixture.instruction("observation.condition")); REQUIRE(condition);
+  auto *choice = llvm::dyn_cast_or_null<llvm::SelectInst>(fixture.instruction("encoded.next")); REQUIRE(choice);
+  CHECK(choice->getCondition() == condition); CHECK_FALSE(llvm::isa<llvm::ConstantInt>(choice->getCondition()));
+  auto *product = llvm::dyn_cast_or_null<llvm::BinaryOperator>(fixture.instruction("observation.product")); REQUIRE(product);
+  CHECK(product->getOpcode() == llvm::Instruction::Mul);
+  CHECK(product->getOperand(0) == fixture.instruction("observation.funnel"));
+  fixture.check({100});
+  auto *bounds = fixture.block("bounds.transition"); REQUIRE(bounds);
+  auto *branch = llvm::dyn_cast<llvm::BranchInst>(bounds->getTerminator()); REQUIRE(branch);
+  CHECK(branch->isConditional()); CHECK(branch->getSuccessor(1) == fixture.block("miss"));
+  auto *limit = llvm::dyn_cast_or_null<llvm::ICmpInst>(fixture.instruction("state.bound.transition")); REQUIRE(limit);
+  CHECK(limit->getOperand(0) == fixture.instruction("state.xor.transition"));
+}
+}
+
+TEST_CASE("STORE expression seed funnels remain single execution observations", "[llvm][guarded-store-expressions][guarded-intrinsic-seeds]") {
+  for (unsigned width : {32u, 64u}) for (bool right : {false, true}) {
+    for (std::uint64_t count : {std::uint64_t(0), std::uint64_t(1), std::uint64_t(width - 1),
+                               std::uint64_t(width), std::uint64_t(width + 1), ~std::uint64_t(0)}) {
+      INFO(width << " " << right << " " << count);
+      ExpressionFixture fixture(32, "partial-missing"); addFunnelObservation(fixture, width, right, count);
+      auto result = fixture.run(); REQUIRE(result.changed); CHECK(result.counters.at("rewritten_edges") == 1);
+      CHECK(result.counters.at("partial_rewritten_edges") == 1); checkFunnelObservation(fixture, width, right, count, "seed");
+    }
+    ExpressionFixture earlier(32, "partial-missing"); addFunnelObservation(earlier, width, right, width, "earlier");
+    auto result = earlier.run(); REQUIRE(result.changed); checkFunnelObservation(earlier, width, right, width, "entry");
+  }
+}
+
+TEST_CASE("STORE expression funnel admission preserves call and invalid operand barriers", "[llvm][guarded-store-expressions][guarded-intrinsic-seeds]") {
+  for (const char *mode : {"path", "external", "external-earlier", "poison-0", "poison-1", "poison-2",
+                          "undef-0", "undef-1", "undef-2", "convergent", "bundle"}) {
+    for (unsigned width : {32u, 64u}) for (bool right : {false, true}) {
+      INFO(mode << " " << width << " " << right);
+      ExpressionFixture fixture(32, "partial-missing"); addFunnelObservation(fixture, width, right, width, mode);
+      auto before = fixture.text(); auto result = fixture.run(); CHECK_FALSE(result.changed); CHECK(fixture.text() == before);
+    }
+  }
+  // Even a genuine funnel observation does not change admission in the old
+  // profiles, which continue to read only their original metadata namespace.
+  for (const char *pass : {"guarded-state-corridors", "guarded-store-corridors"}) {
+    ExpressionFixture fixture(32, "partial-missing", "dragon.guarded-entry");
+    addFunnelObservation(fixture, 32, false, 32); auto before = fixture.text(); auto result = fixture.run(pass);
     CHECK_FALSE(result.changed); CHECK(fixture.text() == before);
   }
 }

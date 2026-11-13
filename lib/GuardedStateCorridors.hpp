@@ -34,6 +34,8 @@ GuardedCheckedCorridorsStats runGuardedBitSlices(llvm::Module &,
 // Independent dragon.guard-predictions hints. Typed Guest STORE values may
 // predict one unknown Guest LOAD atom inside a table-address expression.
 // Actual reads, operations, flags and full fallbacks are never substituted.
+// Scalar fshl/fshr may remain in an already executed seed; copied paths are
+// still call-free. Their results supply no value or definedness facts.
 GuardedCheckedCorridorsStats runGuardedStoreExpressions(llvm::Module &,
     const GuardedTransitionsOptions & = {});
 }
