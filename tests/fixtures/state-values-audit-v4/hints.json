@@ -1,0 +1,14 @@
+[
+  {
+    "function": "oracle",
+    "block": "seedA",
+    "state": "0x2",
+    "target": "0x2b"
+  },
+  {
+    "function": "oracle",
+    "block": "seedB",
+    "state": "0x2",
+    "target": "0x2c"
+  }
+]
