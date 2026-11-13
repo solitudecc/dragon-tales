@@ -307,6 +307,34 @@ PassPipeline::PassPipeline(bool builtins) {
       return std::string{"guarded-bit-slices options exceed hard limits 4096/4096/4096/262144"};
     return std::string{};
   });
+  registerLLVM("guarded-store-expressions",[](LLVMContext &c,const Options &o) {
+    const auto checked=llvmlifter::detail::runGuardedStoreExpressions(c.lifter.module(),
+      {number(o,"max_candidates",64),number(o,"max_rewrites",32),
+       number(o,"max_blocks",128),number(o,"max_instructions",16384)});
+    const auto &partial=checked.partial;
+    const auto &s=partial.base;
+    Result r; r.status=!s.available?Status::Unavailable:(s.complete?Status::Success:Status::Incomplete);
+    r.changed=s.changed;r.message=s.message;
+    r.counters={{"available",s.available},{"complete",s.complete},{"changed",s.changed},
+      {"candidate_edges",s.candidateEdges},{"attempted_edges",s.attemptedEdges},
+      {"rewritten_edges",s.rewrittenEdges},{"unresolved_edges",s.unresolvedEdges},
+      {"rejected",s.rejected},{"budget_exhausted",s.budgetExhausted},
+      {"cloned_blocks",s.clonedBlocks},{"cloned_instructions",s.clonedInstructions},
+      {"original_switches_retained",s.originalSwitchesRetained},
+      {"fallback_switches_created",s.fallbackSwitchesCreated},
+      {"fast_switches_created",s.rewrittenEdges},
+      {"loop_contexts",checked.loopContexts},{"loop_backedges",checked.loopBackedges},
+      {"partial_candidate_edges",partial.partialCandidateEdges},{"partial_attempted_edges",partial.partialAttemptedEdges},
+      {"partial_rewritten_edges",partial.partialRewrittenEdges},{"partial_unresolved_edges",partial.partialUnresolvedEdges}};
+    return r;
+  },false,{},[](const Options &o) {
+    auto error=numeric({"max_candidates","max_rewrites","max_blocks","max_instructions"})(o);
+    if(!error.empty())return error;
+    if(number(o,"max_candidates",64)>4096 || number(o,"max_rewrites",32)>4096 ||
+       number(o,"max_blocks",128)>4096 || number(o,"max_instructions",16384)>262144)
+      return std::string{"guarded-store-expressions options exceed hard limits 4096/4096/4096/262144"};
+    return std::string{};
+  });
   registerLLVM("guarded-store-corridors",[](LLVMContext &c,const Options &o) {
     const auto s=llvmlifter::detail::runGuardedStateCorridors(c.lifter.module(),
       {number(o,"max_candidates",64),number(o,"max_rewrites",32),

@@ -31,4 +31,9 @@ GuardedCheckedCorridorsStats runGuardedCheckedCorridors(llvm::Module &,
 // Ordinary original seeds are eligible as well as existing generated seeds.
 GuardedCheckedCorridorsStats runGuardedBitSlices(llvm::Module &,
     const GuardedTransitionsOptions & = {});
+// Independent dragon.guard-predictions hints. Typed Guest STORE values may
+// predict one unknown Guest LOAD atom inside a table-address expression.
+// Actual reads, operations, flags and full fallbacks are never substituted.
+GuardedCheckedCorridorsStats runGuardedStoreExpressions(llvm::Module &,
+    const GuardedTransitionsOptions & = {});
 }

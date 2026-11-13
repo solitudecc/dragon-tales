@@ -47,6 +47,7 @@ flowchart LR
 | `guest-memory` | LLVM，显式选择 | `max_rewrites=65536, run_mem2reg=1, enable_cross_block=1, enable_phi=1, consume_call_effect_summaries=0, edge_worklist=0`；复用现有 GuestMemorySSA，标志只接受整数 0/1 |
 | `guarded-state-corridors` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；按实际 PHI 入边枚举有限状态预测，保留执行检查与同值完整回退；见[SSA 状态路径](llvm-guarded-state-corridors.md) |
 | `guarded-store-corridors` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；有限 STORE 值仅作目标预测，保留实际 Guest LOAD、写入顺序与同值完整回退；见[STORE 预测路径](llvm-guarded-store-corridors.md) |
+| `guarded-store-expressions` | LLVM，显式选择 | 同上预算；独立不可信提示，按原整数位宽重算 LOAD 的加减、异或及扩展地址表达式，保留实际运算、边界和同值完整回退；见[编码状态预测](llvm-guarded-store-expressions.md) |
 | `invariant-self-loops` | LLVM，显式选择 | `max_loops=64, max_work=1000000, max_blocks=65536`；仅隔离全部 PHI 自保持的纯 `icmp ugt` 真自边，保留首次条件、原假出口和不终止行为；见[不变自循环](llvm-invariant-self-loops.md) |
 | `guarded-state-values` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；独立不可信单值提示，在实际状态 SSA 上加相等守卫，保留原条件分支与实际目标 LOAD 的完整回退；成功仍 Incomplete；见[状态值守卫](llvm-guarded-state-values.md) |
 | `guarded-partial-corridors` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；select 的有限臂仅作不完备目标预测，实际 LOAD 与同值完整回退保留，命中部分预测仍报告 Incomplete；见[不完备预测路径](llvm-guarded-partial-corridors.md) |

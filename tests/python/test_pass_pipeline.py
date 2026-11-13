@@ -55,7 +55,7 @@ with lift(g) as l,d.PassPipeline() as p:
         'graph-audit','finite-values','control-flow',
         'dispatch-specialize','dispatch-deflatten','guest-memory','entry-prefix',
         'guarded-transitions','constant-branches','guarded-target-sets','guarded-state-corridors','guarded-store-corridors',
-        'invariant-self-loops','guarded-partial-corridors','guarded-state-values','guarded-partial-masks','guarded-checked-corridors','guarded-bit-slices'}
+        'invariant-self-loops','guarded-partial-corridors','guarded-state-values','guarded-partial-masks','guarded-checked-corridors','guarded-bit-slices','guarded-store-expressions'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
@@ -323,3 +323,17 @@ with lift(g) as l,d.PassPipeline(['guarded-bit-slices']) as p:
     assert r['ok'] and not r['changed'] and l.ir()==before
     assert r['runs'][0]['status']==d.PassStatus.UNAVAILABLE
     assert r['runs'][0]['counters']['available']==0
+
+with lift(g) as l,d.PassPipeline(['guarded-store-expressions']) as p:
+    assert 'guarded-store-expressions' not in d.PassPipeline.DEFAULT_LLVM
+    for option,limit in (('max_candidates',4096),('max_rewrites',4096),
+                         ('max_blocks',4096),('max_instructions',262144)):
+        for value in (limit+1,-1,True,'1'):
+            expect(ValueError,lambda:p.add('guarded-store-expressions',**{option:value}))
+    expect(ValueError,lambda:p.add('guarded-store-expressions',unknown=1))
+    before=l.ir();r=p.run(l)
+    assert r['ok'] and not r['changed'] and l.ir()==before
+    assert r['runs'][0]['status']==d.PassStatus.UNAVAILABLE
+    counters=r['runs'][0]['counters']
+    assert counters['available']==0 and counters['rewritten_edges']==0
+    assert counters['loop_contexts']==0 and counters['loop_backedges']==0
