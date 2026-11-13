@@ -52,7 +52,18 @@ int main(int argc,char **argv) {
   // These raw execution-ABI inputs do not make restrictive effect promises.
   // Reject rather than silently leave stale caller/callee effect attributes.
   for(auto &fn:*module)if(!fn.isDeclaration() && (fn.hasFnAttribute(llvm::Attribute::Memory) || fn.hasFnAttribute(llvm::Attribute::Speculatable)))return fail("defined function has unsupported memory/speculatable attributes");
-  for(auto &fn:*module)for(auto &block:fn)for(auto &instruction:block)if(auto *call=llvm::dyn_cast<llvm::CallBase>(&instruction);call && (call->hasFnAttr(llvm::Attribute::Memory) || call->hasFnAttr(llvm::Attribute::Speculatable)))return fail("callsite has restrictive effect attributes");
+  for(auto &fn:*module)for(auto &block:fn)for(auto &instruction:block)
+    if(auto *call=llvm::dyn_cast<llvm::CallBase>(&instruction);call &&
+       (call->hasFnAttr(llvm::Attribute::Memory) || call->hasFnAttr(llvm::Attribute::Speculatable))) {
+      // hasFnAttr also sees the declaration's intrinsic attributes. A pure,
+      // non-callback intrinsic has no instrumented body and cannot reach the
+      // observed function, so its original effect/speculation promises remain
+      // true after adding host counters elsewhere. Keep every attribute.
+      auto *callee=call->getCalledFunction();
+      if(callee && callee->isDeclaration() && callee->isIntrinsic() &&
+         call->doesNotAccessMemory() && call->hasFnAttr(llvm::Attribute::NoCallback))continue;
+      return fail("callsite has restrictive effect attributes");
+    }
   std::vector<Site> sites;std::set<std::string> centralNames,siteCentrals;
   for(const auto &value:*centrals){auto n=value.getAsString();if(!n || !centralNames.insert(n->str()).second)return fail("invalid duplicate central block");}
   for(const auto &value:*rows) {
