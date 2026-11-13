@@ -392,10 +392,23 @@ std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const s
   if(!addresses)return {};auto *jump=llvm::cast<llvm::SwitchInst>(path.back()->getTerminator());std::vector<std::uint64_t> values;
   for(const auto &address:*addresses) {
     auto n=address.getZExtValue();if(n>std::numeric_limits<std::uint64_t>::max()-8)return {};
-    std::uint64_t candidate=0;
-    for(unsigned b=0;b<8;++b){if(!work.charge())return {};auto byte=h.bytes.find(n+b);if(byte==h.bytes.end())return {};candidate|=static_cast<std::uint64_t>(byte->second)<<(8*b);}
+    std::uint64_t candidate=0;bool mapped=true;
+    for(unsigned b=0;b<8;++b) {
+      if(!work.charge())return {}; // Exhaustion is never a missing-hint outcome.
+      auto byte=h.bytes.find(n+b);
+      if(byte==h.bytes.end()){mapped=false;break;}
+      candidate|=static_cast<std::uint64_t>(byte->second)<<(8*b);
+    }
+    if(!mapped) {
+      if(!allowPartial)return {};
+      usedPartial=true;continue;
+    }
     if(!work.charge(jump->getNumCases()))return {};
-    auto *constant=llvm::ConstantInt::get(llvm::Type::getInt64Ty(seed.getContext()),candidate);if(jump->findCaseValue(constant)==jump->case_default())return {};
+    auto *constant=llvm::ConstantInt::get(llvm::Type::getInt64Ty(seed.getContext()),candidate);
+    if(jump->findCaseValue(constant)==jump->case_default()) {
+      if(!allowPartial)return {};
+      usedPartial=true;continue;
+    }
     if(std::find(values.begin(),values.end(),candidate)==values.end())values.push_back(candidate);
   }
   return values.empty()?std::optional<std::vector<std::uint64_t>>{}:values;

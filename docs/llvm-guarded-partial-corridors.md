@@ -109,3 +109,34 @@ The original J regression source remains byte-identical with SHA-256
 No original native model, strict precision gate or K implementation is changed.
 This source merge has not itself been compiled or executed; integration
 validation must use the new complete source pins and retain previous results.
+
+## Partial address mappings
+
+The explicit partial builtin also accepts an incomplete mapping of an already
+finite address prediction. Each address must still provide eight actual hint
+bytes and map to an existing case of the original target switch. If one address
+has missing bytes or maps to a non-case target, this builtin may discard that
+prediction and retain a nonempty valid subset. It marks the resulting candidate
+as partial, uses the existing committed-edge counters, and reports Incomplete.
+A short row is never zero-padded. An entirely missing or non-case mapping
+produces no candidate; an invalid or overlapping manifest is still rejected.
+Arithmetic overflow and budget exhaustion remain query failures, not missing
+hint outcomes that may be discarded.
+
+The strict state and STORE controllers keep their previous all-addresses rule.
+The order of earlier finite, correlated, historical and partial-select queries
+is unchanged. Complete mappings keep the previous generated IR and counters.
+There are no new options, public structures, counters, facts or expression
+identity claims. In particular, a retained target can be a wrong prediction:
+the existing actual LOAD and complete switch fallback decide execution. Stores
+before the LOAD affect that real read; stores after it do not cause a reread.
+Nothing implies that the retained subset is the complete set of reachable
+states or that source image bytes remain unchanged at runtime.
+
+`TestLLVMGuardedPartialAddresses.cpp` is an independent four-group regression
+against the already available J builtin. It covers missing first/last entries,
+seven-byte rows, non-case/all-missing/malformed mappings, wrong valid hints,
+STORE ordering, zero budgets, strict-controller compatibility and byte-identical
+complete mappings. The original J regression and native model remain frozen.
+Old/new compilation and reference execution are separate integration steps;
+this source change does not claim those results.

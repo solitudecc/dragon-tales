@@ -217,6 +217,17 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Partial address predictions (2026-11-13, frozen base `254d024` plus patch
+4cad7319): opt-in partial controller may retain a nonempty valid hint subset;
+actual target LOAD and full same-value fallback remain. Strict controllers stay
+all-address. Old J runtimes compile final four tests and fail 3 cases / 10 of
+166 assertions each. New focus both70/2778; CTest1135/1135 and1000/1000.
+Both builds retain exact J41/I245/H94 IR and reports, plus K's native-validated
+IR; prior native counts are not recounted. Metadata archive3cbd8960 has838
+independently dual-host verified payloads. This is an implementation milestone;
+new native/real validation and complete-loop closure are pending. See
+`docs/guarded-partial-address-validation-20261113.md`.
+
 Invariant self-loop isolation K (2026-11-12): see
 `docs/llvm-invariant-self-loops.md`. Opt-in `invariant-self-loops` retains the
 first icmp/branch and isolates only pure self-preserving PHIs into a separate

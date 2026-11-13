@@ -79,6 +79,7 @@ add_executable(dragon_tests
     lifters/TestLLVMGuardedFiniteBitwise.cpp
     lifters/TestLLVMGuardedStoreCorridors.cpp
     lifters/TestLLVMGuardedPartialCorridors.cpp
+    lifters/TestLLVMGuardedPartialAddresses.cpp
     lifters/TestLLVMGuardedPathStores.cpp
     lifters/TestLLVMGuardedCorrelatedBooleans.cpp
     lifters/TestLLVMGuardedHistoricalBooleans.cpp
