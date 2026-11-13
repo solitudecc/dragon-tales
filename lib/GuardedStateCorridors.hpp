@@ -16,4 +16,7 @@ struct GuardedPartialCorridorsStats {
 };
 GuardedPartialCorridorsStats runGuardedPartialCorridors(llvm::Module &,
     const GuardedTransitionsOptions & = {});
+// Separate opt-in Cartesian Boolean/zero-mask hints, never source value facts.
+GuardedPartialCorridorsStats runGuardedPartialMaskCorridors(llvm::Module &,
+    const GuardedTransitionsOptions & = {});
 }

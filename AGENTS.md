@@ -217,6 +217,20 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Partial Boolean-mask implementation (2026-11-13, baseline cdb4f6b): a separate
+opt-in `guarded-partial-masks` retry adds untrusted Cartesian Boolean/zero-mask
+target predictions after legacy predictors fail. Original operations, actual
+target LOAD and complete same-value fallback remain; J/F/H/defaults are unchanged.
+Explicit invalid dependencies and work failures reject. Old corrected main/NZ
+runtimes each run5cases/54assertions, four cases/five assertions fail because
+the new builtin is absent, while the legacy-only identity check passes. Final
+each81/3971; CTest1146/1146 and1011/1011. Old J41/I245/H94, K native IR and
+state-values41IR/13reports remain exact; historical native counts are not reused.
+Metadata27c86d47 has1067payloads independently exact-verified on both hosts.
+Independent native and composed real validation remain pending at this milestone;
+no fresh full58 replay or complete combination-loop de-flattening is claimed.
+See docs/guarded-partial-masks-validation-20261113.md. Keep branch unmerged.
+
 Repaired state-condition native (2026-11-13, implementation `ab0a1fe`):
 frozen ed2aa795/7e4c8448 each4928 normal full-state matches (1664business/
 3264checkedfailure),1848fault observations/838specified detections,54208

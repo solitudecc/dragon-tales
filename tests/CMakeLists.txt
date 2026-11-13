@@ -78,6 +78,7 @@ add_executable(dragon_tests
         lifters/TestLLVMGuardedStateCorridors.cpp
         lifters/TestLLVMGuardedStateValues.cpp
     lifters/TestLLVMGuardedStateDefinedness.cpp
+    lifters/TestLLVMGuardedPartialMasks.cpp
     lifters/TestLLVMGuardedFiniteBitwise.cpp
     lifters/TestLLVMGuardedStoreCorridors.cpp
     lifters/TestLLVMGuardedPartialCorridors.cpp
