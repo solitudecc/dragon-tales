@@ -217,6 +217,19 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+State-condition definedness fix (2026-11-13, frozen base9b3a00b+61892ff1):
+freeze only newly introduced EQ i1 before its branch; retain original state/
+icmp/effects/uses. A masked undef LOAD can make oldcmp alwaysfalse while newEQ
+remainsundef. New support budget4 instead3 is charged in all four sites.
+Old current API tests compile botha2/b4 and fail2cases/17of184assertions;
+new bothfocus76/3582, CTest1141/1141 and1006/1006. Metadata3eb8c8f1 has856
+root verified payloads; independent UB/checker3ace00f7 has40. ValueTracking on
+an already attached br condition uses defined-program assumptions and is NOT
+proof that inserting that branch is safe; explicitFreeze is required. No old
+native wrong-result or native-undef execution claim. New ed2aa795/7e4c8448
+fully-defined native replay and real-loop completion remain pending. See
+`docs/guarded-state-definedness-validation-20261113.md`.
+
 Actual cffO2 loop observation (2026-11-13, tool fix `e93d811`): only known direct
 nocallback memory(none) intrinsic declarations may retain inherited call effect
 attributes in the standalone observer. All five new negatives and old tests

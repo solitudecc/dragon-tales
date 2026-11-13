@@ -39,6 +39,14 @@ is compared with the single predicted target. A target mismatch uses the same
 LOAD SSA in the complete original switch and default; no second read occurs.
 The predicted target must be an actual case of that switch.
 
+The new equality's i1 result is frozen before the new branch. A LOAD can
+produce undef even when a surrounding original comparison is forced false by
+known bits, so the original branch alone does not prove that the state is
+defined. Freezing only the new condition prevents a new UB consumer; it never
+replaces the original state SSA, original comparison, LOAD, freeze or other
+uses. It is no extra range or memory proof. This follows LLVM's
+[guidance for newly introduced branches](https://llvm.org/docs/UndefinedBehavior.html#the-freeze-instruction).
+
 The original comparison is retained and computed once. Seed or preceding CALLs
 and STOREs execute once, before the new guard, even when they modify Guest or
 register memory. Calls, synchronization, volatile/atomic accesses, allocation,
@@ -61,7 +69,7 @@ and is never evidence of correctness.
 Public budgets are `max_candidates=64`, `max_rewrites=32`, `max_blocks=128` and
 `max_instructions=16384`, with hard limits 4096/4096/4096/262144. These are
 cumulative. Each transaction additionally has 32 blocks and 2048 copied
-instructions. The two state-guard support blocks and three new instructions
+instructions. The two state-guard support blocks and four new instructions
 consume those same limits; core snapshots, target fallback and SSA repairs
 consume the remaining budget. Discovery uses at most 512 visited blocks per
 hint, paths without repeated blocks, and a shared one-million work limit.

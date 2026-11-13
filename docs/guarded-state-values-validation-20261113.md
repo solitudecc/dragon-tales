@@ -1,5 +1,9 @@
 # State-value guards: implementation milestone
 
+Historical pre-freeze milestone. The later undef-condition fix is recorded in
+`guarded-state-definedness-validation-20261113.md`. Earlier native fixtures use
+fully defined data and do not cover this LLVM deferred-UB boundary.
+
 The explicit `guarded-state-values` builtin checks an existing SSA state after
 all seed effects. A matched untrusted literal chooses a proved original ICmp
 direction; mismatch retains the original conditional branch. The copied tail

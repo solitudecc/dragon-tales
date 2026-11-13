@@ -108,7 +108,7 @@ bool discover(llvm::Function &f,const Hint &h,Work &work,Plan &plan,std::string 
   auto n=q.path.back();if(n==plan.seed || !seen.insert(n).second)continue;
   if(seen.size()>512){work.exhausted=true;error="path search work exhausted";return false;}
   if(!safe[n])continue;
-  if(q.path.size()+2>32 || q.instructions+3>2048){pathLimited=true;error="bounded path exceeds transaction limits";continue;}
+  if(q.path.size()+2>32 || q.instructions+4>2048){pathLimited=true;error="bounded path exceeds transaction limits";continue;}
   auto *term=all[n]->getTerminator();
   if(auto *sw=llvm::dyn_cast<llvm::SwitchInst>(term)){
    if(!work.charge(sw->getNumCases()))return false;
@@ -139,7 +139,7 @@ bool commit(llvm::Function &source,llvm::Function &trial) {
 }
 GuardedTransitionResult apply(llvm::Function &source,const Hint &h,const Plan &p,const GuardedTransitionOptions &limits) {
  GuardedTransitionResult result;
- if(limits.maxBlocks<2 || limits.maxInstructions<3){result.budgetExhausted=true;result.message="value guard copy budget exhausted";return result;}
+ if(limits.maxBlocks<2 || limits.maxInstructions<4){result.budgetExhausted=true;result.message="value guard copy budget exhausted";return result;}
  auto *trial=trialFor(source);auto all=blocks(*trial);auto *seed=all[p.seed];auto *old=llvm::cast<llvm::BranchInst>(seed->getTerminator());auto *cmp=llvm::cast<llvm::ICmpInst>(old->getCondition());
  auto *state=llvm::isa<llvm::ConstantInt>(cmp->getOperand(1))?cmp->getOperand(0):cmp->getOperand(1);
  auto *fallback=llvm::BasicBlock::Create(source.getContext(),"state.value.fallback",trial);auto *gate=llvm::BasicBlock::Create(source.getContext(),"state.value.gate",trial);
@@ -149,16 +149,20 @@ GuardedTransitionResult apply(llvm::Function &source,const Hint &h,const Plan &p
  std::set<llvm::BasicBlock *> destinations;for(unsigned slot=0;slot<2;++slot)destinations.insert(old->getSuccessor(slot));
  for(auto *dest:destinations)for(auto &phi:dest->phis())for(unsigned i=0;i<phi.getNumIncomingValues();++i)if(phi.getIncomingBlock(i)==seed)phi.setIncomingBlock(i,fallback);
  old->removeFromParent();old->insertInto(fallback,fallback->end());
- llvm::IRBuilder<> b(seed);auto *equal=b.CreateICmpEQ(state,llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(state->getType()),h.state),"state.value.equal");auto *guard=b.CreateCondBr(equal,gate,fallback);guard->setMetadata(Consumed,llvm::MDNode::get(source.getContext(),{}));
+ llvm::IRBuilder<> b(seed);auto *equal=b.CreateICmpEQ(state,llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(state->getType()),h.state),"state.value.equal");
+ // The original ICmp can be defined even when some state bits are undef
+ // (for example (load & 3) > 50). A new branch must not consume an undef
+ // equality result. Freeze only this new i1; keep every original use intact.
+ auto *defined=b.CreateFreeze(equal,"state.value.defined");auto *guard=b.CreateCondBr(defined,gate,fallback);guard->setMetadata(Consumed,llvm::MDNode::get(source.getContext(),{}));
  b.SetInsertPoint(gate);b.CreateBr(target);for(auto [phi,value]:selected)phi->addIncoming(value,gate);
  if(llvm::verifyFunction(*trial)){trial->eraseFromParent();result.message="invalid outer value-guard trial";return result;}
  GuardedTransitionRequest q;q.seed=gate;q.seedSuccessor=0;q.seedTarget=target;q.forwardSuccessors=p.slots;for(auto n:p.path)q.blocks.push_back(all[n]);auto *sw=llvm::cast<llvm::SwitchInst>(q.blocks.back()->getTerminator());q.candidate=llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(sw->getCondition()->getType()),h.target);
- auto nested=cloneGuardedTransition(*trial,q,{limits.maxBlocks-2,limits.maxInstructions-3});
+ auto nested=cloneGuardedTransition(*trial,q,{limits.maxBlocks-2,limits.maxInstructions-4});
  // Nested commit invalidates every body pointer above. Never use them again.
  if(!nested.changed){trial->eraseFromParent();return nested;}
  auto updated=blocks(*trial);for(std::size_t n=all.size();n<updated.size();++n)updated[n]->getTerminator()->setMetadata(Generated,llvm::MDNode::get(source.getContext(),{}));
  if(llvm::verifyFunction(*trial) || !commit(source,*trial)){trial->eraseFromParent();result.message="outer value-guard commit verification failed";return result;}
- trial->eraseFromParent();nested.clonedBlocks+=2;nested.clonedInstructions+=3;nested.complete=false;return nested;
+ trial->eraseFromParent();nested.clonedBlocks+=2;nested.clonedInstructions+=4;nested.complete=false;return nested;
 }
 }
 GuardedTransitionsStats runGuardedStateValues(llvm::Module &module,const GuardedTransitionsOptions &options) {
