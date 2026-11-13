@@ -24,6 +24,17 @@ for mode in MODES:
   INPUTS.append((mode,2,MASK,MASK,size,alias,target,1,777,1))
 INPUTS=tuple(INPUTS)
 assert len(INPUTS)==len(set(INPUTS))==5200
+# Keep the entire first freeze as a prefix, then append an explicit complete
+# bit-pattern grid. Edge values alone cover only 0/3/4/7 of eight top3 values.
+PATTERN_GRID=[]
+for op,width,bits in itertools.product(('l','a'),(32,64,128),(1,2,3)):
+ for pattern,alias,target in itertools.product(range(1<<bits),(0,1),(43,44,45)):
+  desired=pattern<<(width-bits)
+  lo=(desired&MASK)^0x8000000080000000
+  hi=(desired>>64)^0x8000000000000000
+  PATTERN_GRID.append((f'{op}{width}t{bits}',7,lo,hi,1024,alias,target,6,777,1))
+INPUTS+=tuple(PATTERN_GRID)
+assert len(PATTERN_GRID)==504 and len(INPUTS)==len(set(INPUTS))==5704
 FAULTS={'omit_prefix':'l32t1','double_prefix':'l32t1','frozen_source':'l64t1',
  'logical_for_arithmetic':'a64t3','zeroextend_signed32':'a32t2','ignore_high128':'l128t3',
  'wrong_count':'l64t2','frozen_count':'dynamic_legal','stale_history':'history',

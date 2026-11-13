@@ -78,3 +78,35 @@ v1/v2 原始失败均在归档内，未退役文件。
 这是 LLVM 函数级完整状态差分，不覆盖机器指令 decoding/IGNIL/Unicorn、
 全 corpus 或真实 ELF。候选精度、全部候选原生执行、真实输入、完整 CTest
 仍由后续明确冻结的工作提供，不能用 before 校准数字替代。
+
+## 追加全部高位图案的 v4 域
+
+独立覆盖盘点发现：5200 个边界 tuple 对 top3 的实际图案只覆盖了
+0/3/4/7，不能据此声称全部八种图案。v4 **保留原 5200 个 tuple 作为完全
+相同的前缀**，另追加 504 个明确的图案输入：每个 32/64/128 × LShr/AShr ×
+top1/2/3 形态都枚举全部 `2^bits` 图案，组合 alias=0/1 和实际目标43/44/45。
+总数为 5704 个不重复 tuple。原/故障/拒绝 IR、helper、C 参考与 v3 全部
+逐字节相同，没有删除输入或放宽 gate。
+
+| v4 原 IR 优化级 | LLVM fullstate | 独立 C fullstate | business / checked failure | fault 观察 / 指定差异检出 | comparator controls | 保存流 / frame |
+|---|---:|---:|---:|---:|---:|---:|
+| O0 | 5704 | 5704 | 3888 / 1816 | 3104 / 1713 | 62744 | 64 / 14512 |
+| O2 | 5704 | 5704 | 3888 / 1816 | 3104 / 1713 | 62744 | 64 / 14512 |
+
+两级 saved audit 均重新读取全部 frame 并通过。v3 数字作为原先独立校准的
+历史结果保留，不能与 v4 相加计作新增覆盖。v4 的 14 个故障指定检出依次为
+220、220、220、144、119、226、216、50、66、50、40、34、68、40，与上表
+故障顺序对应。skip/exclusion/normalization 仍为 0。
+
+最新候选公共驱动根为
+`~/vmc-runs/guarded-bit-slices-independent-20261113/dragon-bit-slices-public-v2/`，
+其 source/inputs/gates 在候选执行前冻结。driver C++ source 与 v1 相同，复用
+已绑定 SHA256 的 driver；显式 `LD_LIBRARY_PATH` 将选择正式候选 runtime。
+旧官方48b9 runtime下，v2 的 checked/state/store 三个现有 profile 均通过，
+输出与各自 parsed-before 逐字节相同。这些 public 调用的 native 执行数为 0。
+候选 pass/原生验证仍待正式 runtime，不得把上述数字当作候选结果。
+
+v4 before 总归档 `guarded-bit-slices-before-v4-20261113.tar.gz`：
+SHA256 `c9669f5a56a461c02efbf8ab2787400bc442087225e605e1185e1457bbe330c2`，
+1084 个 payload 文件，6933097 字节；含全部 v1/v2 失败及 v3/v4 原始记录。
+VM 和 Mac 副本均完整核对文件集合、大小和 SHA256。没有退役任何证据。
