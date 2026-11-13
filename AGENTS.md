@@ -217,6 +217,19 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Partial-address independent validation (2026-11-13, implementation `997d086`):
+each frozen d3334091/75ce0479 build passes6912 full-state normal observations,
+1344fault observations/824specified detections,76032comparator controls;
+86streams/8256frames reaudited,0exclusions/skips/normalization. Actual unknown
+helper writes, aliases, incomplete/incorrect hints and LOAD/STORE order remain.
+Old J has15 actual API precision failures per build; new62 API gates pass,
+main/no-Z3 IR byteequal with62 damaged-byte controls. Native archivee3dad4cf
+has2797 root independently verified payloads. Real tail9 archived669db73 has136
+payloads and16 structure controls, retaining all extra state45 edges; closure
+still T/T/F/F. ComboO2 adds3 partial paths and exposes another CALL-dependent
+state. Complete fresh56/64 real replay and loop observation remain pending.
+See `docs/partial-address-subset-independent-validation-20261113.md`.
+
 Partial address predictions (2026-11-13, frozen base `254d024` plus patch
 4cad7319): opt-in partial controller may retain a nonempty valid hint subset;
 actual target LOAD and full same-value fallback remain. Strict controllers stay

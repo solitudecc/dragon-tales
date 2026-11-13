@@ -41,8 +41,9 @@ verified on macOS. Local copy:
 Raw runtimes are retained separately.
 
 This commit seals implementation and unit/compatibility validation only.
-Independent native tests for the newly admitted partial mappings and real
-four-input loop probes are pending review and will be recorded separately.
+Independent native tests and real four-input tail probes are now recorded in
+`partial-address-subset-independent-validation-20261113.md`. The complete
+fresh composed real replay and observed-loop requirements remain pending.
 It does not establish complete loop de-flattening. No new instruction, Unicorn
 or full 69-input corpus campaign is claimed. Merge into main remains pending
 required final validation.
