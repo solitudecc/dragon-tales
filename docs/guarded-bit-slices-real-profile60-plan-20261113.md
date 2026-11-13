@@ -89,3 +89,15 @@ The unchanged future full scope is C16/LLVM16, complete 1 MiB Guest arenas,
 seven Exit fields, 144 specified fault controls and original Graph checks.
 Those comparisons, a fresh60 replay, instruction/Unicorn and full-corpus
 campaigns have not run. No complete loop de-flattening is claimed here.
+
+## Preparation archive
+
+The preparation-only namespace and its dry-check sources/results are sealed at
+SHA-256 `b0cc8c0dadd2f72167c35a283ae48de955a2bd718a95deb6b094cd5dbccaa3bc`
+(39305 bytes, 19 regular members). Both hosts verified every named member,
+complete set, length and SHA. VM archive is
+`~/vmc-runs/guarded-bit-slices-real60-preparation-v1-20261113.tar.gz`;
+macOS archive is
+`/Users/c/Desktop/deob/validation-artifacts/guarded-bit-slices-real-20261113/guarded-bit-slices-real60-preparation-v1-20261113.tar.gz`.
+It references the already sealed actual59 and repaired-v2 input archives;
+it contains no formal runtime, producer binary or new candidate frame.
