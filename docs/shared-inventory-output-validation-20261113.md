@@ -109,3 +109,27 @@ and original ELF/source fixtures. There is no direct future read dependency
 from this owner on owned build `libdragon.so`, build `c_shim/libdragon_c.so`
 or `bin/dragon_tests`, in either build. This closure is not a deletion action;
 all cache retirement still needs the root's separate exact proposal and GO.
+
+## Complete dual-host evidence seal
+
+The candidate executable reads only raw LLVM IR, selected function name and
+output path; the original JSON is read solely by the separate strict
+comparator. No expected inventory is copied into a candidate render. All 28
+actual new renders are retained as gzip payloads and can be reconstructed
+independently.
+
+The 119 regular-member archive contains 118 payloads plus its manifest: source,
+binary, explicit loader evidence, all complete renders and byte-comparison
+receipts, 84 rejection controls, both startup refusals, successful profiles
+and the unchanged-checker same-scope pair. VM and macOS independently verify
+all member names, lengths and SHA. macOS additionally decompresses all 28
+renders and checks every full length/SHA against the frozen original pins.
+
+- VM: `~/vmc-runs/shared-inventory-output-candidate-20261113.tar.gz`
+- macOS: `/Users/c/Desktop/deob/validation-artifacts/shared-inventory-output-candidate-20261113/shared-inventory-output-candidate-20261113.tar.gz`
+- Archive SHA: `36dda7016289ac39525159a6ba5d8207ac954206d36ed37022bba55bc4c16633`
+- Archive bytes: 39679707; final-summary SHA:
+  `e5a089fb963cedd3d06a9ef9e4e30ae66e3afa92d4db28971398fc4c65cdaa0d`.
+
+No frozen default tool was replaced, no production code or gate was edited,
+and no existing evidence was retired by this work.
