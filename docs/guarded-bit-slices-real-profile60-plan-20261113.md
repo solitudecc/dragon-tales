@@ -133,3 +133,53 @@ Archive SHA is
 (208966 bytes). Both hosts independently checked every member's length/SHA
 and the complete regular-file set. This compact archive contains no runtime
 libraries or new candidate frames.
+
+## Independent v2 compile-ready namespace
+
+After the separate native observer exposed the first runtime's short-suffix
+precision limitation, v1 remained a zero-execution compile-only product. The
+replacement compile-ready phase uses a new `prepared-v2` namespace and a new
+formal main runtime, while preserving all five source bytes, four actual59
+inputs, repaired-v2 observer anchors, recipe, budgets and original gates.
+No v1 ready, binary, frame or preparation archive was changed.
+
+Main v2 runtime is
+`/home/cc/vmc-runs/guarded-bit-loop-discovery-20261113/runtime-main-v2`,
+backend SHA `02d730ce862ec7bf60ccaccb05bd1b61cd3b971b8b444b56d3a0e108b60992e3`,
+manifest SHA `17c3831dbe81c46194f3bc459f01bb023069dfe32b87fb13b944cb5758c6fe9f`.
+Two C++ binaries again compiled sequentially with explicit main-v2 LD/rpath;
+`ldd` and `readelf` confirm that exact loader binding. All source and actual
+input pins were rechecked. No producer entry point, candidate, target-native,
+fresh full replay or C59 rerun occurred.
+
+V2 preparation SHA is
+`b2af9f80f8e51faeb80586bd02f8107e375e6b4926557fe69f4fb2b1ec6d849f`.
+Canonical `prepared-v2/COMPILED-READY-v2.json` SHA is
+`4d182f4959258c3baa714d209894098c3687c15c0fbd185f568d6dfd94a4ea0a`.
+Candidate execution remains unauthorized pending the formal dual-native
+archive and separate root GO.
+
+| v2 binary | bytes | SHA-256 |
+| --- | ---: | --- |
+| `probe-bits` | 486600 | `c359da883d624b2d763c00e22749b36cc93eeb0ae7d63e6710d71e5e977b9580` |
+| `parse-import` | 358720 | `29a27688cdf07c5b07b01bf46ac8d2765df582ef862747770c37e2758432f0da` |
+
+Canonical v2 evidence was sealed and verified on both hosts as 21 regular
+members before creating any protocol compatibility alias. Archive SHA is
+`40d70ce539d08b6cfc65648e89492bca2c1557bf05dcf41d7ea6131b8593d765`
+(210530 bytes), at
+`~/vmc-runs/guarded-bit-slices-real60-compile-ready-v2-20261113.tar.gz`
+and
+`/Users/c/Desktop/deob/validation-artifacts/guarded-bit-slices-real-20261113/guarded-bit-slices-real60-compile-ready-v2-20261113.tar.gz`.
+
+Root then explicitly authorized an exact-byte compatibility alias within
+`prepared-v2`: `COMPILED-READY-v1.json` is a hardlink of canonical
+`COMPILED-READY-v2.json`, allowing the unchanged frozen runner's fixed
+protocol filename to read actual v2 data. This alias does not refer to the
+old `prepared-v1` ready. Both new paths have the canonical SHA above, 7686
+bytes, device 64770 / inode 1062854 / nlink 2 at creation. The complete alias receipt
+`prepared-v2/READY-COMPAT-ALIAS-v2.json` has SHA
+`bf1c33ba978ac5c7a55a3f2efa9ec29f9654815ad810a816d852c5647e2e00cc`
+and is copied to both hosts. The eventual root GO binds canonical v2 SHA,
+which equals the compatibility filename's full bytes. No source or gate
+change is needed for this fixed-filename protocol compatibility.
