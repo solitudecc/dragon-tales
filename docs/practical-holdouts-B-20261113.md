@@ -79,6 +79,11 @@ Both actual MBA helper reductions and substantial remaining Guest/dispatcher
 structure should be inspected in the saved IR. Broad claims of a universally
 better default pipeline are not supported by this batch.
 
+All eight B static/product pairs have byte-identical original unoptimized IR
+(full size/SHA equality). A/B instruction counts are not an optimization
+comparison: the incomplete A views omit executable business blocks that B
+now includes. A's shorter truncated IR is not a simplification benefit.
+
 Decode, actual region lift, static selection, Graph auditing, product passes,
 stock optimization, native compilation, Unicorn and native timings are separate.
 The A lift envelope includes B's additional auditing/attribute-render overhead;
