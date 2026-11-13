@@ -41,7 +41,7 @@ def instructions(body):
     for line in body.splitlines():
         if not line.strip() or line.lstrip().startswith(';'):
             continue
-        if re.match(r'^  \S', line) and line.strip() != ']':
+        if re.match(r'^  \S', line) and not re.match(r'^\s*\]', line):
             result.append(line.strip())
         else:
             assert result and result[-1].startswith('switch '), 'unsupported raw instruction layout'

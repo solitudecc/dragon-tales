@@ -117,6 +117,16 @@ def main():
     original = raw(rows)
     checked = review.review_structure(plan, original, after, before, anchor, manifest)
     assert len(checked['fast_cycles']) == 1 and len(checked['fast_cycles'][0]) == 5
+    # Generated switches print their metadata on the closing-bracket line.
+    # It remains part of the same SwitchInst, rather than a new instruction.
+    annotated_rows = copy.deepcopy(rows)
+    for records in annotated_rows.values():
+        for n, instruction in enumerate(records):
+            if instruction.startswith('switch '):
+                records[n] = instruction + ', !dragon.guarded-transitions.generated !0'
+    annotated_inventory = inventory(annotated_rows)
+    next(b for b in annotated_inventory['blocks'] if b['name'] == 'cexit')['stores'] = copy.deepcopy(next(b for b in after['blocks'] if b['name'] == 'cexit')['stores'])
+    review.review_structure(plan, raw(annotated_rows) + '!0 = !{}\n', annotated_inventory, before, anchor, manifest)
     controls = []
     def reject(label, callback):
         try:
@@ -192,7 +202,7 @@ def main():
                             ('extra-count-byte', len(normal).to_bytes(8, 'little') + b'\0'*(8*len(normal)+1))):
             p.write_bytes(data)
             reject(label, lambda: review.read_counts(p, len(normal)))
-    print(json.dumps(dict(synthetic_valid_raw_inventory=1, valid_phi_state_and_seed_effects=True,
+    print(json.dumps(dict(synthetic_valid_raw_inventory=2, annotated_switch_closing_line=True, valid_phi_state_and_seed_effects=True,
                           controls_detected=len(controls), controls=controls,
                           native_executions=0, real58_executions=0), indent=2))
 
