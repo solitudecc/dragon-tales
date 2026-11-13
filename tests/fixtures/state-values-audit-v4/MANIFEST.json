@@ -1,0 +1,49 @@
+{
+  "scope": "Synthetic verifier-valid audit structures, not deobfuscation/native success evidence. JSON is produced by pure LLVM parse+verify+inventory; no pass was run.",
+  "files": {
+    "duplicate-after.json.gz": {
+      "size": 2277,
+      "sha256": "f6807acca79ec3f1d6182f23a66113fa46b0e41e862a1353f2b6866a8168315e"
+    },
+    "duplicate-after.ll": {
+      "size": 2179,
+      "sha256": "c73b7b3182909b29f7135c0dfe2ea748cb12d61a0a770b88a7ad335c23ec0f94"
+    },
+    "duplicate-before.json.gz": {
+      "size": 1363,
+      "sha256": "d1debe0a1e8f0d8861f429eef1cf8b1b654be10853c936f2f1501a4f62b44810"
+    },
+    "duplicate-before.ll": {
+      "size": 1042,
+      "sha256": "169b24ee1bcf9861389496d5c5e277c609ce11440cfb1aaa512626c86cf195bf"
+    },
+    "hints.json": {
+      "size": 199,
+      "sha256": "c06eeb871f471c00f66200e09b1257ff89851decec3dfe4f242a50bf37210435"
+    },
+    "historical-selector.json.gz": {
+      "size": 834,
+      "sha256": "90f354f0e688fef2eb8080b0d0f0e1e3f521977dccd09a91c47a219fc103ce23"
+    },
+    "historical-selector.ll": {
+      "size": 622,
+      "sha256": "93e13e94ffbb6f37b8f0b8523d5af3b5bc4e829dafd709edd0cf654fca5b4335"
+    },
+    "plain-after.json.gz": {
+      "size": 2180,
+      "sha256": "d62b9a9f7e5f6403c97bf0f4c3f63ff4e9d696437d3694d9caa7479aa4895ca8"
+    },
+    "plain-after.ll": {
+      "size": 2054,
+      "sha256": "9a50261e8a4baf49ff2c290f518a3c834ab6743e9619da6079239192108defe1"
+    },
+    "plain-before.json.gz": {
+      "size": 1282,
+      "sha256": "949dc49a8d4232baa2c132c1226da85648b8ec67fdecc0733db5dfb58f6b7f91"
+    },
+    "plain-before.ll": {
+      "size": 965,
+      "sha256": "c84490050308d1a7d414a4ff382e97fc0d6ad92b4b43dccb487b1f4293ba5f65"
+    }
+  }
+}
