@@ -217,6 +217,35 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Already executed funnel-intrinsic seeds (2026-11-14, base4bde2e8,
+implementation289bb23): opt-in `guarded-store-expressions` admits original
+scalar fshl/fshr in an already executed seed, or as an original observation
+that dominates it. Calls remain forbidden in copied corridors; no intrinsic
+value/definedness or call-memory fact is inferred. Other profiles and budgets
+are unchanged. Actual production main/no-Z3 each12cases/2695assertions; full
+historical CTest1163/1163 and1028/1028, new cases counted separately. The same
+corrected test object fails parent production1of2cases/422assertions. The first
+fixture's APInt count-construction failure is retained; explicit narrowing
+keeps all original boundary counts. Independent native2048 complete return/
+arena matches,1536fault observations/1012specified detected,3072comparator
+controls; each of the four host/prediction runs has16effective initial arenas
+per width, without expanding the business input domain.
+Frozen four-ELF replay128complete state matches and64Unicorn/Python checks,
+384comparator controls, no new producer/lift/native-C run or normalization.
+Manual O2 gains a conditional48-block business SCC, but the outer dispatcher
+remains; pass loopContexts is still0. The125candidate stops on historical PHI
+cycle, not a local budget. Further only-read graph analysis also finds a
+non-dominating older funnel and depth33>32; removing that cycle alone is not a
+full-loop solution. See `docs/guarded-intrinsic-seeds-validation-20261114.md`.
+No new instruction/Unicorn-instruction/full69 corpus campaign or exclusion.
+Evidence1101payloads/93209212B SHA00e16572c3e770bb78d2621e90aac5acc224c13a67b998f661de370e035f8644
+is dual-host verified under local `validation-artifacts/guarded-intrinsic-seeds-20261114`
+and VM `~/vmc-runs/`. Five redundant focused clients were retired only afterward;
+objects/current production/source/streams remain. Restore exact historical
+client members before replay; four-payload operation archive SHA83d2e791121325643f538f52543d9c6fd18d257e959a1a383df681dca18f6821
+records scans, checks and87646208B freed. Child root has a RESTORE notice.
+
+
 Checked-corridor implementation (2026-11-13): separate opt-in continuation of
 pre-existing generated seeds, including bounded cyclic copies. Root PHIs keep
 historical seed inputs and fresh actual backedge slots; same-LOAD full fallback,

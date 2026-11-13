@@ -52,9 +52,26 @@ budgets are refused. No value or definedness fact is exported from a hint.
 Cyclic copies use the existing checked continuation helper and actual PHI
 incoming edges; the pass reports loop contexts separately from total copies.
 
-## Validation status
+## Already executed mathematical intrinsics
 
-Both freshly linked production backends pass the new 10 cases / 777 assertions.
+The STORE-expression profile may start a corridor after an original scalar
+integer `llvm.fshl` or `llvm.fshr`. The intrinsic remains in its original seed
+block; an earlier original result is admitted only when it dominates that
+seed. It supplies an untrusted observation, without evaluating the intrinsic,
+proving its inputs defined or importing memory/call effects.
+
+This is a narrow intrinsic whitelist. Copied corridors still reject calls,
+including these intrinsics; ordinary external calls, operand bundles,
+convergent calls and direct undef/poison operands remain barriers. The other
+profiles, default recipe, ABI and work/expression budgets are unchanged.
+The independent [intrinsic-seed checkpoint](guarded-intrinsic-seeds-validation-20261114.md)
+records the validation and remaining outer-dispatch limitation.
+
+## Parent implementation validation
+
+The initial STORE-expression implementation passed 10 cases / 777 assertions
+on both freshly linked production backends. The intrinsic-seed extension
+above has its own checkpoint and additional cases.
 Full historical CTest passes main1163/1163 and no-Z3 1028/1028; the new cases run
 separately against each actual shared backend. The exact Python registry check
 includes the additional builtin and checks its options/default exclusion.
