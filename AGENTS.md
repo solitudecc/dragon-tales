@@ -217,6 +217,17 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+State-value guards (2026-11-13, frozen base `f33d36a` plus patch228c0ebb):
+opt-in same-SSA state prediction after seed effects, original ICmp fallback and
+actual target-LOAD fallback. Every commit reports Incomplete; no counter range
+or call/memory fact. Old J libraries compile four tests and fail4cases/5asserts
+because builtin is absent, not old wrong execution. Both new focus74/3213;
+CTest1139/1139 and1004/1004. J41/I245/H94 products/reports and K IR remain exact.
+Metadata b4c24aa1 has860 dual-host verified payloads. Independent native/real
+results and final composed-loop validation are pending separate recording. See
+`docs/guarded-state-values-validation-20261113.md`. Standalone drivers must not
+add dynamic LLVM to a backend already containing LLVM; use original J link recipe.
+
 Partial address predictions (2026-11-13, frozen base `254d024` plus patch
 4cad7319): opt-in partial controller may retain a nonempty valid hint subset;
 actual target LOAD and full same-value fallback remain. Strict controllers stay

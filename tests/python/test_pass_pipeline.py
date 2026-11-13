@@ -55,7 +55,7 @@ with lift(g) as l,d.PassPipeline() as p:
         'graph-audit','finite-values','control-flow',
         'dispatch-specialize','dispatch-deflatten','guest-memory','entry-prefix',
         'guarded-transitions','constant-branches','guarded-target-sets','guarded-state-corridors','guarded-store-corridors',
-        'invariant-self-loops','guarded-partial-corridors'}
+        'invariant-self-loops','guarded-partial-corridors','guarded-state-values'}
     for name,opts in [('bad',{}),('mba',{'max_queries':True}),('mba',{'max_queries':-1}),('mba',{'unknown':1})]:
         expect(ValueError,lambda:p.add(name,**opts))
     p.add('instcombine').add('graph-audit');before=l.ir()
@@ -283,3 +283,13 @@ for strategy in (d.Strategy.LINEAR_SWEEP,d.Strategy.RECURSIVE_TRAVERSAL):
     with d.PassPipeline() as p:
         expect(ValueError,lambda:p.register_finite_dispatch(b'',0x1000))
 print('Pass pipeline: configuration, callbacks, cache, budgets and lifetime checks passed')
+
+with lift(g) as l,d.PassPipeline(['guarded-state-values']) as p:
+    assert 'guarded-state-values' not in d.PassPipeline.DEFAULT_LLVM
+    for option,limit in (('max_candidates',4096),('max_rewrites',4096),
+                         ('max_blocks',4096),('max_instructions',262144)):
+        expect(ValueError,lambda:p.add('guarded-state-values',**{option:limit+1}))
+    before=l.ir();r=p.run(l)
+    assert r['ok'] and not r['changed'] and l.ir()==before
+    assert r['runs'][0]['status']==d.PassStatus.UNAVAILABLE
+    assert r['runs'][0]['counters']['available']==0
