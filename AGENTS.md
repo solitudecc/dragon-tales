@@ -217,6 +217,20 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Actual cffO2 loop observation (2026-11-13, tool fix `e93d811`): only known direct
+nocallback memory(none) intrinsic declarations may retain inherited call effect
+attributes in the standalone observer. All five new negatives and old tests
+remain. Frozen cffO2 L2 IR has4normal full-state matches and4double controls;
+each enters once, central/entry/target/business failures0 and guard id5 hits12
+inside an independently recomputed fast SCC. Old G-cffO0 string in reused
+SUMMARY is explicitly historical, not sample identity. Root independently
+verified tool953 and real139payload archives cd5a9825/8d49252b. See
+`docs/fast-loop-observer-pure-intrinsics-20261113.md`. Both cff forms now have
+actual loop evidence; combo closure/observations and fresh composed replay
+remain pending. K/I2 old8raw libraries were retired only after exact dual-host
+archive5836162f validation; manifests/restore receipts remain. See
+`docs/guarded-loop-storage-20261113.md` before reproducing those old versions.
+
 State-value independent native (2026-11-13, implementation `568de7e`): both
 frozen a2f82bdd/b4fae0a3 runtimes pass original13 API recipes and each4928 full
 state observations (1664 business/3264 checked failure),1848fault observations/
