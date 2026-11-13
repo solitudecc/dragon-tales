@@ -22,6 +22,7 @@
 namespace dragon::llvmlifter::detail {
 namespace {
 constexpr const char *Generated="dragon.guarded-transitions.generated";
+constexpr const char *ContinuationGenerated="dragon.guarded-checked-corridors.generated";
 constexpr std::size_t MaxWork=1000000,MaxNodes=128,MaxDepth=32,MaxValues=8;
 struct Work {
   std::size_t count=0;bool exhausted=false;
@@ -452,7 +453,7 @@ std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const s
   return values.empty()?std::optional<std::vector<std::uint64_t>>{}:values;
 }
 }
-static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &,const GuardedTransitionsOptions &,bool,GuardedPartialCorridorsStats *,bool partialMasks=false);
+static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &,const GuardedTransitionsOptions &,bool,GuardedPartialCorridorsStats *,bool partialMasks=false,GuardedCheckedCorridorsStats *continuations=nullptr);
 GuardedTransitionsStats runGuardedStateCorridors(llvm::Module &module,const GuardedTransitionsOptions &options) {
   return runGuardedStateCorridors(module,options,false);
 }
@@ -479,7 +480,18 @@ GuardedPartialCorridorsStats runGuardedPartialMaskCorridors(llvm::Module &module
   }
   return result;
 }
-static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const GuardedTransitionsOptions &options,bool storePredictions,GuardedPartialCorridorsStats *partialStats,bool partialMasks) {
+GuardedCheckedCorridorsStats runGuardedCheckedCorridors(llvm::Module &module,const GuardedTransitionsOptions &options) {
+  GuardedCheckedCorridorsStats result;
+  auto &partial=result.partial;
+  partial.base=runStateCorridorsImpl(module,options,false,&partial,true,&result);
+  partial.partialUnresolvedEdges=partial.partialCandidateEdges-partial.partialRewrittenEdges;
+  if(partial.base.candidateEdges) {
+    partial.base.complete=false;
+    if(partial.base.message.empty())partial.base.message="checked continuation contexts retain every actual read and full fallback";
+  }
+  return result;
+}
+static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const GuardedTransitionsOptions &options,bool storePredictions,GuardedPartialCorridorsStats *partialStats,bool partialMasks,GuardedCheckedCorridorsStats *continuations) {
   GuardedTransitionsStats result;auto *metadata=module.getNamedMetadata("dragon.guarded-entry");if(!metadata)return result;result.available=true;
   auto reject=[&](const char *message,bool budget=false){result.complete=false;++result.rejected;result.budgetExhausted+=budget;result.message=message;};
   if(options.maxCandidates>4096 || options.maxRewrites>4096 || options.maxBlocks>4096 || options.maxInstructions>262144){reject("state-corridor option hard limit exceeded",true);return result;}
@@ -506,6 +518,15 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
     if(admission[n]<0){if(!work.charge(instructionCounts[n]))return false;admission[n]=safeBlock(*b,llvm::isa<llvm::SwitchInst>(term))?1:0;}
     return admission[n]!=0;
   };
+  auto continuationSeed=[&](std::size_t n) {
+    auto *block=initial[n];auto *term=block->getTerminator();
+    if(!generated(*block) || term->getMetadata(ContinuationGenerated))return false;
+    if(llvm::isa<llvm::BranchInst>(term))return true;
+    auto *jump=llvm::dyn_cast<llvm::SwitchInst>(term);
+    auto *load=jump?llvm::dyn_cast<llvm::LoadInst>(jump->getCondition()):nullptr;
+    return jump && jump->getNumCases() && jump->getNumCases()<=16 && load &&
+           load->isSimple() && load->getParent()==block;
+  };
   struct Incoming {std::size_t block;unsigned slot;};std::vector<std::vector<Incoming>> incoming(initial.size());
   for(std::size_t n=0;n<initial.size();++n) {
     if(!reachable[n])continue;auto *term=initial[n]->getTerminator();if(!llvm::isa<llvm::BranchInst,llvm::SwitchInst>(term))continue;
@@ -524,7 +545,9 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
     for(const auto &in:incoming[q.path.front()]) {
       if(++searches>32768){limited=true;queue.clear();break;}
       if(!work.charge(1+q.path.size()))return scanFailure();
-      if(!reachable[in.block] || generated(*initial[in.block]) || std::find(q.path.begin(),q.path.end(),in.block)!=q.path.end())continue;
+      if(!reachable[in.block] || std::find(q.path.begin(),q.path.end(),in.block)!=q.path.end())continue;
+      const bool checkedSeed=continuations && continuationSeed(in.block);
+      if(generated(*initial[in.block]) && !checkedSeed)continue;
       if(!eligible(in.block)){if(work.exhausted)return scanFailure();continue;}
       if(!work.charge(q.path.size()))return scanFailure();
       std::vector<llvm::BasicBlock *> path;for(auto n:q.path)path.push_back(initial[n]);
@@ -538,7 +561,7 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
         }
       }
       bool usedPartial=false;
-      auto predicted=rootPhisRetained?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom,partialStats!=nullptr,usedPartial,partialMasks):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
+      auto predicted=rootPhisRetained && (!continuations || checkedSeed)?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom,partialStats!=nullptr,usedPartial,partialMasks):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
       if(predicted) {
         if(selected.emplace(in.block,in.slot).second) {
           ++result.candidateEdges;targets.insert(q.terminal);
@@ -548,6 +571,9 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
         }
         continue;
       }
+      // A pre-existing generated block is a seed only, never part of the
+      // copied corridor. This pass's own appended blocks cannot be new seeds.
+      if(continuations && generated(*initial[in.block]))continue;
       // A switch may be a selected seed edge, but is not traversed as an
       // intermediate dispatcher: that would duplicate a whole central region.
       if(!llvm::isa<llvm::BranchInst>(initial[in.block]->getTerminator()))continue;
@@ -565,16 +591,26 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
     if(result.rewrittenEdges>=options.maxRewrites || result.clonedBlocks>=options.maxBlocks || result.clonedInstructions>=options.maxInstructions){result.complete=false;++result.budgetExhausted;result.message="state-corridor module budget exhausted";break;}
     auto current=blocks(*function);if(current.size()<originalCount){reject("core original block identity contract violated");break;}
     auto *seed=current[edge.seed];auto *term=seed->getTerminator();std::vector<llvm::BasicBlock *> path;for(auto n:edge.path)path.push_back(current[n]);
-    ++result.attemptedEdges;if(edge.partial)++partialStats->partialAttemptedEdges;bool valid=!generated(*seed) && llvm::isa<llvm::BranchInst,llvm::SwitchInst>(term) && edge.slot<term->getNumSuccessors() && term->getSuccessor(edge.slot)==path.front() && indexOf(*path.back());
+    ++result.attemptedEdges;if(edge.partial)++partialStats->partialAttemptedEdges;bool valid=(continuations?generated(*seed) && !term->getMetadata(ContinuationGenerated):!generated(*seed)) && llvm::isa<llvm::BranchInst,llvm::SwitchInst>(term) && edge.slot<term->getNumSuccessors() && term->getSuccessor(edge.slot)==path.front() && indexOf(*path.back());
     for(std::size_t n=0;n<path.size();++n){if(generated(*path[n]))valid=false;if(n+1<path.size()){auto *t=path[n]->getTerminator();if(edge.slots[n]>=t->getNumSuccessors() || t->getSuccessor(edge.slots[n])!=path[n+1])valid=false;}}
     if(!valid){reject("frozen state-corridor edge no longer applicable");continue;}
     GuardedTransitionSetRequest request{seed,edge.slot,path.front(),path,edge.slots,{}};
     for(auto prediction:edge.predictions)request.candidates.push_back(llvm::ConstantInt::get(llvm::Type::getInt64Ty(module.getContext()),prediction));
-    const auto oldCount=current.size();auto changed=cloneGuardedTransitionSet(*function,request,
+    std::size_t loopSlots=0;
+    if(continuations) {
+      auto *jump=llvm::cast<llvm::SwitchInst>(path.back()->getTerminator());
+      for(auto *candidate:request.candidates)
+        if(jump->findCaseValue(candidate)->getCaseSuccessor()==path.front())++loopSlots;
+    }
+    const auto oldCount=current.size();auto changed=(continuations?cloneGuardedContinuationSet:cloneGuardedTransitionSet)(*function,request,
       {std::min<std::size_t>(32,options.maxBlocks-result.clonedBlocks),std::min<std::size_t>(2048,options.maxInstructions-result.clonedInstructions)});
     if(!changed.changed){result.complete=false;++result.rejected;result.budgetExhausted+=changed.budgetExhausted;result.message=changed.message;continue;}
     result.changed=true;++result.rewrittenEdges;if(edge.partial)++partialStats->partialRewrittenEdges;++result.fallbackSwitchesCreated;result.clonedBlocks+=changed.clonedBlocks;result.clonedInstructions+=changed.clonedInstructions;
-    auto updated=blocks(*function);for(std::size_t n=oldCount;n<updated.size();++n)updated[n]->getTerminator()->setMetadata(Generated,llvm::MDNode::get(module.getContext(),{}));
+    if(continuations && loopSlots){++continuations->loopContexts;continuations->loopBackedges+=loopSlots;}
+    auto updated=blocks(*function);for(std::size_t n=oldCount;n<updated.size();++n) {
+      auto *created=updated[n]->getTerminator();created->setMetadata(Generated,llvm::MDNode::get(module.getContext(),{}));
+      if(continuations)created->setMetadata(ContinuationGenerated,llvm::MDNode::get(module.getContext(),{}));
+    }
   }
   auto final=blocks(*function);for(auto n:targets)if(llvm::isa<llvm::SwitchInst>(final[n]->getTerminator()))++result.originalSwitchesRetained;
   result.unresolvedEdges=result.candidateEdges-result.rewrittenEdges;return result;

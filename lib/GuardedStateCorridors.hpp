@@ -19,4 +19,12 @@ GuardedPartialCorridorsStats runGuardedPartialCorridors(llvm::Module &,
 // Separate opt-in Cartesian Boolean/zero-mask hints, never source value facts.
 GuardedPartialCorridorsStats runGuardedPartialMaskCorridors(llvm::Module &,
     const GuardedTransitionsOptions & = {});
+struct GuardedCheckedCorridorsStats {
+  GuardedPartialCorridorsStats partial;
+  std::size_t loopContexts=0,loopBackedges=0;
+};
+// Continue only pre-existing generated seeds. Fresh root PHIs carry every
+// actual selected loop slot; all original controllers retain their behavior.
+GuardedCheckedCorridorsStats runGuardedCheckedCorridors(llvm::Module &,
+    const GuardedTransitionsOptions & = {});
 }

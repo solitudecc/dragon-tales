@@ -51,6 +51,7 @@ flowchart LR
 | `guarded-state-values` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；独立不可信单值提示，在实际状态 SSA 上加相等守卫，保留原条件分支与实际目标 LOAD 的完整回退；成功仍 Incomplete；见[状态值守卫](llvm-guarded-state-values.md) |
 | `guarded-partial-corridors` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；select 的有限臂仅作不完备目标预测，实际 LOAD 与同值完整回退保留，命中部分预测仍报告 Incomplete；见[不完备预测路径](llvm-guarded-partial-corridors.md) |
 | `guarded-partial-masks` | LLVM，显式选择 | 独立不完备 Boolean/零掩码预测；预算与 partial-corridors 相同，保留实际 LOAD 与完整回退；见[零掩码预测](llvm-guarded-partial-masks.md) |
+| `guarded-checked-corridors` | LLVM，显式选择 | 继续既有生成边；根 PHI 保留初值及每条真实循环回边，实际目标 LOAD 与完整回退每轮保留；预算与 partial-corridors 相同；见[循环上下文](llvm-guarded-checked-corridors.md) |
 | `guarded-target-sets` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；独立候选提示、实际 LOAD 的至多16目标小 switch、同值完整回退；见[有限目标集合](llvm-guarded-target-sets.md) |
 | `guarded-transitions` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384, business_corridors=0`；实际目标 LOAD 等值检查、同值完整回退；显式启用业务路径复制见[业务路径](guarded-business-corridors-20261112.md) |
 | `constant-branches` | LLVM，显式选择 | `max_folds=4096, max_instructions=1000000, max_blocks=65536`；只折叠已经是字面量常量的 br/switch，再删除入口不可达块，保留动态目标保护；见[精确常量分支清理](llvm-constant-branches.md) |

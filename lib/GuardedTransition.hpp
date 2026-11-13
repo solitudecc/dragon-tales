@@ -59,4 +59,10 @@ GuardedTransitionResult cloneGuardedTransition(
 GuardedTransitionResult cloneGuardedTransitionSet(
     llvm::Function &, const GuardedTransitionSetRequest &,
     const GuardedTransitionOptions & = {});
+// Separate bounded cyclic copy. Fast cases returning to the first path block
+// enter its fresh copy with actual loop-carried PHIs. Full fallback cases keep
+// their original destinations. No source condition or memory fact is assumed.
+GuardedTransitionResult cloneGuardedContinuationSet(
+    llvm::Function &, const GuardedTransitionSetRequest &,
+    const GuardedTransitionOptions & = {});
 }

@@ -217,6 +217,25 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Checked-corridor implementation (2026-11-13): separate opt-in continuation of
+pre-existing generated seeds, including bounded cyclic copies. Root PHIs keep
+historical seed inputs and fresh actual backedge slots; same-LOAD full fallback,
+source effects/flags and ordinary side exits remain. Old core/result layouts,
+J/F/H/M/defaults are unchanged. Final public tests15219e5c compile on mainc9cd781
+headers/old926:6cases/13assertions fail7 from absent builtin, including nested
+Catch exception reporting; adjacent oldM both reproduce, not wrong native.
+New each6/690, related87/4661, CTest1152/1152 and1017/1017. J41/I245/H94,
+state-values41 and K actual fixture IR remain exact; M53IR/17raw reports exact.
+Independent each6528 full-state matches,4224fault observations/2292specified
+detections,71808comparator controls,56streams/10752frames audited;1536distinct
+inputs, no calibration counts added. Each18API;57structure controls (35LLVM-valid,
+0executed);58IR/18reports cross-build byte-equal. Metadata6f8b939d1324payloads
+and native28ab9f5c1028payloads root exact-verified on both hosts. Current48b9/ab748
+raw runtimes remain. OldM953/d826 four so now archived0e74778b exact6payloads;
+original manifests/restoration notices remain. New real59/full/actual combo loop
+observations are pending; prior M/V stillT/T/T/F. No new instruction/Unicorn69
+campaign or completed real loop claim. See docs/checked-corridors-validation-20261113.md.
+
 Partial-mask independent native validation (2026-11-13): main953dc024 and
 no-Z3d8260b58 each8736 complete-state matches (5912business/2824checked exits),
 5376fault observations/3564specified detections,96096comparator controls;

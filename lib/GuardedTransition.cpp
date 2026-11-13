@@ -96,10 +96,13 @@ struct Plan {
   llvm::BasicBlock *caseTarget = nullptr;
   std::vector<std::pair<llvm::ConstantInt *,llvm::BasicBlock *>> fastCases;
   bool setMode = false;
+  bool loopMode = false;
+  std::size_t loopSlots = 0;
+  std::vector<std::pair<llvm::PHINode *, llvm::Value *>> loopInputs;
 };
 bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
              const GuardedTransitionOptions &o, Plan &p, GuardedTransitionResult &r,
-             const std::vector<llvm::ConstantInt *> *candidates) {
+             const std::vector<llvm::ConstantInt *> *candidates, bool allowLoops) {
   if (!q.seed || !q.seedTarget || q.blocks.empty() || !q.candidate ||
       q.forwardSuccessors.size() + 1 != q.blocks.size())
     return fail(r, "malformed explicit path");
@@ -151,6 +154,27 @@ bool prepare(llvm::Function &f, const GuardedTransitionRequest &q,
       auto item=jump->findCaseValue(candidate);
       if(item==jump->case_default())return fail(r,"target set contains a non-case candidate");
       p.fastCases.emplace_back(candidate,item->getCaseSuccessor());
+    }
+  }
+  if (allowLoops) {
+    for (const auto &[value, target] : p.fastCases) {
+      (void)value;
+      if (target == q.blocks.front()) ++p.loopSlots;
+    }
+    p.loopMode = p.loopSlots != 0;
+    if (p.loopMode) for (auto &phi : q.blocks.front()->phis()) {
+      const int incoming = phi.getBasicBlockIndex(q.blocks.back());
+      if (incoming < 0) return fail(r, "missing actual loop-carried PHI input");
+      auto *value = phi.getIncomingValue(incoming);
+      if (llvm::isa<llvm::UndefValue, llvm::PoisonValue>(value))
+        return fail(r, "explicit undef or poison loop-carried input");
+      if (auto *definition = llvm::dyn_cast<llvm::Instruction>(value)) {
+        if (!dom.dominates(definition, q.blocks.back()->getTerminator()) ||
+            (!positions.contains(definition->getParent()) &&
+             !dom.dominates(definition, q.seed->getTerminator())))
+          return fail(r, "loop-carried input lacks a fresh or dominating value");
+      }
+      p.loopInputs.emplace_back(&phi, value);
     }
   }
   for (std::size_t n = 0; n < q.blocks.size(); ++n) {
@@ -258,12 +282,27 @@ bool apply(Plan &p, llvm::Function &f, GuardedTransitionResult &r) {
     auto *pred = n ? q.blocks[n - 1] : q.seed;
     for (auto &phi : q.blocks[n]->phis()) {
       auto *incoming = phi.getIncomingValueForBlock(pred);
+      if (n == 0 && p.loopMode) {
+        auto *copy = llvm::cast<llvm::PHINode>(map.lookup(&phi));
+        while (copy->getNumIncomingValues()) copy->removeIncomingValue(0u, false);
+        // The selected entry observes the old execution; only backedges below
+        // receive fresh values. Never remap this input through the current VMap.
+        copy->addIncoming(oldInputs.lookup(incoming) ? oldInputs.lookup(incoming) : incoming,
+                          snapshots ? snapshots : q.seed);
+        continue;
+      }
       map[&phi] = n ? mapped(incoming)
                    : (oldInputs.lookup(incoming) ? oldInputs.lookup(incoming) : incoming);
     }
-    for (auto it = clones[n]->begin();
-         it != clones[n]->end() && llvm::isa<llvm::PHINode>(*it);)
-      (it++)->eraseFromParent();
+    if (n != 0 || !p.loopMode)
+      for (auto it = clones[n]->begin();
+           it != clones[n]->end() && llvm::isa<llvm::PHINode>(*it);)
+        (it++)->eraseFromParent();
+  }
+  for (const auto &[phi, value] : p.loopInputs) {
+    auto *copy = llvm::cast<llvm::PHINode>(map.lookup(phi));
+    for (std::size_t slot = 0; slot < p.loopSlots; ++slot)
+      copy->addIncoming(mapped(value), clones.back());
   }
   for (std::size_t n = 0; n < clones.size(); ++n) {
     for (auto &i : *clones[n])
@@ -288,7 +327,8 @@ bool apply(Plan &p, llvm::Function &f, GuardedTransitionResult &r) {
   llvm::IRBuilder<> builder(last);
   if(p.setMode) {
     auto *fast=builder.CreateSwitch(jump->getCondition(),fallback,p.fastCases.size());
-    for(const auto &[value,target]:p.fastCases)fast->addCase(value,target);
+    for(const auto &[value,target]:p.fastCases)
+      fast->addCase(value, p.loopMode && target == q.blocks.front() ? clones.front() : target);
   } else {
     auto *matches = builder.CreateICmpEQ(jump->getCondition(), q.candidate, "transition.matches");
     builder.CreateCondBr(matches, p.caseTarget, fallback);
@@ -310,7 +350,11 @@ bool apply(Plan &p, llvm::Function &f, GuardedTransitionResult &r) {
     }
   }
   if(p.setMode) {
-    for(const auto &[value,target]:p.fastCases) {(void)value;addExit(q.blocks.back(),last,target);}
+    for(const auto &[value,target]:p.fastCases) {
+      (void)value;
+      if (p.loopMode && target == q.blocks.front()) continue;
+      addExit(q.blocks.back(),last,target);
+    }
   } else addExit(q.blocks.back(), last, p.caseTarget);
   if (snapshots) llvm::BranchInst::Create(clones.front(), snapshots);
   q.seed->getTerminator()->setSuccessor(q.seedSuccessor, snapshots ? snapshots : clones.front());
@@ -387,7 +431,7 @@ bool commit(llvm::Function &source, llvm::Function &trial, std::string &error) {
 static GuardedTransitionResult cloneTransitionImpl(
     llvm::Function &f, const GuardedTransitionRequest &q,
     const GuardedTransitionOptions &o,
-    const std::vector<llvm::ConstantInt *> *candidates) {
+    const std::vector<llvm::ConstantInt *> *candidates, bool allowLoops = false) {
   GuardedTransitionResult r;
   if (!f.getParent()) { fail(r, "function has no module"); return r; }
   std::string error;
@@ -401,7 +445,7 @@ static GuardedTransitionResult cloneTransitionImpl(
   }
   if (!supportedIdentity(f, r)) return r;
   Plan original;
-  if (!prepare(f, q, o, original, r, candidates)) return r;
+  if (!prepare(f, q, o, original, r, candidates, allowLoops)) return r;
   llvm::ValueToValueMapTy map;
   auto *trial = makeTrial(f, map);
   auto copied = q;
@@ -409,7 +453,7 @@ static GuardedTransitionResult cloneTransitionImpl(
   copied.seedTarget = llvm::cast<llvm::BasicBlock>(map.lookup(q.seedTarget));
   for (auto &block : copied.blocks) block = llvm::cast<llvm::BasicBlock>(map.lookup(block));
   Plan plan;
-  if (!prepare(*trial, copied, o, plan, r, candidates)) { trial->eraseFromParent(); return r; }
+  if (!prepare(*trial, copied, o, plan, r, candidates, allowLoops)) { trial->eraseFromParent(); return r; }
   if (!apply(plan, *trial, r)) {
     trial->eraseFromParent();
     r.clonedBlocks = r.clonedInstructions = r.snapshotPhis = r.repairPhis = r.originalExitEdges = 0;
@@ -426,8 +470,9 @@ static GuardedTransitionResult cloneTransitionImpl(
     r.changed = true;
   }
   trial->eraseFromParent();
-  if (!r.changed)
+  if (!r.changed) {
     r.clonedBlocks = r.clonedInstructions = r.snapshotPhis = r.repairPhis = r.originalExitEdges = 0;
+  }
   return r;
 }
 GuardedTransitionResult cloneGuardedTransition(
@@ -442,5 +487,14 @@ GuardedTransitionResult cloneGuardedTransitionSet(
   }
   GuardedTransitionRequest path{q.seed,q.seedSuccessor,q.seedTarget,q.blocks,q.forwardSuccessors,q.candidates.front()};
   return cloneTransitionImpl(f,path,o,&q.candidates);
+}
+GuardedTransitionResult cloneGuardedContinuationSet(
+    llvm::Function &f,const GuardedTransitionSetRequest &q,const GuardedTransitionOptions &o) {
+  GuardedTransitionResult result;
+  if (q.candidates.empty() || q.candidates.size() > 16) {
+    fail(result, "target set must contain 1 to 16 candidates"); return result;
+  }
+  GuardedTransitionRequest path{q.seed,q.seedSuccessor,q.seedTarget,q.blocks,q.forwardSuccessors,q.candidates.front()};
+  return cloneTransitionImpl(f,path,o,&q.candidates,true);
 }
 } // namespace dragon::llvmlifter::detail
