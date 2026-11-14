@@ -32,7 +32,7 @@ SHA256 `437bacb6ca519c9603e9d9c89cd2ceeb72441b5d8bc1d7eb6f02029a5fe648e4`）。
 真实 manual O2 的新显式 recipe 在旧失败前9阶段的18个 canonical/bound 文件逐字节
 门槛通过后，处理8／8原回流边；19阶段均 verify，核心紧后与最终循环分发 switch 都为0。
 原16输入 before32＋after32的LLVM执行逐字节匹配原参考完整66136字节／76字段，含
-Guest65536、Exit8、root RET64；192 comparator controls 全检出。新 C0／Unicorn0，
+Guest65536、Exit的7个u64字段及budget1个u64、root RET64；192 comparator controls 全检出。新 C0／Unicorn0，
 复用的旧参考只计一次（`~/vmc-runs/ordered-dispatch-corridor-real-native-20261114-v1/SUMMARY.json`，
 SHA256 `6dc084ebd0a988d20a7f80051c2617f501098bb5b55dc60565a7fbc1e9d0d93d`）。
 成功限定于 checked 分析视图和已测 nominal 域；真实 guard miss／public GuestSize 异常

@@ -1,6 +1,6 @@
 # Checked dispatch 三组件接入与验证
 
-状态：正式 C++ 接入进行中，尚未完成本阶段完整回归或合并。接口与合同见
+状态：正式 C++ 接入、完整回归与功能验证完成；双端封存及 main 合并待收口。接口与合同见
 [组件说明](llvm-checked-dispatch-components.md)。这是显式 custom-pass 能力，不改变默认
 六步优化，也不把验证脚本中的自动候选枚举注册为默认 pass。
 
@@ -24,7 +24,8 @@ SCC 的循环分发 switch 都为0；最终循环 table read 也为0。19个 che
 
 真实 nominal 对拍先执行本次 raw 的 before LLVM32次，再执行处理后 LLVM32次：同16组
 输入，各自 O0/O2，64份结果的全部66136字节均与原16份 Unicorn snapshots 一致。
-比较范围包括76个寄存器字段、65536字节 Guest 和8字节 Exit。192个比较器错误对照
+比较器解读76个寄存器字段；完整原始快照同时覆盖512字节寄存器区、65536字节 Guest、
+56字节 Exit（7个u64字段）、8字节 budget及24字节协议头/调用计数。192个比较器错误对照
 全部检出。新 C/Unicorn 调用为0；旧结果只作冻结参考，不重复计算为新验证。
 这组结果不覆盖 guard-miss、任意 GuestSize 或任意黑盒保护。
 
@@ -91,5 +92,66 @@ Cell各14/261，全部通过且 loader 绑定新库。该补充计数与历史 C
 
 正式 native/real producer 均仅旧 producer.o 加新库重链接，正常 API 为 UND → 实际库 T。
 两个 backend 的合成4次 API 调用都与冻结原型的全部 parsed-before/output IR 字节、统计
-和固定报告字段一致。重型原生回放、真实新库 recipe/边界组和最终双端档案尚待收口；
-原型的成功不代替这些正式运行。
+和固定报告字段一致。各自 after128完整66112字节对拍、fault64/64指定检测、1664比较器
+控制通过；合计新normal256、fault128、controls3328，8条保存流共384帧审计通过。
+旧 before C/LLVM 校准只引用。backend/优化级别重复不扩大64 module-input/16 arena域。
+
+## 正式真实样本：分构建校准
+
+main 对旧未修元数据的 baseline 在01阶段按预期严格失败。root 独立读取整份 old/new
+Module：唯一差异是删除19字节 `!llvm.dbg.cu = !{}` 行。第一版派生 expected fixture
+预计后续阶段均无此行，又在01c被严格门槛拒绝；该阶段 actual 与旧原文件反而逐字节
+相同。验证 probe 的 `importViewBody` 会再次跨 Module 克隆并生成该空行，已对应源码
+定位。这两次真实拒绝与一次启动前 metadata wrapper 错误都保留，没有改为通过。
+
+最终显式 v3 expected fixture 只对01-checked-context和01b-cell-ssa的4份 canonical/bound
+文件删除各自唯一空行；其余30份 old 文件保留原字节/hash。它是有明确补丁和来源的
+expected fixture，不是新的 before 执行，也不在比较时归一化。原 c227 probe 与18项
+完整字节门槛不变。main19阶段实跑通过，所有实际阶段除上述4文件外仍与旧相同。
+Image work127508→127510，增加2个 metadata 事务检查计费；48守卫字节、55保留 STORE、
+126常量事实、闭合结果和原硬预算均不变。
+
+no-Z3 首次误用 main 谓词结果的基准，在谓词阶段被严格门槛拒绝，失败记录保留。
+其正常 API 真实返回 `available=false`，visited/folded/queries等均0；这是构建能力差异。
+另用冻结旧3 helper 对象、同 probe 和实际旧689e库执行独立17阶段 private no-Z3校准，
+它完整验证、保留 ordinary/source/身份，表证明闭合但分发仍有循环，退出4表示结构未完成。
+未执行新 C/Unicorn/native。以此独立基准按相同4文件有限补丁建立 no-Z3 专属 fixture，
+实际80dc再跑19阶段，18项严格字节门槛及核心紧后/最终业务 SCC 均通过，循环分发为0。
+没有把 unavailable 谓词当已证明，也没有为了匹配 main 改预算或删未知路径。
+
+两套结果都是条件分析 view。main final bound SHA
+`394faefad43ac21708d823cc09b0c8cec237048c45340ef4b0f8365b6c87872d`；no-Z3为
+`46545f4ae28b64a6c454c30852c2eaa9449e63e6bae038fc35e220fad498d07b`。
+真实新库 nominal 完整状态复验随后通过：main/no-Z3各32份原始66136字节均精确匹配原16份
+Unicorn期望，各96个比较器错误对照通过，保存结果再次审计通过。新 C/Unicorn/before
+执行均0。正式本阶段合计 normal320、实际fault128/128、比较器controls3520；其中合成
+与真实域分别仍为64 module-input/16 arenas及16真实输入，不把 backend/hostopt重复
+增加为新样本。
+
+## 入口回退与 GuestSize 边界
+
+另外冻结4个场景/3份物理初始frame：改变SP并迁移root sentinel；把6个表项各翻转最高位；
+逻辑GuestSize=0；逻辑GuestSize=0xc808使业务完成而root RET读取越界。物理 backing始终
+65536字节，输入/完整66136字节输出协议不变。只修改独立测试driver的显式逻辑size参数。
+
+先运行原始LLVM8次，以4对O0/O2完整raw结果交叉校准，再执行两实际库各8次；24份正常
+结果全部通过。SP miss实际root RET、RSPc820、业务结果一致；table miss实际产生
+`[2,1,4787,0x80000000000012ba,1,0,0,0]`（7个Exit字段加budget），GuestPC为该具体目标；
+size0实际因内存检查停止且Guest完全未写；late RET在0x100f停止，RSPc808并保留已完成的
+业务输出。后两者为ABI的UNSUPPORTED(5)/MEMORY(3)，未声称执行了操作系统异常处理。
+
+两种明确wrong IR各在两库/O0/O2运行：强制SP守卫通过，要求RSP与Guest均不同；在早退后
+额外翻转Guest[0x8000]与Exit首字节，要求仅这2字节xor1。8次观察全部指定检出，另72个
+比较器控制通过；artifact6314395字节，小于原12MiB预算。RESULTS `d206f45a…`，原始
+LLVM交叉校准 `af89a845…`。没有新C/Unicorn或生产pass调用、skip、排除或归一化。
+
+两个先前失败另保留：v1误调用不存在的saved-helper加载接口，在任何target前失败；v2
+执行2个原LLVM场景后因把具体间接目标的出口误写为UnknownTarget(4)而拒绝。保存的raw
+其实为TRANSFER(2)/BRANCH(1)，root按ABI及原lifter的jmp.unresolved路径独立确认。
+一次未解析时的NeedTarget(3)推断也明确撤回。v3只改成精确的上述8word期待，不接受多种
+reason、不改输入或比较范围。v2的2次尝试不充作成功校准，也没有产品错误结果被忽略。
+
+当前正式成功统计可分为：基础normal320/fault128/controls3520，边界normal24（含8原LLVM
+peer校准、16实际after）/fault8/controls72。合计344/136/3592时必须保留此分层，不能把
+before-peer比较当独立机器oracle，或把重复backend/hostopt当新输入。完整逻辑size/错误
+边界验证的是原LLVM与改写LLVM等价；没有新的Unicorn架构异常对拍。最终双端档案仍待封存。

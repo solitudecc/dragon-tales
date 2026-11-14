@@ -122,8 +122,11 @@ metadata／foreign BlockAddress 身份。表不变式与业务变换逻辑保持
 宏测试7例／939断言全通过，含两个阶段的受控回滚。正式默认 Image6例、Decoder9例、
 Corridor13例，共28例；强制失败 hook 只在私有 TEST 宏下，未加入 installed header。
 
-正式库聚焦／完整测试与 SDK client验证尚待执行，不能把先前 prototype/helper-object
-结果当成新 installed library 的验证。后续报告应区分实际 formal backend 与 prototype。
+正式两套库均已通过28用例/1701断言和 SDK client验证，历史完整 CTest1163/1163与
+1028/1028通过，并单列补跑未在缓存发现列表中的 predicate/C4/Cell 用例。实际库的
+native及真实样本验证结果见[正式接入报告](checked-dispatch-integration-20261114.md)，
+与先前 prototype/helper-object 的计数分开。4场景入口/逻辑GuestSize边界组的24份正常
+状态比较、8次指定wrong-IR检测及72个比较器控制均通过；最终封存及main合并待收口。
 
 这些组件不处理通用 VM、自修改/JIT、一般堆分析或任意 external-call 效果，也不生成独立
 去混淆二进制。遇到特殊混淆可通过新的 custom pass 在已有可证明边界内扩展。

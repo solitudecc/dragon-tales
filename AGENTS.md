@@ -217,7 +217,7 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
-Checked dispatch components (2026-11-14, base `3f0a572`, implementation milestone):
+Checked dispatch components (2026-11-14, base `3f0a572`, implementation `05c6ab2`):
 see `docs/llvm-checked-dispatch-components.md` and
 `docs/checked-dispatch-integration-20261114.md`. Three installed low-level C++
 custom-pass helpers check an executable guarded image-table invariant, distribute
@@ -238,8 +238,21 @@ dispatch switches;19verify checkpoints. Its before32/after32 full66136-byte
 LLVM comparisons and192snapshot controls pass against16old UC references.
 Private synthetic beforeC128/LLVM128,after128,fault64/64,4992controls pass;
 6streams/448frames audited. No old C/UC counts are new. Actual-library synthetic
-IR/stat compatibility now passes each4calls; formal after-native/real/guard-miss
-validation and dual-host sealing are ongoing, required before main merge.
+IR/stat compatibility passes each4calls. Formal synthetic adds256full66112-byte
+matches,128specified faults and3328controls;8streams/384frames audited. Formal
+real each32full66136-byte matches plus96controls passes; combined new normal320,
+fault128/128,controls3520. Old C/UC/before runs remain references. Both actual
+backends pass19stages/18byte gates with0cyclic dispatch switches; no-Z3 uses an
+independent17stage private689e calibration and retains predicates unavailable.
+Four separate guard-miss/GuestSize scenarios add24normal frames (8originalLLVM
+peer calibrations and16actual after),8/8specified wrong-IR observations and72
+snapshot controls; full66136bytes and actual early/late effects are checked.
+No new C/UC, skips or normalization. Boundary v1 fails before any target; v2
+retains2before attempts with an incorrect enum expectation. v3 expects exactly
+TRANSFER2/BRANCH1/known high target, not UNKNOWN_TARGET4 or NEED_TARGET3; source
+and ABI independently confirm this. Do not count failed2 as successful domain.
+Boundary RESULTS d206f45a. No more target work remains; dual-host sealing and
+main merge are pending.
 Conditional view completion is not unconditional cleanup of every ordinary root
 or proof for all unknown protection. No new instruction/IGNIL/69-input campaign.
 Storage: five closed archived old RAM libraries were retired via exact verified
@@ -247,6 +260,9 @@ members/two process scans, all objects/current806d689e retained. Three stopped
 LocalSearch index cache leaves have exact Mac backups; runtime service mask must
 be removed and original active/static service restored after the final window.
 Do not reopen retired old runtime paths without exact archive restoration.
+The earlier28 closed Cell output leaves were separately retired under certificate
+7ca3ea79; old frozen manifests were not edited. Restore exact4f8/d380 members via
+that RESTORE index before replaying their old saved-stream/loader consumers.
 
 Selected Guest cell SSA (2026-11-14, base `17f4f7c`, implementation `b0c3400`):
 see `docs/llvm-guest-cell-ssa.md` and
