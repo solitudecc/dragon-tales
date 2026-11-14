@@ -567,3 +567,185 @@ TEST_CASE("STORE expression funnel admission preserves call and invalid operand 
     CHECK_FALSE(result.changed); CHECK(fixture.text() == before);
   }
 }
+
+namespace {
+void addHistoricalShape(ExpressionFixture &fixture, const std::string &mode,
+                        bool reverse = false, unsigned chain = 0,
+                        unsigned widthLeaves = 0, bool extraCast = false) {
+  auto &context = fixture.module.getContext(); auto *function = fixture.function;
+  const bool mutual = mode == "mutual" || mode == "mutual-dupe";
+  const bool duplicate = mode == "mutual-dupe";
+  const bool cache = mode.starts_with("cache-");
+  auto block = [&](const char *name) { return llvm::BasicBlock::Create(context, name, function); };
+  auto *route = block("history.route"), *left = block("history.left"), *right = block("history.right");
+  auto *loop = block("history.loop"), *back = block("history.back");
+  llvm::cast<llvm::BranchInst>(fixture.block("entry")->getTerminator())->setSuccessor(0, route);
+  llvm::cast<llvm::BranchInst>(fixture.block("other")->getTerminator())->setSuccessor(0, route);
+  Builder b(route); b.CreateCondBr(function->getArg(3), left, right);
+  b.SetInsertPoint(left); b.CreateBr(loop);
+  b.SetInsertPoint(right); llvm::Value *initial = function->getArg(2);
+  if (mode == "poison-arm") initial = llvm::PoisonValue::get(b.getInt32Ty());
+  if (mode == "undef-arm") initial = llvm::UndefValue::get(b.getInt32Ty());
+  if (mode == "freeze-arm") initial = b.CreateFreeze(llvm::PoisonValue::get(b.getInt32Ty()), "history.frozen");
+  if (mode == "call-arm") {
+    auto callee = fixture.module.getOrInsertFunction("history_external", llvm::FunctionType::get(b.getInt32Ty(), {b.getInt32Ty()}, false));
+    initial = b.CreateCall(callee, {function->getArg(2)}, "history.external");
+  }
+  if (mode == "volatile-arm" || mode == "atomic-arm") {
+    auto *load = b.CreateLoad(b.getInt32Ty(), function->getArg(0), "history.observation"); load->setAlignment(llvm::Align(1));
+    if (mode == "volatile-arm") load->setVolatile(true); else load->setAtomic(llvm::AtomicOrdering::Monotonic);
+    initial = load;
+  }
+  if (mode == "nondom-funnel") {
+    auto *callee = llvm::Intrinsic::getOrInsertDeclaration(&fixture.module, llvm::Intrinsic::fshl, {b.getInt32Ty()});
+    initial = b.CreateCall(callee, {function->getArg(2), function->getArg(2), b.getInt32(7)}, "history.funnel");
+  }
+  if (mode == "unsupported-arm") {
+    auto *vector = llvm::Constant::getNullValue(llvm::FixedVectorType::get(b.getInt32Ty(), 2));
+    initial = b.CreateExtractElement(vector, function->getArg(2), "history.unsupported");
+  }
+  b.CreateBr(loop); b.SetInsertPoint(loop);
+  auto *p = b.CreatePHI(b.getInt32Ty(), duplicate ? 4 : 3, "history.p");
+  auto *q = mutual ? b.CreatePHI(b.getInt32Ty(), duplicate ? 4 : 3, "history.q") : nullptr;
+  auto *iteration = b.CreatePHI(b.getInt32Ty(), duplicate ? 4 : 3, "history.iteration");
+  llvm::Value *increment = b.getInt32(1);
+  if (mode == "poison-operand") increment = llvm::PoisonValue::get(b.getInt32Ty());
+  if (mode == "undef-operand") increment = llvm::UndefValue::get(b.getInt32Ty());
+  auto *next = llvm::cast<llvm::BinaryOperator>(b.CreateAdd(q ? static_cast<llvm::Value *>(q) : p, increment, "history.next"));
+  next->setHasNoSignedWrap(); next->setHasNoUnsignedWrap();
+  auto *qnext = q ? b.CreateXor(p, b.getInt32(0x12345678), "history.qnext") : nullptr;
+  auto *count = b.CreateAdd(iteration, b.getInt32(1), "history.count");
+  b.CreateCondBr(b.CreateICmpULT(iteration, b.getInt32(2)), back, fixture.block("seed"));
+  b.SetInsertPoint(back);
+  if (duplicate) b.CreateCondBr(function->getArg(3), loop, loop); else b.CreateBr(loop);
+  auto incoming = [&](llvm::PHINode *phi, llvm::Value *carried, llvm::Value *rightValue) {
+    auto addBack = [&]() { phi->addIncoming(carried, back); if (duplicate) phi->addIncoming(carried, back); };
+    if (!reverse) addBack();
+    phi->addIncoming(function->getArg(2), left); phi->addIncoming(rightValue, right);
+    if (reverse) addBack();
+  };
+  incoming(p, next, initial); if (q) incoming(q, qnext, function->getArg(2));
+  for (auto *predecessor : {left, right}) iteration->addIncoming(b.getInt32(0), predecessor);
+  iteration->addIncoming(count, back); if (duplicate) iteration->addIncoming(count, back);
+  auto *choice = llvm::dyn_cast_or_null<llvm::SelectInst>(fixture.instruction("encoded.next")); REQUIRE(choice);
+  b.SetInsertPoint(choice); llvm::Value *observed = p;
+  if (q) observed = b.CreateXor(p, q, "history.pair");
+  for (unsigned n = 0; n < chain; ++n) observed = b.CreateAdd(observed, b.getInt32(0), "history.chain");
+  if (widthLeaves) {
+    std::vector<llvm::Value *> leaves{b.CreateZExt(observed, b.getInt64Ty(), "history.wide")};
+    for (unsigned n = 0; n < widthLeaves; ++n) leaves.push_back(b.getInt64(1000 + n));
+    while (leaves.size() > 1) {
+      std::vector<llvm::Value *> nextLevel;
+      for (std::size_t n = 0; n < leaves.size(); n += 2)
+        nextLevel.push_back(n + 1 < leaves.size() ? b.CreateAdd(leaves[n], leaves[n + 1], "history.tree") : leaves[n]);
+      leaves = std::move(nextLevel);
+    }
+    observed = leaves.front();
+    if (extraCast) observed = b.CreateZExt(observed, llvm::IntegerType::get(context, 128), "history.extra");
+  }
+  auto *condition = b.CreateICmpULT(observed, llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(observed->getType()), 0x70000000), "history.condition");
+  choice->setCondition(condition);
+  if (cache) {
+    auto *head = fixture.block("head"); b.SetInsertPoint(&head->front());
+    llvm::Value *bit;
+    if (mode == "cache-acyclic") {
+      auto *fresh = b.CreateLoad(b.getInt32Ty(), function->getArg(0), "history.fresh"); fresh->setAlignment(llvm::Align(1));
+      bit = b.CreateICmpEQ(fresh, b.getInt32(7), "history.second");
+    } else bit = b.CreateICmpEQ(p, function->getArg(2), "history.second");
+    auto *carried = b.CreateZExt(bit, b.getInt32Ty(), "history.carried");
+    auto *sw = llvm::cast<llvm::SwitchInst>(fixture.block("dispatch")->getTerminator());
+    sw->setSuccessor(1, loop); // The fixture adds case100 first.
+    p->addIncoming(carried, fixture.block("dispatch")); iteration->addIncoming(b.getInt32(0), fixture.block("dispatch"));
+    auto *hitPhi = llvm::cast<llvm::PHINode>(&fixture.block("hit")->front());
+    hitPhi->removeIncomingValue(hitPhi->getBasicBlockIndex(fixture.block("dispatch")), false);
+    auto *seedStore = static_cast<llvm::StoreInst *>(nullptr);
+    for (auto &instruction : *fixture.block("seed")) if (auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction)) seedStore = store;
+    REQUIRE(seedStore); seedStore->setOperand(0, function->getArg(2));
+    llvm::Value *first = choice;
+    if (mode == "cache-failed") {
+      Builder seedBuilder(choice);
+      auto *bad = seedBuilder.CreateAnd(condition, llvm::PoisonValue::get(b.getInt1Ty()), "history.bad");
+      first = seedBuilder.CreateSelect(bad, choice->getTrueValue(), choice->getFalseValue(), "history.bad.choice");
+    }
+    auto *second = b.CreateSelect(mode == "cache-failed" ? condition : bit, b.getInt32(0), b.getInt32(0), "history.second.choice");
+    auto *value = b.CreateAdd(first, second, "history.stored");
+    auto *store = b.CreateStore(value, seedStore->getPointerOperand()); store->setAlignment(llvm::Align(1));
+    // Close this already-consumed seed role without marking the block as a
+    // generated corridor. It can still be copied from the earlier seed, so
+    // a separate legal head-as-seed context cannot hide the cache-role check.
+    head->getTerminator()->setMetadata("dragon.guarded-store-expressions.generated", llvm::MDNode::get(context, {}));
+  }
+  if (mode == "integer-cycle") {
+    auto *head = fixture.block("head"); auto *selected = llvm::PHINode::Create(b.getInt32Ty(), 1, "history.integer", &head->front());
+    selected->addIncoming(p, fixture.block("seed")); b.SetInsertPoint(head->getTerminator());
+    auto *index = b.CreateAdd(b.getInt64(1024), b.CreateShl(b.CreateZExt(selected, b.getInt64Ty()), b.getInt64(3)), "history.integer.index");
+    fixture.instruction("table.index")->replaceAllUsesWith(index);
+  }
+  for (auto *closed : {fixture.block("entry"), fixture.block("other"), route, left, right, loop, back}) {
+    closed->getTerminator()->setMetadata(Generated, llvm::MDNode::get(context, {}));
+    closed->getTerminator()->setMetadata("dragon.guarded-store-expressions.generated", llvm::MDNode::get(context, {}));
+  }
+  fixture.verify();
+}
+void checkHistoricalShape(ExpressionFixture &fixture, bool duplicate = false) {
+  fixture.check({100});
+  CHECK(fixture.block("history.loop.transition") == nullptr);
+  auto *next = llvm::dyn_cast_or_null<llvm::BinaryOperator>(fixture.instruction("history.next")); REQUIRE(next);
+  CHECK(next->hasNoSignedWrap()); CHECK(next->hasNoUnsignedWrap());
+  auto *choice = llvm::dyn_cast_or_null<llvm::SelectInst>(fixture.instruction("encoded.next")); REQUIRE(choice);
+  CHECK(choice->getCondition() == fixture.instruction("history.condition"));
+  auto *p = llvm::dyn_cast_or_null<llvm::PHINode>(fixture.instruction("history.p")); REQUIRE(p);
+  CHECK(p->getNumIncomingValues() == (duplicate ? 4 : 3));
+  std::map<llvm::BasicBlock *, unsigned> predecessors;
+  for (auto &block : *fixture.function) for (auto *successor : llvm::successors(&block))
+    if (successor == fixture.block("history.loop")) ++predecessors[&block];
+  for (auto &phi : fixture.block("history.loop")->phis()) {
+    std::map<llvm::BasicBlock *, unsigned> actual;
+    for (unsigned n = 0; n < phi.getNumIncomingValues(); ++n) ++actual[phi.getIncomingBlock(n)];
+    CHECK(actual == predecessors);
+  }
+  auto *branch = llvm::cast<llvm::BranchInst>(fixture.block("bounds.transition")->getTerminator());
+  CHECK(branch->getSuccessor(1) == fixture.block("miss"));
+}
+}
+
+TEST_CASE("STORE expression closed Boolean shapes admit historical self and mutual PHIs", "[llvm][guarded-store-expressions][guarded-boolean-shape-cycles]") {
+  for (const char *mode : {"self", "mutual", "mutual-dupe", "freeze-arm"}) for (bool reverse : {false, true}) {
+    INFO(mode << " " << reverse); ExpressionFixture fixture(32, "partial-missing"); addHistoricalShape(fixture, mode, reverse);
+    auto result = fixture.run(); REQUIRE(result.changed); CHECK(result.counters.at("partial_rewritten_edges") == 1);
+    checkHistoricalShape(fixture, std::string(mode) == "mutual-dupe");
+  }
+}
+
+TEST_CASE("STORE expression closed shapes reject late invalid arms without cache publication", "[llvm][guarded-store-expressions][guarded-boolean-shape-cycles]") {
+  for (const char *mode : {"poison-arm", "undef-arm", "poison-operand", "undef-operand", "call-arm", "volatile-arm", "atomic-arm", "nondom-funnel", "unsupported-arm", "integer-cycle", "cache-cyclic", "cache-failed"})
+    for (bool reverse : {false, true}) {
+      INFO(mode << " " << reverse); ExpressionFixture fixture(32, "partial-missing"); addHistoricalShape(fixture, mode, reverse);
+      auto before = fixture.text(); auto result = fixture.run(); CHECK_FALSE(result.changed); CHECK(fixture.text() == before);
+    }
+  ExpressionFixture acyclic(32, "partial-missing"); addHistoricalShape(acyclic, "cache-acyclic");
+  auto result = acyclic.run(); REQUIRE(result.changed); CHECK(result.counters.at("partial_rewritten_edges") == 1);
+  auto fast = acyclic.fast(); REQUIRE(fast.size() == 1); REQUIRE(fast.front()->getNumCases() == 1);
+  CHECK(fast.front()->case_begin()->getCaseValue()->equalsInt(100));
+  auto *fallback = llvm::dyn_cast<llvm::SwitchInst>(fast.front()->getDefaultDest()->getTerminator()); REQUIRE(fallback);
+  CHECK(fallback->getCondition() == fast.front()->getCondition()); CHECK(fallback->getNumCases() == 4);
+  CHECK(acyclic.instruction("history.second.transition") != nullptr);
+  CHECK(acyclic.instruction("history.condition.transition") == nullptr);
+}
+
+TEST_CASE("STORE expression closed shapes preserve caller depth and shared node budgets", "[llvm][guarded-store-expressions][guarded-boolean-shape-cycles]") {
+  // stored Select contributes one existing Enumerator node. The root starts
+  // at depth1; 28 add-zero nodes leave the deepest new constant at depth32.
+  ExpressionFixture depth32(32, "partial-missing"); addHistoricalShape(depth32, "self", false, 28);
+  REQUIRE(depth32.run().changed); checkHistoricalShape(depth32);
+  ExpressionFixture depth33(32, "partial-missing"); addHistoricalShape(depth33, "self", false, 29);
+  auto before = depth33.text(); auto exhausted = depth33.run(); CHECK_FALSE(exhausted.changed); CHECK(depth33.text() == before);
+  CHECK(exhausted.counters.at("budget_exhausted") > 0);
+  // P/next/arg/one=4, zext=1, 59 leaves+59 adds=118, ICmp+bound=2:
+  // 125 shape nodes + outer Select + its two finite arms = exactly128.
+  ExpressionFixture nodes128(32, "partial-missing"); addHistoricalShape(nodes128, "self", false, 0, 59);
+  REQUIRE(nodes128.run().changed); checkHistoricalShape(nodes128);
+  ExpressionFixture nodes129(32, "partial-missing"); addHistoricalShape(nodes129, "self", false, 0, 59, true);
+  before = nodes129.text(); exhausted = nodes129.run(); CHECK_FALSE(exhausted.changed); CHECK(nodes129.text() == before);
+  CHECK(exhausted.counters.at("budget_exhausted") > 0);
+}

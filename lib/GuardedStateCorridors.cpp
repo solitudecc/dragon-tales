@@ -111,7 +111,7 @@ struct Enumerator {
   BooleanScenario *scenario=nullptr;
   const llvm::DominatorTree *historicalDom=nullptr;
   const llvm::DominatorTree *observationDom=nullptr;
-  std::unordered_set<llvm::Value *> checkedHistory,activeHistory;
+  std::unordered_set<llvm::Value *> checkedHistory,activeHistory,cyclicHistory;
   bool allowPartial=false,partialMasks=false,bitSlices=false,usedPartial=false,fatalPartial=false;
   StoreExpressionOverride *storeExpression=nullptr;
   bool strictFailures=false;
@@ -129,7 +129,71 @@ struct Enumerator {
   // Only validates the bounded SSA dependency shape of an old Boolean PHI.
   // It does not prove a value, memory contents or absence of flag-produced poison.
   // LOAD/freeze are existing execution boundaries; the original IR still runs.
+  // Only the new observation profile closes bounded dependency graphs. A
+  // gray edge is pending work in this check, never a cached valid result or a
+  // value. All remaining operands/PHI arms must close before any publication.
+  bool closedHistoricalBoolean(llvm::Value *root,unsigned rootDepth) {
+    struct Shape {bool pending=true,cyclic=false;};
+    std::unordered_map<llvm::Value *,Shape> local;
+    auto visit=[&](auto &&self,llvm::Value *value,unsigned depth)->std::optional<bool> {
+      if(!work.charge())return {};
+      if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(value))return {};
+      if(checkedHistory.contains(value))return cyclicHistory.contains(value);
+      if(auto found=local.find(value);found!=local.end())
+        return found->second.pending?true:found->second.cyclic;
+      // Only first expansions consume nodes/depth. A gray/cache reference is
+      // charged above, but does not restart depth or hide later new operands.
+      if(depth>MaxDepth || ++nodes>MaxNodes){limited=true;return {};}
+      local.emplace(value,Shape{});
+      bool valid=false,cyclic=false;
+      if(llvm::isa<llvm::ConstantInt,llvm::Argument,llvm::FreezeInst>(value))valid=true;
+      else if(auto *load=llvm::dyn_cast<llvm::LoadInst>(value)) {
+        valid=load->isSimple();
+        for(auto &operand:load->operands()) {
+          if(!work.charge())return {};
+          if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(operand.get()))valid=false;
+        }
+      } else if(auto *intrinsic=llvm::dyn_cast<llvm::IntrinsicInst>(value)) {
+        valid=!positions.contains(intrinsic->getParent()) &&
+              observationDom->dominates(intrinsic,seed->getTerminator()) &&
+              integerFunnelShift(*intrinsic,work);
+      } else if(llvm::isa<llvm::PHINode,llvm::SelectInst,llvm::CastInst,
+                           llvm::BinaryOperator,llvm::ICmpInst>(value)) {
+        valid=true;
+        for(auto &operand:llvm::cast<llvm::Instruction>(value)->operands()) {
+          auto child=self(self,operand.get(),depth+1);
+          if(!child){valid=false;break;}
+          cyclic|=*child;
+        }
+      }
+      if(!valid)return {};
+      // A false result has no reachable gray edge and only acyclic children;
+      // a true result carries a reachable DFS backedge witness. Thus cache
+      // cycle bits belong to each node, never indiscriminately to all leaves.
+      auto &closed=local.at(value);closed.pending=false;closed.cyclic=cyclic;
+      return cyclic;
+    };
+    auto result=visit(visit,root,rootDepth);
+    if(!result)return false;
+    if(*result) {
+      if(!work.charge(3))return false;
+      auto *instruction=llvm::dyn_cast<llvm::Instruction>(root);
+      if(!instruction || positions.contains(instruction->getParent()) ||
+         !observationDom->dominates(instruction,seed->getTerminator()))return false;
+    }
+    // Reserve every publication visit before changing the shared cache. Any
+    // failure, including a late bad arm/leaf or this budget, discards local.
+    if(!work.charge(local.size()))return false;
+    for(const auto &[value,shape]:local) {
+      checkedHistory.insert(value);
+      if(shape.cyclic)cyclicHistory.insert(value);
+    }
+    return true;
+  }
   bool safeHistoricalBoolean(llvm::Value *value,unsigned depth=0) {
+    // observationDom is supplied only by guarded-store-expressions. Preserve
+    // every historical profile's recursive admission/cache and get() cycles.
+    if(observationDom)return closedHistoricalBoolean(value,depth);
     if(!work.charge())return false;
     if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(value))return false;
     if(checkedHistory.contains(value))return true;
