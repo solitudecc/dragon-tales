@@ -51,21 +51,46 @@ disagrees, known deliberate differences, reporting - are in
 
 ## 2. Build and test environment
 
-Development happens on macOS; **building and testing happens on an Ubuntu VM**
+Development happens on macOS. The owner authorized **ROCK 5B as the primary
+build/test host on 2026-11-14**: `ssh ubuntu@192.168.10.241`, owned checkout
+`~/dragon-tales-rock5b`. It is aarch64, Ubuntu 22.04.5/glibc 2.35, with 32 GB
+RAM and about 446 GB initially available. Its eight cores are four A55 and
+four A76; start with four build jobs on CPUs 4–7 and measure before increasing.
+
+The active environment and CMake dependency arguments are under
+`~/vmc-runs/rock5b-bootstrap-20261114-v1/ENV.reference-v2.sh` and
+`CMAKE-DEPENDENCY-ARGS.reference-v2.json` in that directory. The original
+stock `ENV.sh` / argument file remain as first-attempt evidence.
+They select LLVM 21.1.8, GCC/G++ 14.3, ccache, and isolated Z3 4.13.3 and
+Unicorn 2.1.4 headers/libraries/Python packages. Keep GCC11/LLVM11 available;
+GCC11 lacks the project's `std::format` support. Do not copy old VM binaries
+across glibc environments. Verify actual loaded dependencies and Unicorn test
+registration. C++ uses the stock Unicorn wheel; Python integration tests use
+the isolated `rock5b-ucdev-reference-20261114-v1/venv/bin/python` with source
+HEAD `2a05c418`, because stock has the unsigned RET-imm16 reference bug.
+That reference covers x86/ARM/AArch64, with unchanged framework test cases;
+its Z3/cffi reuse the base files. Main uses `build`; no-Z3 uses a separate
+`build-noz3` when built.
+See `docs/rock5b-validation-environment-20261114.md` for exact versions,
+provenance, build status and test results. Do not infer new-host validation
+from historical VM counts.
+
+The **previous Ubuntu VM remains the historical/reference host**
 (aarch64, owner expanded RAM to 8 GB; about 7.2 GiB visible): `ssh cc@192.168.10.169` (key-based; ask the owner if keys
 are missing). It has LLVM 21.1.8, Z3 4.13.3, Unicorn 2.1.4 (+ Python bindings),
 pyelftools, pefile, gcc, `i686-`/`x86_64-w64-mingw32-gcc`, `llc-21`.
 
-- Clone/build: `~/dragon-tales`, build dir `~/dragon-tales/build`
+- Historical VM only: owned `~/dragon-tales-overlap`, build dir
+  `~/dragon-tales-overlap/build`
   (RelWithDebInfo, Ninja). `cmake --build build -j3` (more jobs can OOM).
-- Tests: `cd build && ctest -j3` (fast suite, ~380 tests with Z3/Unicorn);
+- Tests: `cd build && ctest -j3` (registered fast suite; counts are versioned);
   `./build/bin/dragon_tests "[semantic]"` (JIT round-trip vs Unicorn, slow);
   `"[expensive]"` exists too.
 - Real-world binaries for whole-program checks: `~/bench/lua32.exe`,
   `~/bench/lua64.exe` (mingw -O2, with symbols), `~/bench/lua_a64` (native gcc
   -O2), built from Lua 5.4.7 sources in `~/bench/lua-5.4.7`.
 
-Current owned VM worktree is **`~/dragon-tales-overlap`**, with `build` and
+The old owned VM worktree is **`~/dragon-tales-overlap`**, with `build` and
 `build-noz3`. Leave the original dirty `~/dragon-tales` checkout untouched.
 The reset/apply workflow below applies only to the owned worktree. Disk space
 is tight: link the two builds sequentially, and retire evidence only after a

@@ -1,0 +1,69 @@
+{
+  "build_manifest": {
+    "path": "/ABSOLUTE/FROZEN/ROCK-BUILD.json",
+    "sha256": "FREEZE_AFTER_ROCK_BUILD"
+  },
+  "case": {
+    "c_level": "O2",
+    "entry_symbol": "oracle_entry",
+    "family": "flatten-switch",
+    "kernel_symbol": "kernel"
+  },
+  "coverage_manifest": {
+    "path": "/ABSOLUTE/FROZEN/FLATTEN-O2-MACHINE-COVERAGE.json",
+    "sha256": "88838c61c0682d93f6279406df8af983dbaa4f1b86f1bca434d5139d80522481"
+  },
+  "note": "NONEXECUTABLE EXAMPLE: replace explicit tool/runtime/script/build/coverage bindings after ROOT review; never edit historical manifests or source bytes.",
+  "python": {
+    "path": "/ABSOLUTE/ROCK/VENV/bin/python",
+    "sha256": "FREEZE_ACTUAL_INTERPRETER_BYTES"
+  },
+  "ready": false,
+  "runtime": {
+    "backend": {
+      "path": "/home/ubuntu/dragon-tales-rock5b/build/lib/libdragon.so",
+      "sha256": "FREEZE_AFTER_ROCK_BUILD"
+    },
+    "library_path": [
+      "/home/ubuntu/dragon-tales-rock5b/build/lib",
+      "/ABSOLUTE/FROZEN/WHEEL-Z3"
+    ],
+    "shim": {
+      "path": "/home/ubuntu/dragon-tales-rock5b/build/c_shim/libdragon_c.so",
+      "sha256": "FREEZE_AFTER_ROCK_BUILD"
+    }
+  },
+  "schema": "dragon-portable-decoded-region-plan-v1",
+  "script": {
+    "path": "/ABSOLUTE/FROZEN/progressive_decoded_region_baseline.py",
+    "sha256": "f050a0daf96fb1d90fa3cf6daf758cd516a5a1442d29a13eabf66f55f80aa930"
+  },
+  "solver": {
+    "enabled": true,
+    "library": {
+      "path": "/ABSOLUTE/FROZEN/WHEEL-Z3/libz3.so.4.13",
+      "sha256": "FREEZE_FROM_ROCK_DEPENDENCY_AUDIT"
+    }
+  },
+  "source": {
+    "files": {
+      "c_shim/dragon_c.h": "abbeefc409a09067f6f246e62fef26a45b6b8c7dd09d2ffcc670c55e33460873",
+      "include/dragon/lifters/llvm/Execution.h": "b0674f3684a1393a89c06b00beee6402eaa20e388f418491b7c1713016b1b560",
+      "python/dragon.py": "4cd267443b7b9c41c05ba3764658ba83ea4b4d13f69b137d34b4a6aabb6d8e73",
+      "scripts/validation/progressive_deobfuscation_baseline.py": "3c399e7e327883836f341a41001974819990d39aa6f77462bc3f4304c15729ba",
+      "scripts/validation/static_region_replay.py": "7fac5241570157129bf56a05af98090fa2c8b011f68873b22963c3a5355cc739"
+    },
+    "root": "/home/ubuntu/dragon-tales-rock5b"
+  },
+  "tools": {
+    "opt": {
+      "path": "/usr/bin/opt-21",
+      "sha256": "FREEZE_AFTER_ROCK_BUILD"
+    }
+  },
+  "transfer": {
+    "path": "/home/ubuntu/vmc-runs/progressive-flatten-rock5b-preflight-20261114-v1/TRANSFER-MANIFEST.json",
+    "root": "/home/ubuntu/vmc-runs/progressive-flatten-rock5b-preflight-20261114-v1",
+    "sha256": "719ca007dcbf1c790bfe14104a71fb8a7ab648d04a848d6db50bc5c45fc6fc07"
+  }
+}
