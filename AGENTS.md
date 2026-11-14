@@ -217,6 +217,21 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+默认谓词证明调度（2026-11-14，basefb85840，phase1）：最终CPP298ad88、tests30b904a，
+安全 NSW/NUW Add/Sub 独立 operand 范围与 canonical scalar fshl/fshr 未知SSA边界；
+unknown call/alias/poison 拒绝不放宽。固定最多8组完整赋值只有实际0/1双witness才延后，
+不据抽样发常量；独立 sampling work cap 不是CPU上界，原 solver/default budget不增。
+81320真实默认query64提前耗光、gain0保留；最终实际main32c22c使manualO2 select成为常量，
+四图按manualO0/O2、flattenO0/O2为fold0/1/0/0，仍非full CFF。
+实际main22/1357、NZ2/10，full1163+1028全过。
+origin before最终12/688有6cases/13assert失败；wrapper错期待exit6导致outer1，原失败保留，
+只读audit-v2确认Catch实际exit13，无重跑或放宽。独立baseline native1152/14976controls，
+actual另1152/14976；576module-input/96initial域不因host级别扩张。另128故障观察/128指定
+检出不算normal。真实回放128native/64UC/384controls、newC0，独立saved全66136byte审核
+通过（99e019b9），新ModuleID按阶段严格绑定，不改旧checker/strip/normalize；归档seal待补。
+图像表原型未注册，不属于本实现；无新69corpus/单指令campaign。详见
+`docs/predicate-proof-scheduling-20261114.md`，最终归档/真实审计由root补齐。
+
 Historical Boolean closed graphs with legacy priority (2026-11-14, basef431ba4,
 initialf31631a, correctedf68b1ee): only opt-in STORE-expression predictions.
 Old recursive/cache/search/selection/order/fuel run first. Already charged

@@ -20,10 +20,32 @@ ZEXT/SEXT/TRUNC、select，以及范围内的常量移位。不同 SSA Load、PH
 初始数据，不跨调用假定内存或寄存器不变，也不利用前驱守卫缩小输入范围。
 
 首版不展开 PHI，不处理除法/余数、FP、调用结果、原子或 volatile load、变长/越界
-移位、带 exact 的移位，以及带 NSW/NUW 的相关算术。直接遇到 undef/poison 时拒绝
+移位、带 exact 的移位，以及带 NSW/NUW 的相关算术。2026-11-14 增加了以下
+有限边界支持；其余拒绝规则保留。直接遇到 undef/poison 时拒绝
 降低；freeze 的结果则是已固定的任意输入。使用 LLVM 的值与优化语义，不修改 Guest
 UNDEF 或 CALL/RET 契约。有关 undef/poison/freeze 的区别见
 [LLVM UB 文档](https://llvm.org/docs/UndefinedBehavior.html)。
+
+带 NSW/NUW 的 ADD/SUB 只有在完整降低两个操作数之后，才能用独立的操作数
+区间证明不会溢出。区间只来自字面常量、直接常量 AND 掩码和零扩展；不使用
+结果标记、PHI 历史、路径或 Guest 内容证明自身正确。区间端点用额外一位计算。
+带这些标记的 MUL/SHL 仍拒绝。
+
+规范的标量 `llvm.fshl/fshr` 现在可以成为未知 SSA 观察值。必须先检查全部参数、
+类型、调用形态和副作用；同一次调用复用同一未知量，不同调用保持独立。此处不
+计算旋转结果，不声明参数 definedness，也不接纳普通外部调用的结果。
+
+非恒定条件的 SMT 查询现在可以延后：最多八组完整数值赋值，只有同一个降低后的
+位向量公式确实产生过 0 和 1，才能进入延后队列。这只说明该过近似公式会变化，
+不作为原程序的路径证据，更不能由抽样发布常量。其余条件先按原规则证明，延后
+项再按首次消费者顺序使用剩余查询。单一变化条件仍实际执行原来的两次查询。
+额外赋值工作独立限制为 `min(max_queries * max_expression_nodes, 1048576)`，
+每次预付 `1 + lowered_nodes + SSA_atoms` 单位；队列最多 `min(max_queries,4096)`
+项。该计量不是 Z3 内部 CPU 上界。额外工作不足或求值失败时回到原 SMT 路径；
+原降低节点工作、64 次默认查询、逐查询时间和 resource limit 均未增加。
+
+本次 before/after、原生校验和真实样本结果见
+[谓词边界与查询调度验证](predicate-proof-scheduling-20261114.md)。
 
 此处能处理乘法参与的简单恒定谓词，例如 `((x*(x+1))&1) == 0`；这不等于通用非线性
 MBA 化简。依赖 Tigress 链表、初始化后的堆内容、状态变量值集合或跨块路径约束的条件，
