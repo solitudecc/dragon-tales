@@ -95,6 +95,9 @@ add_executable(dragon_tests
         lifters/TestLLVMLiftProvenance.cpp
         lifters/TestLLVMGuestMemorySSA.cpp
         lifters/TestLLVMGuestCellSSA.cpp
+        lifters/TestLLVMImageTableContext.cpp
+        lifters/TestLLVMDispatchDecoderSSA.cpp
+        lifters/TestLLVMDispatchCorridor.cpp
         lifters/TestLLVMGuestMemoryJoinEdges.cpp
         lifters/TestLLVMGuestIndexProofCache.cpp
         lifters/TestLLVMGuestAddressWidths.cpp

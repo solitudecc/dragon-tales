@@ -16,6 +16,9 @@ add_library(libdragon SHARED
         CallEffectSummary.cpp
         GuestMemorySSA.cpp
         LLVMGuestCellSSA.cpp
+        LLVMImageTableContext.cpp
+        LLVMDispatchDecoderSSA.cpp
+        LLVMDispatchCorridor.cpp
         GuestMemoryEdges.cpp
         GuardedTransitions.cpp
         GuardedTargetSets.cpp

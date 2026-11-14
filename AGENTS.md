@@ -217,6 +217,37 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Checked dispatch components (2026-11-14, base `3f0a572`, implementation milestone):
+see `docs/llvm-checked-dispatch-components.md` and
+`docs/checked-dispatch-integration-20261114.md`. Three installed low-level C++
+custom-pass helpers check an executable guarded image-table invariant, distribute
+a finite scalar decoder through complete SSA edges, and thread bounded original
+dispatcher corridors while preserving historical values, memory/error ordering
+and all actual exit PHI slots. No default pipeline/C/Python change; automatic
+candidate discovery remains in the validation probe. Image transaction fix b52d
+restores metadata/cc/attrs and refuses unsupported identities before cloning.
+Old same-API1/74 fails8assertions; new private7/939 passes. Old foreign-address
+CloneModule crash and a distinct stale-handle fixture failure are both retained.
+Formal main2645/no-Z380dc each28/1701 plus SDK pass, APIs UND->actual library T,
+no implementation object/test hook/shared LLVM. Historical cached CTest1163/1163
+and1028/1028, supplementary predicate12/962 and1/5, C4each16/3493, Celleach14/261
+pass. Original Cell/C4/PP/predicate objects and94LLVM archives are preserved;
+6GCC compiles/2links and428pins are checked. Regression summary26f6078f.
+Private manual-O2 checked view threads8/8 edges, immediately/finally has0cyclic
+dispatch switches;19verify checkpoints. Its before32/after32 full66136-byte
+LLVM comparisons and192snapshot controls pass against16old UC references.
+Private synthetic beforeC128/LLVM128,after128,fault64/64,4992controls pass;
+6streams/448frames audited. No old C/UC counts are new. Actual-library synthetic
+IR/stat compatibility now passes each4calls; formal after-native/real/guard-miss
+validation and dual-host sealing are ongoing, required before main merge.
+Conditional view completion is not unconditional cleanup of every ordinary root
+or proof for all unknown protection. No new instruction/IGNIL/69-input campaign.
+Storage: five closed archived old RAM libraries were retired via exact verified
+members/two process scans, all objects/current806d689e retained. Three stopped
+LocalSearch index cache leaves have exact Mac backups; runtime service mask must
+be removed and original active/static service restored after the final window.
+Do not reopen retired old runtime paths without exact archive restoration.
+
 Selected Guest cell SSA (2026-11-14, base `17f4f7c`, implementation `b0c3400`):
 see `docs/llvm-guest-cell-ssa.md` and
 `docs/guest-cell-ssa-integration-20261114.md`. The installed low-level C++ helper
