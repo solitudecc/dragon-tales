@@ -67,6 +67,26 @@ profiles, default recipe, ABI and work/expression budgets are unchanged.
 The independent [intrinsic-seed checkpoint](guarded-intrinsic-seeds-validation-20261114.md)
 records the validation and remaining outer-dispatch limitation.
 
+## Historical Boolean dependency cycles
+
+After the complete legacy search freezes its candidate prefix, the
+STORE-expression profile may retry original Boolean-cycle refusals using
+a bounded closed dependency graph. New candidates use only the remaining
+shared work/candidate/copy budgets and cannot replace a legacy selection. A DFS backedge records a pending dependency; every
+remaining operand and PHI arm must still pass the existing shape rules.
+The checker publishes valid-cache entries only after the complete graph,
+root role and publication work budget pass. Per-node reachable-cycle bits
+avoid marking unrelated leaves cyclic, and cached cyclic roots still require
+an original observation outside the copied path that dominates the seed.
+
+This validates prediction shape only. Integer value enumeration still refuses
+cycles. No historical constant, initialized memory or definedness fact is
+inferred; original flags/operations and actual target checks/full fallbacks
+remain. The node/depth/work caps stay128/32/1000000. Gray/cache references
+consume work; only first expansions consume nodes/depth, inheriting the caller
+depth. Other profiles keep their original recursive checker. See the separate
+[closed-shape checkpoint](guarded-boolean-shape-cycles-validation-20261114.md).
+
 ## Parent implementation validation
 
 The initial STORE-expression implementation passed 10 cases / 777 assertions

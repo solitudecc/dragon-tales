@@ -217,6 +217,44 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Historical Boolean closed graphs with legacy priority (2026-11-14, basef431ba4,
+initialf31631a, correctedf68b1ee): only opt-in STORE-expression predictions.
+Old recursive/cache/search/selection/order/fuel run first. Already charged
+original gray-failure Search frames are retained, then closed queries use
+remaining shared Work/candidate/copy caps and cannot replace any old selected
+key. New exhaustion cannot discard the old frozen prefix. Closed graphs check
+all arms before publishing per-node cyclic cache state and recheck root
+outside-path/dominance even on hits; integer get cycles and old profiles stay.
+Caps128nodes/32depth/1Mwork unchanged. V1 matched its bounded native domain but displaced3old
+flatten-O2 contexts; its FAILED precision gate is retained in77payload archive
+374fd40606c79606230cab343a1e0e0188eb02658eff3a183c4991a9f38d581c.
+V2 scheduling regression fails6/108asserts on both v1 actual runtimes; corrected
+actual main/no-Z3 each16/3493pass, historical full1163/1163 and1028/1028pass.
+Before-only C/Python/LLVM calibration each O0/O2 gives512matches/4608controls.
+V2 separately executes main/no-Z3 x hostO0/O2:2048whole-state matches,
+1792fault observations/1264specified detected,18432comparator controls.
+Same192unique source/input domain/12IR+C source pairs; wrong-hint shares
+ordinary source, repeated backends/host levels do not expand business inputs.
+Saved v2 audits29payload/93306B REPORTc98cea8cff0ce0490586302d7d41b13d8a2ed756c7f111ceaa2faa0fbc6db2b8.
+V2 native products144/144files match v1, yet machine code is rebuilt/replayed.
+Real proto12 and actual24parsed-before/after/reports are byte-equal to f431:
+0/6/16/25rewrites, allold25flattenO2 restored, loopContexts0. Compatibility
+only: no new real native count or real de-flattening gain; old48businessSCC
+and outer dispatcher remain. No instruction/IGNIL/Unicorn-instruction/full69
+campaign. No giant1Mwork stress fixture: exhaustion preservation has code review,
+while128/129nodes,32/33depth and three public copy/candidate caps are tested.
+See `docs/guarded-boolean-shape-cycles-validation-20261114.md` for versions,
+exact domains, failed-v1 evidence, unchanged guards and final artifact seal.
+Final1303payload/187238648B archive SHA3c428cbb87be414fe081601b3174c03e7f9be7435e378bfe3831c124616302d4
+is independently dual-host file-set/size/SHA verified; logical1126917679B.
+Sourcef68b1ee, both runtime generations and all failures/data remain in it.
+VM `~/vmc-runs/guarded-boolean-shape-cycles-evidence-20261114-v1.tar.xz`;
+Mac `validation-artifacts/guarded-boolean-shape-cycles-20261114/` under deob.
+No new v1/v2 artifact was retired after this snapshot. Earlier archived obsolete
+outputs have exact RESTORE notices; legacy raw/hints stay. Recheck disk/tmpfs
+before another fresh1GiB campaign: final archival consumes space after checks.
+
+
 Already executed funnel-intrinsic seeds (2026-11-14, base4bde2e8,
 implementation289bb23): opt-in `guarded-store-expressions` admits original
 scalar fshl/fshr in an already executed seed, or as an original observation
