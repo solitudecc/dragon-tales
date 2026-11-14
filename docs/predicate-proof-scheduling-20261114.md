@@ -131,7 +131,7 @@ controls，new C runs0，skips/exclusions/normalizations均0。独立 saved 审�
 首次 ready sealer 误用了旧 B recipe 的20/128/100000，metadata 断言在执行回放前
 拒绝；失败保留。新 ready-v3 按原公开默认25/64/256/200000严格封定，没有改变生产预算。
 
-## 证据与待补 seal
+## 证据封存
 
 子任务冻结证据根：`~/vmc-runs/ordinary-predicate-boundaries-20261114-v1/`、`…-v2/`；
 Mac 对应 `/Users/c/Desktop/deob/validation-artifacts/ordinary-predicate-boundaries-20261114/prototype-main-v{1,2}/`。
@@ -140,7 +140,22 @@ v2为78 payload / 5,471,593 bytes，双端逐文件 set/size/SHA 核验一致；
 `FILESET.json` SHA `176f8b517ea38d910098a9634ef931dea68ac0598295226cc73634144c6244c9`。
 v1首次零收益和所有旧失败独立保留。
 
-实现验证已经完成；完整 runtime/source/native/real 归档及双端核验仍在封存，合并前
-将另补归档路径、payload计数、完整SHA及实现/证据 commit。归档未封定前不称最终 seal。
+实现 commit 为 `fb73e0bf3a705fd76f4e2905f164838e591009b2`。完整归档为：
+
+- VM：`/home/cc/vmc-runs/ordinary-cff-predicate-evidence-20261114-v1.tar.xz`。
+- Mac：`/Users/c/Desktop/deob/validation-artifacts/ordinary-cff-predicate-20261114/ordinary-cff-predicate-evidence-20261114-v1.tar.xz`。
+- SHA256：`51798f581c7f523ff9160efd11b5b285bb19351480b68d861efb24dcef3fdadf`。
+- 1,097个 payload 加 manifest；逻辑616,749,073B，压缩115,317,316B，无链接成员。
+
+两端均用独立 explicit-v5 检查完整成员集合、每个 size/SHA，全部通过；root另重核
+两个压缩文件的完整SHA与两份receipt。两端 `.root-independent-verified-v2.json` 均报告
+`payload_paths=1097 / hardlink_members=0 / exact_member_set=true / all_payloads_verified=true`。
+7个输入根原1,085个源文件的集合、inode/nlink/mtime/ctime/SHA在封存前后完全不变；
+另12个文件为封存控制记录。原source/runtime/expanded数据均未删除。
+
+包中 `source-git-fb73e0b.tar.gz` 为3,057,314B，SHA为
+`7be803f00c851a9fe69491b76b7cdd142b183cfc5e72d866263238b76050892e`。
+此前0456/NZfc、父Pipeline/C4对象、冻结B9c及旧缓存以显式已封 archive/member/SHA
+引用绑定；没有把它们或私有 image-table 原型的新试验重新计入本轮执行。
 有界任务采用512MiB启动/64MiB运行/每CLI180s，full采用1GiB启动；本轮无排除或归一化，
 未新跑69-input corpus、单指令或 IGNIL 全量 campaign，也未计入图像原型的试验结果。
