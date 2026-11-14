@@ -243,6 +243,27 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Seeded Guest word joint preservation (2026-11-15, base `49f58f1`): opt-in
+Image context can use one independently constant full-width dominating STORE
+and exact selected reloads. Proof-only constants never prune CFG; every
+continuing write must preserve both table and cell. Original LOADs, terminal
+fresh observations, guards/calls/errors remain. No ABI/default/budget/noalias
+change. Same-API old tests compile on both SDKs and fail8/826assertions in
+2cases (precision, not an old native wrong-result claim); new each2/914 and
+related14/2273 pass. Full ROCK CTest1241/1241 and1095/1095; actual no-Z3 loader
+is solver-free. Independent C/Python/beforeLLVM160 full66112-byte matches and
+4960controls;80fault observations detect36/36specified errors. Actual installed
+main/no-Z3 after each80matches/2480controls,10API calls combined,2accept/3exact
+refusals per backend;4after saved audits. Before/fault counted once, no new
+exclusions/skips/normalization. After335files/65978790B dual cert5be28375;
+final9member runtime/source package816d87f6 is verified on both hosts.
+Real fixed80slot/75target large Flatten remains refused: B finds slot51072/64
+seed32768, but a work-array STORE range[50992,4295018287]/32 may clobber it;
+A lacks the constant pointer seed. No complete real loop de-flattening or new
+instruction/Unicorn/full-corpus campaign is claimed. All intermediate failures
+and exact runtimes retained. See `docs/guest-seeded-word-preservation-20261115.md`
+and `docs/tigress-seeded-cell-native-20261115.md`.
+
 Guarded register snapshots and SP observation retention (2026-11-15, base
 `281d4b2`): Image consumes complete executable equality checks on the exact
 initial register SSA observation, never future loads or address-wide facts.

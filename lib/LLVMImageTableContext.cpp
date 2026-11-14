@@ -508,14 +508,17 @@ bool foldConstants(Function &f, Work &work) {
   } while (changed);
   return true;
 }
+using ConstantFacts = std::map<Value *, ConstantInt *>;
 struct Range { std::uint64_t low, high; unsigned bits; };
 std::uint64_t mask(unsigned bits) { return bits == 64 ? UINT64_MAX : (std::uint64_t(1) << bits) - 1; }
 class Ranges {
  public:
-  explicit Ranges(Work &work) : work(work) {}
+  explicit Ranges(Work &work, const ConstantFacts *facts = nullptr)
+      : work(work), facts(facts) {}
   std::optional<Range> get(Value *v) { nodes = 0; active.clear(); return visit(v, 0); }
  private:
   Work &work;
+  const ConstantFacts *facts;
   unsigned nodes = 0;
   std::set<Value *> active;
   std::optional<Range> visit(Value *v, unsigned depth) {
@@ -530,6 +533,10 @@ class Ranges {
     const unsigned bits = v->getType()->getIntegerBitWidth();
     const Range full{0, mask(bits), bits};
     if (auto *c = dyn_cast<ConstantInt>(v)) return Range{c->getZExtValue(), c->getZExtValue(), bits};
+    if (facts) if (auto found = facts->find(v); found != facts->end()) {
+      const auto value = found->second->getZExtValue();
+      return Range{value, value, bits};
+    }
     if (isa<FreezeInst>(v)) return full; // a new defined observation, never its operand's constant
     if (!active.insert(v).second) return full;
     auto done = [&](std::optional<Range> r) { active.erase(v); return r; };
@@ -666,15 +673,147 @@ bool mathematicalCall(const CallBase &call) {
       call.doesNotAccessMemory() && !call.isConvergent() &&
       !call.hasFnAttr(Attribute::NoDuplicate) && !call.getNumOperandBundles();
 }
-bool closeInvariant(Function &f, const Guards &g, const Table &table,
+struct InvariantRegion {
+  std::set<BasicBlock *> reachable, step, preserving;
+};
+struct SeededCell {
+  std::uint64_t address;
+  unsigned bits;
+  StoreInst *seed;
+  ConstantInt *value;
+  std::vector<LoadInst *> loads;
+};
+std::optional<std::uint64_t> fixedGuestWord(Value *pointer, Value *guest) {
+  auto *gep = dyn_cast<GetElementPtrInst>(pointer);
+  if (!gep || gep->hasPoisonGeneratingAnnotations()) return {};
+  auto at = offset(pointer, guest);
+  if (!at || !gep->idx_begin()->get()->getType()->isIntegerTy(64)) return {};
+  return at;
+}
+bool disjoint(std::uint64_t address, std::uint64_t bytes, std::uint64_t other,
+              std::uint64_t otherBytes) {
+  return bytes <= UINT64_MAX - address && otherBytes <= UINT64_MAX - other &&
+      (address + bytes <= other || other + otherBytes <= address);
+}
+bool shadowConstants(Function &f, ConstantFacts &facts, Work &work) {
+  auto known = [&](Value *v) -> ConstantInt * {
+    if (auto *c = dyn_cast<ConstantInt>(v)) return c;
+    auto found = facts.find(v);
+    return found == facts.end() ? nullptr : found->second;
+  };
+  bool changed;
+  do {
+    changed = false;
+    for (auto &block : f) for (auto &i : block) {
+      if (!work.spend()) return false;
+      if (!i.getType()->isIntegerTy() || i.getType()->getIntegerBitWidth() > 64 ||
+          facts.contains(&i) || i.hasPoisonGeneratingAnnotations()) continue;
+      ConstantInt *result = nullptr;
+      if (auto *phi = dyn_cast<PHINode>(&i)) {
+        bool agree = true;
+        for (auto &incoming : phi->incoming_values()) {
+          if (!work.spend()) return false;
+          if (incoming.get() == phi) continue;
+          auto *c = known(incoming.get());
+          if (!c || (result && result != c)) { agree = false; break; }
+          result = c;
+        }
+        if (!agree) result = nullptr;
+      } else {
+        switch (i.getOpcode()) {
+        case Instruction::Add: case Instruction::Sub: case Instruction::Mul:
+        case Instruction::And: case Instruction::Or: case Instruction::Xor:
+        case Instruction::Shl: case Instruction::LShr: case Instruction::AShr:
+        case Instruction::UDiv: case Instruction::SDiv:
+        case Instruction::URem: case Instruction::SRem:
+        case Instruction::ZExt: case Instruction::SExt: case Instruction::Trunc:
+        case Instruction::ICmp: case Instruction::Select: break;
+        default: continue;
+        }
+        SmallVector<Constant *, 4> operands;
+        for (auto &operand : i.operands()) {
+          if (!work.spend()) return false;
+          auto *c = known(operand.get());
+          if (!c) { operands.clear(); break; }
+          operands.push_back(c);
+        }
+        if (operands.size() == i.getNumOperands())
+          result = dyn_cast_or_null<ConstantInt>(ConstantFoldInstOperands(
+              &i, operands, f.getParent()->getDataLayout(), nullptr, false));
+      }
+      if (result) { facts.emplace(&i, result); changed = true; }
+    }
+  } while (changed);
+  return true;
+}
+bool findSeededCells(Function &f, const Guards &g, const Table &table,
+                     const ImageTableContextRequest &r, const InvariantRegion &region,
+                     Work &work, std::vector<SeededCell> &cells, std::string &diagnostics) {
+  DominatorTree dom(f);
+  using Key = std::pair<std::uint64_t, unsigned>;
+  std::map<Key, std::vector<StoreInst *>> seeds;
+  for (auto &block : f) if (region.preserving.contains(&block)) for (auto &i : block) {
+    if (!work.spend()) return false;
+    auto *store = dyn_cast<StoreInst>(&i);
+    auto *value = store ? dyn_cast<ConstantInt>(store->getValueOperand()) : nullptr;
+    if (store && store->isSimple() && store->getValueOperand()->getType()->isIntegerTy() &&
+        dom.dominates(store, table.load)) {
+      auto address = fixedGuestWord(store->getPointerOperand(), g.guest);
+      if (address) {
+        raw_string_ostream out(diagnostics);
+        out << " init " << *address << "/" << store->getValueOperand()->getType()->getIntegerBitWidth()
+            << " value=";
+        store->getValueOperand()->printAsOperand(out, false);
+        out << ";";
+      }
+    }
+    if (!store || !store->isSimple() || !value || value->getBitWidth() % 8 ||
+        value->getBitWidth() > 64 || !dom.dominates(g.accepted, &block) ||
+        !dom.dominates(store, table.load)) continue;
+    auto address = fixedGuestWord(store->getPointerOperand(), g.guest);
+    if (!address || !disjoint(*address, value->getBitWidth() / 8,
+                              r.tableOffset, r.targets.size() * 8)) continue;
+    seeds[{*address, value->getBitWidth()}].push_back(store);
+  }
+  for (auto &[key, candidates] : seeds) {
+    if (!work.spend()) return false;
+    // A single independently constant initialization, not an inferred entry
+    // value or a mutually assumed memory initializer.
+    diagnostics += " cell " + std::to_string(key.first) + "/" + std::to_string(key.second) +
+        " seeds=" + std::to_string(candidates.size());
+    if (candidates.size() != 1) continue;
+    SeededCell cell{key.first, key.second, candidates.front(),
+                    cast<ConstantInt>(candidates.front()->getValueOperand()), {}};
+    bool clobbered = false;
+    for (auto &block : f) if (region.preserving.contains(&block)) for (auto &i : block) {
+      if (!work.spend()) return false;
+      if (auto *load = dyn_cast<LoadInst>(&i); load && load->isSimple() &&
+          !load->hasPoisonGeneratingAnnotations() && load->getType()->isIntegerTy(cell.bits) &&
+          fixedGuestWord(load->getPointerOperand(), g.guest) == cell.address &&
+          dom.dominates(cell.seed, load)) cell.loads.push_back(load);
+      auto *store = dyn_cast<StoreInst>(&i);
+      if (!store || store == cell.seed || !store->getValueOperand()->getType()->isIntegerTy()) continue;
+      auto at = fixedGuestWord(store->getPointerOperand(), g.guest);
+      const auto bits = store->getValueOperand()->getType()->getIntegerBitWidth();
+      if (at && bits % 8 == 0 && !disjoint(*at, bits / 8, cell.address, cell.bits / 8))
+        clobbered = true;
+    }
+    diagnostics += " loads=" + std::to_string(cell.loads.size()) +
+        " fixed_clobber=" + std::to_string(clobbered) + ";";
+    if (!clobbered && !cell.loads.empty()) cells.push_back(std::move(cell));
+  }
+  return true;
+}
+bool closeControlInvariant(Function &f, const Guards &g, const Table &table,
                      const ImageTableContextRequest &r, const SPObservations &sp,
-                     Work &work) {
+                     Work &work, InvariantRegion &region) {
   DominatorTree dom(f);
   std::set<Value *> active;
   if (!indexInTable(table.index, table.dispatch, nullptr, r.targets.size(), dom, work, active) ||
       work.stats.budgetExhausted)
     return fail(work.stats, "lookup may use an unproved outside-table path");
-  std::set<BasicBlock *> reachable, step;
+  auto &reachable = region.reachable;
+  auto &step = region.step;
   auto visit = [&](std::vector<BasicBlock *> pending, std::set<BasicBlock *> &seen, bool stopAtRead) {
     for (std::size_t n = 0; n != pending.size(); ++n) {
       if (!work.spend()) return false;
@@ -695,7 +834,8 @@ bool closeInvariant(Function &f, const Guards &g, const Table &table,
   std::vector<BasicBlock *> roots = table.targets;
   roots.push_back(g.accepted);
   if (!visit(roots, reachable, false) || !visit(table.targets, step, true)) return false;
-  std::set<BasicBlock *> preserving{table.dispatch->getParent()};
+  auto &preserving = region.preserving;
+  preserving.insert(table.dispatch->getParent());
   bool more;
   do {
     more = false;
@@ -722,9 +862,14 @@ bool closeInvariant(Function &f, const Guards &g, const Table &table,
     if (!currentSP || currentSP->getValue() != dispatchSP->getValue())
       return fail(work.stats, "a table-target step changes the dispatch SP");
   }
+  return true;
+}
+bool preserveWrites(Function &f, const Guards &g, const ImageTableContextRequest &r,
+                    const InvariantRegion &region, Work &work,
+                    const ConstantFacts *facts = nullptr, const SeededCell *cell = nullptr) {
   const auto tableEnd = r.tableOffset + r.targets.size() * 8;
-  Ranges ranges(work);
-  for (auto &block : f) if (preserving.contains(&block)) for (auto &i : block) {
+  Ranges ranges(work, facts);
+  for (auto &block : f) if (region.preserving.contains(&block)) for (auto &i : block) {
     if (!work.spend()) return false;
     if (auto *call = dyn_cast<CallBase>(&i)) {
       if (!mathematicalCall(*call)) return fail(work.stats, "call has no table-preservation proof");
@@ -750,7 +895,26 @@ bool closeInvariant(Function &f, const Guards &g, const Table &table,
     if (!width || width % 8 || !address || address->bits != 64 ||
         width / 8 > UINT64_MAX - address->high ||
         !(address->high + width / 8 <= r.tableOffset || address->low >= tableEnd))
-      return fail(work.stats, "STORE range may overwrite a protected table byte");
+    {
+      std::string detail;
+      raw_string_ostream out(detail);
+      out << "STORE range may overwrite a protected table byte in " << block.getName() << ": ";
+      i.print(out);
+      out << "; address "; gep->idx_begin()->get()->print(out);
+      return fail(work.stats, detail);
+    }
+    if (cell && store != cell->seed &&
+        !(address->high + width / 8 <= cell->address ||
+          address->low >= cell->address + cell->bits / 8)) {
+      std::string detail;
+      raw_string_ostream out(detail);
+      out << "STORE range [" << address->low << "," << address->high
+          << "]/" << width << " may overwrite seeded Guest cell " << cell->address
+          << "/" << cell->bits << " in " << block.getName() << ": ";
+      i.print(out);
+      out << "; address "; gep->idx_begin()->get()->print(out);
+      return fail(work.stats, detail);
+    }
     ++work.stats.preservedStores;
   }
   return true;
@@ -1074,8 +1238,71 @@ static ImageTableContextStats runImageTableContext(Module &module,
   WeakTrackingVH proofIndex(proofTable.index);
   if (!foldConstants(*proofFunction, work)) return stats;
   proofTable.index = proofIndex;
-  if (!proofTable.index || !verify(*proofFunction, verification) ||
-      !closeInvariant(*proofFunction, proofGuards, proofTable, request, proofSP, work)) return stats;
+  if (!proofTable.index || !verify(*proofFunction, verification)) return stats;
+  InvariantRegion region;
+  if (!closeControlInvariant(*proofFunction, proofGuards, proofTable, request,
+                              proofSP, work, region)) return stats;
+  if (!preserveWrites(*proofFunction, proofGuards, request, region, work)) {
+    if (stats.budgetExhausted || !StringRef(stats.message).starts_with("STORE range may overwrite a protected table byte"))
+      return stats;
+    const auto originalMessage = stats.message;
+    const auto originalStores = stats.preservedStores;
+    std::vector<SeededCell> cells;
+    std::string diagnostics;
+    if (!findSeededCells(*proofFunction, proofGuards, proofTable, request, region,
+                          work, cells, diagnostics)) return stats;
+    bool closed = false;
+    std::string lastFailure;
+    for (const auto &cell : cells) {
+      ConstantFacts assumed;
+      for (auto *load : cell.loads) {
+        if (!work.spend()) return stats;
+        assumed.emplace(load, cell.value);
+      }
+      // This overlay never changes CFG reachability. Every preserving write,
+      // including clobber-then-restore paths, must establish the joint step.
+      if (!shadowConstants(*proofFunction, assumed, work)) return stats;
+      stats.preservedStores = 0;
+      if (!preserveWrites(*proofFunction, proofGuards, request, region, work, &assumed, &cell)) {
+        if (stats.budgetExhausted) return stats;
+        lastFailure = stats.message;
+        continue;
+      }
+      // The base is an actual dominating STORE whose value was constant
+      // before any cell hypothesis. The joint table/cell induction is now
+      // closed. Preserve the original LOADs and all memory/error checks.
+      ConstantFacts observations;
+      for (auto *load : cell.loads) {
+        if (!work.spend()) return stats;
+        observations.emplace(load, cell.value);
+        load->replaceAllUsesWith(cell.value);
+      }
+      for (auto &[old, proofValue] : facts) {
+        if (!work.spend()) return stats;
+        auto found = observations.find(proofValue);
+        if (found != observations.end()) proofValue = found->second;
+      }
+      // A failure after these private rewrites discards this complete proof;
+      // it must never reuse a mutated trial for another cell candidate.
+      if (!foldConstants(*proofFunction, work)) return stats;
+      proofTable.index = proofIndex;
+      InvariantRegion checked;
+      stats.preservedStores = 0;
+      if (!proofTable.index || !verify(*proofFunction, verification) ||
+          !closeControlInvariant(*proofFunction, proofGuards, proofTable, request,
+                                  proofSP, work, checked) ||
+          !preserveWrites(*proofFunction, proofGuards, request, checked, work, nullptr, &cell))
+        return stats;
+      closed = true;
+      break;
+    }
+    if (!closed) {
+      stats.preservedStores = originalStores;
+      stats.message = originalMessage + "; seeded candidates=" + std::to_string(cells.size()) +
+          diagnostics + (lastFailure.empty() ? "" : "; last: " + lastFailure);
+      return stats;
+    }
+  }
   stats.closed = true;
 
   // The candidate graph's constants become facts only after the complete

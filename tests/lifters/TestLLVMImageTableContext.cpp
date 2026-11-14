@@ -566,3 +566,198 @@ TEST_CASE("Image context never erases an original business fake use call", "[llv
     REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
   }
 }
+
+// Draft only: append to TestLLVMImageTableContext.cpp after its existing
+// Fixture/RegisterGuardFixture definitions. No new API, CMake registration,
+// source fixture or expected binary is changed by this standalone draft.
+namespace {
+struct SeededCellFixture : RegisterGuardFixture {
+  enum Kind { Kept, OldSnapshotAlias, DuplicateBackedge, TerminalEffects,
+              MissingSeed, PartialSeed, SeedOnlyOnBackedge, BypassSeed, ReadBeforeSeed, ChangedCell,
+              ClobberRestore, PartialOverlap, UnknownCall, FreshHostReg, OtherBaseWrite,
+              VolatileRead, AtomicRead, WrappedStore };
+  explicit SeededCellFixture(Kind kind = Kept)
+      : RegisterGuardFixture(kind == OldSnapshotAlias ? GuestAliasWrite : Exact) {
+    auto *f = module->getFunction("view");
+    auto named = [&](llvm::StringRef name) -> llvm::Value * {
+      for (auto &bb : *f) for (auto &i : bb)
+        if (i.getName() == name) return &i;
+      return nullptr;
+    };
+    auto block = [&](llvm::StringRef name) -> llvm::BasicBlock * {
+      for (auto &bb : *f) if (bb.getName() == name) return &bb;
+      return nullptr;
+    };
+    auto *prologue = block("prologue"); auto *a = block("a");
+    auto *b = block("b"); auto *controller = block("controller");
+    auto *guest = named("guest"); auto *frame = named("frame");
+    auto *snapshot = named("initial.output");
+    auto *output = llvm::cast<llvm::GetElementPtrInst>(named("output.pointer"));
+    REQUIRE(prologue); REQUIRE(a); REQUIRE(b); REQUIRE(controller);
+    REQUIRE(guest); REQUIRE(frame); REQUIRE(snapshot); REQUIRE(output);
+    // Equivalent to Fixture mode21 without modifying either old fixture:
+    // this valid source has no invented target edge back to its prologue.
+    auto *dispatch = llvm::cast<llvm::SwitchInst>(block("read")->getTerminator());
+    auto bad = dispatch->findCaseValue(llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 4096));
+    REQUIRE(bad != dispatch->case_end());
+    dispatch->removeCase(bad);
+    llvm::IRBuilder<> prefix(prologue->getTerminator());
+    llvm::Value *cellOffset = kind == WrappedStore ? static_cast<llvm::Value *>(prefix.getInt64(0)) :
+        prefix.CreateAdd(frame, prefix.getInt64(32), "seed.offset");
+    auto *cell = prefix.CreateGEP(prefix.getInt8Ty(), guest, cellOffset, "seed.cell");
+    llvm::Value *seedValue = snapshot;
+    if (kind == FreshHostReg) {
+      // Do not infer this new host observation from initial.output's guard.
+      // Guest and the byte-packed host registers have no noalias promise.
+      auto *alias = prefix.CreateGEP(prefix.getInt8Ty(), guest, prefix.getInt64(36864));
+      prefix.CreateAlignedStore(prefix.getInt64(8192), alias, llvm::Align(1));
+      seedValue = prefix.CreateAlignedLoad(prefix.getInt64Ty(),
+          named("output.snapshot.address"), llvm::Align(1), "fresh.host.output");
+    }
+    llvm::LoadInst *old = nullptr;
+    if (kind == ReadBeforeSeed)
+      old = prefix.CreateAlignedLoad(prefix.getInt64Ty(), cell, llvm::Align(1), "old.before.seed");
+    auto *seed = prefix.CreateAlignedStore(seedValue, cell, llvm::Align(1));
+    llvm::IRBuilder<> body(output);
+    auto *reload = body.CreateAlignedLoad(body.getInt64Ty(), cell, llvm::Align(1), "seed.reload");
+    output->setOperand(1, old ? static_cast<llvm::Value *>(old) : reload);
+    if (kind == VolatileRead) reload->setVolatile(true);
+    if (kind == AtomicRead) {
+      reload->setAtomic(llvm::AtomicOrdering::Monotonic);
+      reload->setAlignment(llvm::Align(8));
+    }
+    if (kind == MissingSeed) seed->eraseFromParent();
+    if (kind == PartialSeed) {
+      llvm::IRBuilder<> partial(seed);
+      partial.CreateAlignedStore(partial.CreateTrunc(seedValue, partial.getInt32Ty()), cell, llvm::Align(1));
+      seed->eraseFromParent();
+    }
+    if (kind == SeedOnlyOnBackedge) {
+      seed->eraseFromParent();
+      llvm::IRBuilder<> back(b->getTerminator());
+      back.CreateAlignedStore(seedValue, cell, llvm::Align(1));
+    }
+    if (kind == BypassSeed) {
+      seed->eraseFromParent();
+      auto *term = prologue->getTerminator();
+      auto *seedBlock = llvm::BasicBlock::Create(context, "maybe.seed", f, controller);
+      llvm::IRBuilder<> writer(seedBlock);
+      writer.CreateAlignedStore(seedValue, cell, llvm::Align(1));
+      writer.CreateBr(controller);
+      llvm::IRBuilder<> choose(term);
+      choose.CreateCondBr(choose.CreateICmpEQ(f->getArg(2),
+          llvm::ConstantPointerNull::get(choose.getPtrTy())), seedBlock, controller);
+      term->eraseFromParent();
+    }
+    if (kind == DuplicateBackedge) {
+      auto *branch = llvm::cast<llvm::BranchInst>(b->getTerminator());
+      REQUIRE(branch->isConditional());
+      branch->setSuccessor(0, controller);
+      branch->setSuccessor(1, controller);
+    }
+    if (kind == ChangedCell || kind == ClobberRestore || kind == PartialOverlap || kind == WrappedStore) {
+      llvm::IRBuilder<> back(b->getTerminator());
+      if (kind == ChangedCell || kind == ClobberRestore) {
+        back.CreateAlignedStore(back.getInt64(8192), cell, llvm::Align(1));
+        if (kind == ClobberRestore)
+          back.CreateAlignedStore(seedValue, cell, llvm::Align(1));
+      }
+      else if (kind == PartialOverlap) {
+        // 0x8000 -> 0x2000: an actual table-aliasing new pointer, not an
+        // innocuous write of a byte that was already zero.
+        auto *overlap = back.CreateGEP(back.getInt8Ty(), cell, back.getInt64(1));
+        back.CreateAlignedStore(back.getInt8(32), overlap, llvm::Align(1));
+      } else {
+        auto *wrapped = back.CreateGEP(back.getInt8Ty(), guest, back.getInt64(-4));
+        back.CreateAlignedStore(back.getInt64(8192ULL << 32), wrapped, llvm::Align(1));
+      }
+    }
+    if (kind == UnknownCall || kind == OtherBaseWrite) {
+      llvm::IRBuilder<> back(b->getTerminator());
+      if (kind == UnknownCall)
+        back.CreateCall(module->getFunction("unknown_call"), {guest});
+      else {
+        auto *other = back.CreateGEP(back.getInt8Ty(), f->getArg(0), back.getInt64(16));
+        back.CreateAlignedStore(back.getInt64(0), other, llvm::Align(1));
+      }
+    }
+    if (kind == TerminalEffects) {
+      llvm::IRBuilder<> terminal(block("finished")->getTerminator());
+      terminal.CreateCall(module->getFunction("unknown_call"), {guest});
+      // The call may have changed the cell. No seeded fact is available for
+      // this terminal observation, even though it is at the same address.
+      auto *fresh = terminal.CreateAlignedLoad(terminal.getInt64Ty(), cell,
+          llvm::Align(1), "terminal.seed.reload");
+      auto *freshPointer = terminal.CreateGEP(terminal.getInt8Ty(), guest, fresh,
+          "terminal.output.pointer");
+      terminal.CreateAlignedStore(terminal.getInt32(77), freshPointer, llvm::Align(1));
+      terminal.CreateAlignedStore(terminal.getInt64(0), named("t0p"), llvm::Align(1));
+    }
+    REQUIRE_FALSE(llvm::verifyModule(*module, &llvm::errs()));
+  }
+};
+}
+
+TEST_CASE("Image context proves an entry seeded Guest cell through a store-free loop",
+          "[llvm][image-table-context][image-seeded-cell]") {
+  for (bool closed : {false, true})
+    for (auto kind : {SeededCellFixture::Kept, SeededCellFixture::OldSnapshotAlias,
+                      SeededCellFixture::DuplicateBackedge, SeededCellFixture::TerminalEffects})
+      DYNAMIC_SECTION("closed " << closed << " kind " << kind) {
+        SeededCellFixture f(kind);
+        auto *view = f.module->getFunction("view"); auto *argument = view->getArg(0);
+        const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+        INFO(result.message);
+        REQUIRE(result.closed); REQUIRE(result.changed); CHECK_FALSE(result.budgetExhausted);
+        CHECK(f.module->getFunction("view") == view); CHECK(view->getArg(0) == argument);
+        // Keep real source operations, exits and ordinary guard-miss fallback.
+        CHECK(f.ir().find("@ordinary") != std::string::npos);
+        CHECK(f.ir().find("store i32 123") != std::string::npos);
+        llvm::LoadInst *keptReload = nullptr;
+        llvm::LoadInst *stateReload = nullptr;
+        for (auto &bb : *view) for (auto &instruction : bb) {
+          if (instruction.getName() == "seed.reload")
+            keptReload = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+          if (instruction.getName() == "index")
+            stateReload = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+        }
+        CHECK(keptReload != nullptr); // actual Guest LOAD is not erased.
+        REQUIRE(stateReload);
+        CHECK_FALSE(stateReload->use_empty()); // a failed state-cell hypothesis cannot leak.
+        if (kind == SeededCellFixture::TerminalEffects) {
+          CHECK(f.ir().find("call void @unknown_call") != std::string::npos);
+          llvm::LoadInst *terminalReload = nullptr;
+          llvm::GetElementPtrInst *terminalPointer = nullptr;
+          for (auto &bb : *view) for (auto &instruction : bb) {
+            if (instruction.getName() == "terminal.seed.reload")
+              terminalReload = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+            if (instruction.getName() == "terminal.output.pointer")
+              terminalPointer = llvm::dyn_cast<llvm::GetElementPtrInst>(&instruction);
+          }
+          REQUIRE(terminalReload); REQUIRE(terminalPointer);
+          CHECK(terminalPointer->getOperand(1) == terminalReload);
+        }
+        REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+      }
+}
+
+TEST_CASE("Image seeded facts never cross missing definitions or changing memory",
+          "[llvm][image-table-context][image-seeded-cell]") {
+  for (bool closed : {false, true})
+    for (auto kind : {SeededCellFixture::MissingSeed, SeededCellFixture::PartialSeed,
+                      SeededCellFixture::SeedOnlyOnBackedge, SeededCellFixture::BypassSeed,
+                      SeededCellFixture::ReadBeforeSeed, SeededCellFixture::ChangedCell, SeededCellFixture::ClobberRestore,
+                      SeededCellFixture::PartialOverlap, SeededCellFixture::UnknownCall,
+                      SeededCellFixture::FreshHostReg, SeededCellFixture::OtherBaseWrite,
+                      SeededCellFixture::VolatileRead, SeededCellFixture::AtomicRead,
+                      SeededCellFixture::WrappedStore})
+      DYNAMIC_SECTION("closed " << closed << " kind " << kind) {
+        SeededCellFixture f(kind); const auto before = f.ir();
+        auto *view = f.module->getFunction("view"); auto *entry = &view->getEntryBlock();
+        const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+        INFO(result.message); CHECK_FALSE(result.closed); CHECK_FALSE(result.changed);
+        CHECK(f.ir() == before); CHECK(f.module->getFunction("view") == view);
+        CHECK(&view->getEntryBlock() == entry);
+        REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+      }
+}
