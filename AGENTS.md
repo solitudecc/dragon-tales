@@ -217,6 +217,33 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Selected Guest cell SSA (2026-11-14, base `17f4f7c`, implementation `b0c3400`):
+see `docs/llvm-guest-cell-ssa.md` and
+`docs/guest-cell-ssa-integration-20261114.md`. The installed low-level C++ helper
+forwards one caller-selected original integer LOAD through fully covered nearest
+STORE definitions. It retains original SSA values, CFG and effects; aliases,
+post-STORE calls, partial writes and store-free definition cycles refuse without
+mutation. No default scan, pipeline, C/Python API or Image/Decoder prototype is
+added. Actual main/no-Z3 each pass14cases/261assertions; cached CTest1163/1163
+and1028/1028, plus uncached predicate12/962 and1/5 and C4each16/3493. Old main32c
+cannot link the new API client; this is API absence, not old wrong execution.
+Formal actual libraries add384full66112-byte arena matches,128specified native
+fault detections and4992comparator controls;8saved streams/512frames audited.
+The384old C/LLVM before calibrations are exact-bound references only. Domain
+remains6fixtures/96module-inputs/32arenas; backend/O0/O2 repeats do not enlarge
+it. Native widths32/128; other widths and most barriers are structural checks.
+Positive fresh/history values normally agree; the real clobbered split is in
+the call-after refusal domain. A separate private real manual-O2 probe removes
+one selected state LOAD and creates8PHIs, but retains1cyclic dispatcher; this
+is not new real native validation or full loop CFF removal. No new instruction,
+Unicorn, lifter or69-input corpus campaign. Dual-host combined archive
+`guest-cell-ssa-evidence-20261114-v1.tar.xz` SHA4f8c13ef207edd6f19f5370bb07fca914571c70b99720df9a12c22440ba93d0a
+has383payload/563498738B,124163256B compressed; exact member/size/SHA checks
+pass both hosts. Git source b0c3400/6eac8056 binds actual compiled inputs.
+No retirement/deletion. After archival disk1063374848B is below fresh1GiB:
+recover verified redundant storage before another fresh build/full campaign;
+never lower the guard. Small commands keep512MiB start/64MiB running/180s.
+
 默认谓词证明调度（2026-11-14，basefb85840，phase1）：最终CPP298ad88、tests30b904a，
 安全 NSW/NUW Add/Sub 独立 operand 范围与 canonical scalar fshl/fshr 未知SSA边界；
 unknown call/alias/poison 拒绝不放宽。固定最多8组完整赋值只有实际0/1双witness才延后，

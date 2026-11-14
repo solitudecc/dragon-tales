@@ -90,8 +90,10 @@ normalization. The domain remains six fixtures / 96 fixture-input pairs /
 32 distinct initial arenas; backend and host-optimization repeats do not
 increase it. There are no new C executions in this formal after-only campaign.
 
-The final combined evidence seal is pending. The older prototype counts below
-remain separate from these actual-library results.
+Formal summary SHA256:
+`81c11ed4d091572854a5fedd0fb702175afd27d196f6259f0f5efea64919a832`.
+The older prototype counts below remain separate from these actual-library
+results.
 
 ## Separately sealed prototype reference
 
@@ -126,3 +128,41 @@ This milestone does not change instruction semantics, IGNIL lifting, ordinary
 Graph recovery or the default optimizer. It is not a new instruction/Unicorn
 campaign, full 69-input corpus replay, arbitrary-memory fixed point, or proof
 that all CFF dispatch loops have been removed.
+
+## Final evidence seal
+
+Implementation commit: `b0c340020e1f6e0a71cc893386edee09417cd2f0`.
+Its exact Git source archive is 3,083,980 bytes, SHA256
+`6eac8056f65a51f67a3b31c2539e07db795a3030fb13388925b737fdad4df613`.
+The source archive's four compiled implementation/header/test members agree
+byte-for-byte with the actual production inputs. Untracked Image, Decoder and
+Corridor prototypes are excluded from the committed source tree and milestone.
+
+Combined archive: `guest-cell-ssa-evidence-20261114-v1.tar.xz`, 124,163,256 bytes,
+SHA256 `4f8c13ef207edd6f19f5370bb07fca914571c70b99720df9a12c22440ba93d0a`.
+VM: `/home/cc/vmc-runs/guest-cell-ssa-evidence-20261114-v1.tar.xz`.
+Mac:
+`/Users/c/Desktop/deob/validation-artifacts/guest-cell-ssa-20261114/guest-cell-ssa-evidence-20261114-v1.tar.xz`.
+
+It contains 383 payload paths / 563,498,738 logical bytes plus the manifest.
+Both hosts verify the exact member set, every payload size/SHA and zero link
+members with the unchanged explicit-v5 checker. All 370 original input files
+and seven external reference archives retain their before/while/after identity
+and hashes. The old before calibration is referenced, not duplicated as new
+execution. All first-attempt metadata failures, the old API link gate and all
+focused/full/supplementary/native records remain available. No files were
+retired or deleted during this seal.
+
+Manifest SHA256:
+`6ed46579edfbb2513f73dea7369df64a94c755646866c89daf097e8af5d54af4`.
+`DUAL-HOST-VERIFIED-v1.json` SHA256:
+`28684b3d7c575fdb490d6b2879f59d8bdd87eaa7a39bf088d221be8c9cf31cb9`.
+The certificate is beside the Mac archive and in
+`/home/cc/vmc-runs/guest-cell-ssa-archive-20261114-v1/` on the VM.
+The 22 control files also have matching sets, sizes and hashes on both hosts.
+
+The archive used one streaming worker and a minimum observed 1,063,374,848
+disk bytes / 1,206,198,272 tmpfs bytes, retaining the original 64 MiB reserve.
+The final disk free space is below the separate 1 GiB fresh-campaign threshold;
+a later fresh build/full suite must first recover verified redundant storage,
+not lower that threshold. Small validation retains its 512 MiB start guard.
