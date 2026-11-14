@@ -749,3 +749,30 @@ TEST_CASE("STORE expression closed shapes preserve caller depth and shared node 
   before = nodes129.text(); exhausted = nodes129.run(); CHECK_FALSE(exhausted.changed); CHECK(nodes129.text() == before);
   CHECK(exhausted.counters.at("budget_exhausted") > 0);
 }
+
+TEST_CASE("STORE expression closed candidates keep the complete legacy prefix first", "[llvm][guarded-store-expressions][guarded-boolean-shape-cycles][guarded-boolean-shape-scheduling]") {
+  for (Options limits : {Options{{"max_rewrites", std::int64_t(1)}},
+                         Options{{"max_blocks", std::int64_t(4)}, {"max_rewrites", std::int64_t(32)}},
+                         Options{{"max_candidates", std::int64_t(1)}, {"max_rewrites", std::int64_t(32)}}}) {
+    ExpressionFixture fixture(32, "partial-missing"); addHistoricalShape(fixture, "self");
+    auto &context = fixture.module.getContext();
+    auto *late = llvm::BasicBlock::Create(context, "late.ordinary", fixture.function);
+    auto *entry = llvm::cast<llvm::BranchInst>(fixture.block("entry")->getTerminator());
+    entry->setSuccessor(1, late);
+    Builder b(late);
+    auto *state = b.CreateSelect(fixture.function->getArg(3), b.getInt32(138502176), b.getInt32(138502170), "late.state");
+    // Same finite enc(0)/enc(6) pair as the early cyclic observation, but this
+    // ordinary context was already admitted before the closed-graph extension.
+    auto *pointer = b.CreateGEP(b.getInt8Ty(), fixture.instruction("guest"), b.getInt64(256));
+    auto *store = b.CreateStore(state, pointer); store->setAlignment(llvm::Align(1));
+    b.CreateBr(fixture.block("head")); fixture.verify();
+    auto result = fixture.run("guarded-store-expressions", limits); REQUIRE(result.changed);
+    CHECK(result.counters.at("rewritten_edges") == 1);
+    auto *ordinary = llvm::cast<llvm::BranchInst>(fixture.block("late.ordinary")->getTerminator());
+    auto *cyclic = llvm::cast<llvm::BranchInst>(fixture.block("seed")->getTerminator());
+    CHECK(ordinary->getSuccessor(0) == fixture.block("head.transition"));
+    CHECK(cyclic->getSuccessor(0) == fixture.block("head"));
+    fixture.check({100});
+    CHECK(fixture.block("history.loop.transition") == nullptr);
+  }
+}

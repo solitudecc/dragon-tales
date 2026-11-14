@@ -114,11 +114,11 @@ struct Enumerator {
   std::unordered_set<llvm::Value *> checkedHistory,activeHistory,cyclicHistory;
   bool allowPartial=false,partialMasks=false,bitSlices=false,usedPartial=false,fatalPartial=false;
   StoreExpressionOverride *storeExpression=nullptr;
-  bool strictFailures=false;
+  bool strictFailures=false,closedShapes=false,shapeCycleSeen=false;
   std::unordered_map<llvm::BasicBlock *,std::size_t> positions;
   std::unordered_map<Key,Values,KeyHash> memo;
   std::unordered_set<Key,KeyHash> active;
-  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr,bool partial=false,bool masks=false,bool slices=false,StoreExpressionOverride *overrides=nullptr,bool strict=false,const llvm::DominatorTree *observations=nullptr):seed(s),path(p),work(w),scenario(sc),historicalDom(hd),observationDom(observations),allowPartial(partial),partialMasks(masks),bitSlices(slices),storeExpression(overrides),strictFailures(strict || overrides) {
+  Enumerator(llvm::BasicBlock *s,const std::vector<llvm::BasicBlock *> &p,Work &w,BooleanScenario *sc=nullptr,const llvm::DominatorTree *hd=nullptr,bool partial=false,bool masks=false,bool slices=false,StoreExpressionOverride *overrides=nullptr,bool strict=false,const llvm::DominatorTree *observations=nullptr,bool closed=false):seed(s),path(p),work(w),scenario(sc),historicalDom(hd),observationDom(observations),allowPartial(partial),partialMasks(masks),bitSlices(slices),storeExpression(overrides),strictFailures(strict || overrides),closedShapes(closed) {
     for(std::size_t n=0;n<p.size();++n)positions.emplace(p[n],n);
   }
   bool append(Values &to,const llvm::APInt &value) {
@@ -193,12 +193,12 @@ struct Enumerator {
   bool safeHistoricalBoolean(llvm::Value *value,unsigned depth=0) {
     // observationDom is supplied only by guarded-store-expressions. Preserve
     // every historical profile's recursive admission/cache and get() cycles.
-    if(observationDom)return closedHistoricalBoolean(value,depth);
+    if(observationDom && closedShapes)return closedHistoricalBoolean(value,depth);
     if(!work.charge())return false;
     if(llvm::isa<llvm::UndefValue,llvm::PoisonValue>(value))return false;
     if(checkedHistory.contains(value))return true;
     if(depth>MaxDepth || ++nodes>MaxNodes){limited=true;return false;}
-    if(!activeHistory.insert(value).second)return false;
+    if(!activeHistory.insert(value).second){shapeCycleSeen=true;return false;}
     bool valid=false;
     if(llvm::isa<llvm::ConstantInt,llvm::Argument,llvm::FreezeInst>(value))valid=true;
     else if(auto *load=llvm::dyn_cast<llvm::LoadInst>(value)) {
@@ -461,14 +461,15 @@ struct Enumerator {
 // Only called after the old SSA enumeration failed. Every complete Boolean
 // assignment must yield finite values; unknown integer arms never disappear.
 MaybeValues correlatedAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,
-    llvm::Value *index,Work &work,bool &limited,const llvm::DominatorTree *historicalDom=nullptr,bool *sawHistoricalPhi=nullptr,bool strictFailures=false,const llvm::DominatorTree *observationDom=nullptr) {
+    llvm::Value *index,Work &work,bool &limited,const llvm::DominatorTree *historicalDom=nullptr,bool *sawHistoricalPhi=nullptr,bool strictFailures=false,const llvm::DominatorTree *observationDom=nullptr,bool closedShapes=false,bool *shapeCycleSeen=nullptr) {
   std::deque<BooleanScenario> pending(1);
   std::unordered_set<Key,KeyHash> keys;
   Values result;std::size_t complete=0;
   while(!pending.empty()) {
     if(!work.charge(1+path.size()))return {};
     auto scenario=std::move(pending.front());pending.pop_front();
-    Enumerator enumerate(&seed,path,work,&scenario,historicalDom,false,false,false,nullptr,strictFailures,observationDom);auto values=enumerate.get(index);limited|=enumerate.limited;
+    Enumerator enumerate(&seed,path,work,&scenario,historicalDom,false,false,false,nullptr,strictFailures,observationDom,closedShapes);auto values=enumerate.get(index);limited|=enumerate.limited;
+    if(shapeCycleSeen)*shapeCycleSeen|=enumerate.shapeCycleSeen;
     if(sawHistoricalPhi)*sawHistoricalPhi|=enumerate.historicalPhiSeen;
     if(strictFailures && (enumerate.failed || enumerate.limited))return {};
     if(work.exhausted)return {};
@@ -599,11 +600,12 @@ MaybeValues storeAddresses(llvm::BasicBlock &seed,const std::vector<llvm::BasicB
 }
 MaybeValues storeExpressionAddresses(llvm::BasicBlock &seed,
     const std::vector<llvm::BasicBlock *> &path,llvm::Value *index,
-    Work &work,bool &limited,const llvm::DominatorTree &dom) {
+    Work &work,bool &limited,const llvm::DominatorTree &dom,bool closedShapes=false,bool *shapeCycleSeen=nullptr) {
   if(!work.charge(1+path.size()))return {};
   StoreExpressionOverride probe;
-  Enumerator shape(&seed,path,work,nullptr,nullptr,false,false,false,&probe,false,&dom);
+  Enumerator shape(&seed,path,work,nullptr,nullptr,false,false,false,&probe,false,&dom,closedShapes);
   auto placeholder=shape.get(index);limited|=shape.limited;
+  if(shapeCycleSeen)*shapeCycleSeen|=shape.shapeCycleSeen;
   if(!placeholder || !probe.atom || probe.invalid || !probe.used ||
      shape.failed || shape.limited || work.exhausted)return {};
   auto *load=llvm::cast<llvm::LoadInst>(probe.atom->value);
@@ -621,15 +623,17 @@ MaybeValues storeExpressionAddresses(llvm::BasicBlock &seed,
        address->getNumIndices()!=1 || !address->getOperand(1)->getType()->isIntegerTy(64) ||
        llvm::isa<llvm::UndefValue,llvm::PoisonValue>(address->getOperand(1)))return {};
     if(!work.charge(path.size()))return {};
-    Enumerator stored(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,true,&dom);
+    Enumerator stored(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,true,&dom,closedShapes);
     auto values=stored.get(store->getValueOperand(),historical);limited|=stored.limited;
+    if(shapeCycleSeen)*shapeCycleSeen|=stored.shapeCycleSeen;
     // Unknown is not a memory fact. Structural/poison/cycle/budget failures
     // cannot be silently discarded while trying an older finite STORE.
     if(stored.failed || stored.limited || work.exhausted){abort=true;return {};}
     if(!values)return {};
     StoreExpressionOverride replacement;replacement.atom=probe.atom;replacement.values=&*values;
-    Enumerator predicted(&seed,path,work,nullptr,nullptr,false,false,false,&replacement,false,&dom);
+    Enumerator predicted(&seed,path,work,nullptr,nullptr,false,false,false,&replacement,false,&dom,closedShapes);
     auto addresses=predicted.get(index);limited|=predicted.limited;
+    if(shapeCycleSeen)*shapeCycleSeen|=predicted.shapeCycleSeen;
     if(!addresses || replacement.invalid || !replacement.used || predicted.failed ||
        predicted.limited || work.exhausted){abort=true;return {};}
     return addresses;
@@ -648,19 +652,20 @@ MaybeValues storeExpressionAddresses(llvm::BasicBlock &seed,
     }
   return {};
 }
-std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions,const llvm::DominatorTree &dom,bool allowPartial,bool &usedPartial,bool partialMasks,bool bitSlices,bool storeExpressions) {
+std::optional<std::vector<std::uint64_t>> predict(llvm::BasicBlock &seed,const std::vector<llvm::BasicBlock *> &path,const Hints &h,Work &work,bool &limited,bool storePredictions,const llvm::DominatorTree &dom,bool allowPartial,bool &usedPartial,bool partialMasks,bool bitSlices,bool storeExpressions,bool closedShapes=false,bool *shapeCycleSeen=nullptr) {
   auto *index=indexOf(*path.back());if(!index)return {};
-  Enumerator enumerate(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,storeExpressions,storeExpressions?&dom:nullptr);auto addresses=enumerate.get(index);limited|=enumerate.limited;
+  Enumerator enumerate(&seed,path,work,nullptr,nullptr,false,false,false,nullptr,storeExpressions,storeExpressions?&dom:nullptr,closedShapes);auto addresses=enumerate.get(index);limited|=enumerate.limited;
+  if(shapeCycleSeen)*shapeCycleSeen|=enumerate.shapeCycleSeen;
   if(storeExpressions && (enumerate.failed || enumerate.limited || work.exhausted))return {};
   bool sawHistoricalPhi=enumerate.historicalPhiSeen;
-  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited,nullptr,&sawHistoricalPhi,storeExpressions,storeExpressions?&dom:nullptr);
+  if(!addresses && enumerate.booleanUnknown && !work.exhausted)addresses=correlatedAddresses(seed,path,index,work,limited,nullptr,&sawHistoricalPhi,storeExpressions,storeExpressions?&dom:nullptr,closedShapes,shapeCycleSeen);
   // Preserve every prior successful prediction, including STORE hints. The
   // new old-PHI identity retry is strictly a failure fallback.
   if(!addresses && storePredictions && !work.exhausted)addresses=storeAddresses(seed,path,index,work,limited);
   if(!addresses && sawHistoricalPhi && !work.exhausted)
-    addresses=correlatedAddresses(seed,path,index,work,limited,&dom,nullptr,storeExpressions,storeExpressions?&dom:nullptr);
+    addresses=correlatedAddresses(seed,path,index,work,limited,&dom,nullptr,storeExpressions,storeExpressions?&dom:nullptr,closedShapes,shapeCycleSeen);
   if(!addresses && storeExpressions && !work.exhausted) {
-    addresses=storeExpressionAddresses(seed,path,index,work,limited,dom);
+    addresses=storeExpressionAddresses(seed,path,index,work,limited,dom,closedShapes,shapeCycleSeen);
     if(addresses)usedPartial=true;
   }
   // Partial select hints run only after all I2 prediction attempts fail.
@@ -809,6 +814,11 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
     for(unsigned slot=0;slot<term->getNumSuccessors();++slot){if(!work.charge())return scanFailure();incoming[ordinal.at(term->getSuccessor(slot))].push_back({n,slot});}
   }
   struct Search {std::size_t terminal;std::vector<std::size_t> path;std::vector<unsigned> slots;std::size_t instructions;};
+  // Retain only already charged original search frames. Their metadata is
+  // moved after the legacy incoming loop; closed proofs/rehydration are billed
+  // later, so they cannot consume fuel or alter legacy queue/selection order.
+  struct Deferred {std::size_t query,seed;unsigned slot;};
+  std::vector<Search> deferredSearches;std::vector<Deferred> deferred;
   std::deque<Search> queue;std::map<std::size_t,std::set<std::size_t>> visited;bool limited=false;
   for(std::size_t n=0;n<initial.size();++n)if(reachable[n] && !generated(*initial[n]) && indexOf(*initial[n]) && eligible(n)) {
     if(instructionCounts[n]>2048){limited=true;continue;}
@@ -819,6 +829,7 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
   std::set<std::pair<std::size_t,unsigned>> selected,selectedLoops,selectedPartial;std::size_t searches=0;
   while(!queue.empty()) {
     auto q=std::move(queue.front());queue.pop_front();
+    bool keepQuery=false;const auto queryId=deferredSearches.size();
     for(const auto &in:incoming[q.path.front()]) {
       if(++searches>32768){limited=true;queue.clear();break;}
       if(!work.charge(1+q.path.size()))return scanFailure();
@@ -838,8 +849,11 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
               [&](llvm::BasicBlock *block){return std::find(path.begin(),path.end(),block)!=path.end();},dom))rootPhisRetained=false;
         }
       }
-      bool usedPartial=false;
-      auto predicted=rootPhisRetained && (!continuations || checkedSeed)?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom,partialStats!=nullptr && !storeExpressions,usedPartial,partialMasks,bitSlices,storeExpressions):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
+      bool usedPartial=false,shapeCycleSeen=false;
+      auto predicted=rootPhisRetained && (!continuations || checkedSeed)?predict(*initial[in.block],path,hint,work,limited,storePredictions,dom,partialStats!=nullptr && !storeExpressions,usedPartial,partialMasks,bitSlices,storeExpressions,false,&shapeCycleSeen):std::optional<std::vector<std::uint64_t>>{};if(work.exhausted)return scanFailure();
+      if(storeExpressions && !predicted && shapeCycleSeen) {
+        deferred.push_back({queryId,in.block,in.slot});keepQuery=true;
+      }
       if(predicted) {
         bool closesLoop=false;
         if(preferLoops) {
@@ -897,6 +911,7 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
       if(seen.size()==512){limited=true;continue;}seen.insert(in.block);
       auto next=q;next.path.insert(next.path.begin(),in.block);next.slots.insert(next.slots.begin(),in.slot);next.instructions+=instructionCounts[in.block];queue.push_back(std::move(next));
     }
+    if(keepQuery)deferredSearches.push_back(std::move(q));
   }
   std::vector<Edge> edges;
   if(preferLoops) {
@@ -909,8 +924,39 @@ static GuardedTransitionsStats runStateCorridorsImpl(llvm::Module &module,const 
     edges=std::move(branchEdges);
     for(auto &edge:switchEdges){if(edges.size()==options.maxCandidates){limited=true;break;}edges.push_back(std::move(edge));}
   }
-  initial.clear();ordinal.clear();
   if(limited){result.complete=false;++result.budgetExhausted;result.message="state-corridor expression or search budget exhausted";}
+  // Freeze the complete legacy prefix before charging any extension work.
+  // In particular, full old candidate lists never run a second scanner or
+  // surrender an admitted edge to an earlier newly predictable corridor.
+  if(storeExpressions && !deferred.empty() && edges.size()<options.maxCandidates) {
+    bool extensionLimited=false;
+    for(const auto &item:deferred) {
+      if(edges.size()==options.maxCandidates)break;
+      if(!work.charge()){extensionLimited=true;break;}
+      const auto key=std::pair{item.seed,item.slot};
+      if(selected.contains(key))continue;
+      const auto &query=deferredSearches[item.query];
+      if(!work.charge(1+query.path.size()+query.slots.size())){extensionLimited=true;break;}
+      std::vector<llvm::BasicBlock *> path;
+      for(auto n:query.path)path.push_back(initial[n]);
+      bool usedPartial=false,queryLimited=false;
+      auto predicted=predict(*initial[item.seed],path,hint,work,queryLimited,false,dom,
+          false,usedPartial,false,false,true,true);
+      extensionLimited|=queryLimited;
+      if(work.exhausted){extensionLimited=true;break;}
+      if(!predicted)continue;
+      // Only these original IDs are appended, after every frozen old edge.
+      selected.insert(key);++result.candidateEdges;targets.insert(query.terminal);
+      if(usedPartial)++partialStats->partialCandidateEdges;
+      edges.push_back({item.seed,item.slot,query.path,query.slots,*predicted,usedPartial,false});
+    }
+    // An extension refusal/exhaustion must not call scanFailure: previously
+    // proved legacy edges still apply under their original shared copy caps.
+    if(extensionLimited){result.complete=false;++result.budgetExhausted;result.message="closed Boolean extension budget exhausted";}
+  } else if(storeExpressions && !deferred.empty() && options.maxCandidates==0 && !limited) {
+    result.complete=false;++result.budgetExhausted;result.message="closed Boolean candidate budget exhausted";
+  }
+  initial.clear();ordinal.clear();
   for(const auto &edge:edges) {
     if(result.rewrittenEdges>=options.maxRewrites || result.clonedBlocks>=options.maxBlocks || result.clonedInstructions>=options.maxInstructions){result.complete=false;++result.budgetExhausted;result.message="state-corridor module budget exhausted";break;}
     auto current=blocks(*function);if(current.size()<originalCount){reject("core original block identity contract violated");break;}
