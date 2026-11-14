@@ -243,6 +243,33 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Atomic dispatch-corridor batches (2026-11-15, base `07325bd`): new opt-in
+C++ Batch entry freezes/preflights all original edges before copying and
+repairs each shared definition once with all versions. Total growth/repair/
+work caps, all-or-nothing rollback, exact duplicate-edge PHIs and historical
+values; legacy defaults/ABI/code path unchanged. Two-state earlier bounds
+keep their actual condition consumption; only the copied impossible self
+slot is redirected. Batch cleanup does not fold that conditional. Original
+main lacks the new API (not an old execution error); final regressions on
+intermediate ceaa SDK fail4cases/44assertions, fixed each13/5949 and legacy
+13/562 pass. Full ROCK main1254/1254 and no-Z31108/1108; exact146/0 case-set
+difference and solver-free NZ loading verified. Separate macro structural
+client eachbatch14/6009+legacy14/596 passes, including both forced commit
+rollback phases; this is not installed-SDK native execution.
+Independent two-source C/Python/rawLLVM plus installed main/NZ native:
+152complete66112-byte matches/4104comparator controls;54fault observations
+with38/38specified detections and16nontrigger matches,12savedstreams/
+206frames audited. Three new late-error inputs cover a cloned header and a
+full70-state round; original8 inputs unchanged. Initial supplemental audit
+report-key failure and12duplicate observations are retained separately, not
+counted again. No exclusions/skips/normalization. Actual new Image A/B is
+byte-exact compatible and still refuses. Separate hypothetical real table
+CFG threads73edges/work600320 with valid IR; table preservation=false,
+publishable=false,native0. Do not call this complete real loop de-flattening.
+Final13member SDK/test/source archive b1475936 and all failed/source versions
+are retained on both hosts. See `docs/llvm-dispatch-corridor-batch.md`, native
+validation and undef notes. No new instruction/Unicorn/whole-corpus campaign.
+
 Seeded Guest word joint preservation (2026-11-15, base `49f58f1`): opt-in
 Image context can use one independently constant full-width dominating STORE
 and exact selected reloads. Proof-only constants never prune CFG; every

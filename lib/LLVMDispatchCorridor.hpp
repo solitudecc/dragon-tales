@@ -9,5 +9,8 @@ namespace dragon::llvmlifter::detail {
 DispatchCorridorStats threadDispatchCorridorCommitFailureForTest(
     llvm::Function &, const std::vector<DispatchCorridorEdge> &,
     unsigned failureStage, const DispatchCorridorOptions & = {});
+DispatchCorridorStats threadDispatchCorridorBatchCommitFailureForTest(
+    llvm::Function &, const std::vector<DispatchCorridorEdge> &,
+    unsigned failureStage, const DispatchCorridorBatchOptions & = {});
 } // namespace dragon::llvmlifter::detail
 #endif

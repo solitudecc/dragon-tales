@@ -7,6 +7,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Operator.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -40,6 +41,7 @@ struct Work {
   }
 };
 struct HistoricalUse { Instruction *instruction; unsigned operand; Value *value; };
+struct FrozenEdge { unsigned source, slot; std::vector<unsigned> path; };
 struct Plan {
   DispatchCorridorEdge edge;
   std::map<BasicBlock *, unsigned> position;
@@ -52,6 +54,7 @@ struct Plan {
   std::vector<APInt> states;
   std::size_t instructions = 0, repairCells = 0;
   bool mayPoison = false;
+  bool boundsSelfEdge = false;
 };
 Value *incoming(PHINode &phi, BasicBlock &from) {
   Value *value = nullptr;
@@ -68,6 +71,56 @@ bool repairUse(const Use &use, const BasicBlock &definitionBlock) {
   auto *phi = dyn_cast<PHINode>(user);
   return phi && phi->getIncomingBlock(use.getOperandNo()) != &definitionBlock;
 }
+// Batch-only concrete finite-domain evaluation. Supported flags are checked
+// for EVERY atom assignment; the copied instructions retain all original
+// flags. No range/definedness fact is obtained by silently dropping a flag.
+std::optional<APInt> batchCast(CastInst &i, const APInt &a) {
+  const unsigned width = i.getType()->getIntegerBitWidth();
+  switch (i.getOpcode()) {
+  case Instruction::ZExt:
+    if (i.hasNonNeg() && a.isNegative()) return {};
+    return a.zext(width);
+  case Instruction::SExt: return a.sext(width);
+  case Instruction::Trunc: {
+    auto result = a.trunc(width);
+    if (i.hasNoUnsignedWrap() && result.zext(a.getBitWidth()) != a) return {};
+    if (i.hasNoSignedWrap() && result.sext(a.getBitWidth()) != a) return {};
+    return result;
+  }
+  default: return {};
+  }
+}
+std::optional<APInt> batchBinary(BinaryOperator &i, const APInt &a, const APInt &b) {
+  bool unsignedOverflow = false, signedOverflow = false;
+  APInt result(a.getBitWidth(), 0);
+  switch (i.getOpcode()) {
+  case Instruction::Add:
+    result = a.uadd_ov(b, unsignedOverflow); (void)a.sadd_ov(b, signedOverflow); break;
+  case Instruction::Sub:
+    result = a.usub_ov(b, unsignedOverflow); (void)a.ssub_ov(b, signedOverflow); break;
+  case Instruction::Mul:
+    result = a.umul_ov(b, unsignedOverflow); (void)a.smul_ov(b, signedOverflow); break;
+  case Instruction::And: return a & b;
+  case Instruction::Or:
+    if (auto *op = dyn_cast<PossiblyDisjointInst>(&i);
+        op && op->isDisjoint() && !(a & b).isZero()) return {};
+    return a | b;
+  case Instruction::Xor: return a ^ b;
+  case Instruction::Shl:
+    if (b.uge(a.getBitWidth())) return {};
+    result = a.ushl_ov(b, unsignedOverflow); (void)a.sshl_ov(b, signedOverflow); break;
+  case Instruction::LShr: case Instruction::AShr: {
+    if (b.uge(a.getBitWidth())) return {};
+    const unsigned shift = static_cast<unsigned>(b.getZExtValue());
+    if (i.isExact() && !a.getLoBits(shift).isZero()) return {};
+    return i.getOpcode() == Instruction::LShr ? a.lshr(shift) : a.ashr(shift);
+  }
+  default: return {};
+  }
+  if ((i.hasNoUnsignedWrap() && unsignedOverflow) ||
+      (i.hasNoSignedWrap() && signedOverflow)) return {};
+  return result;
+}
 // Exact full one-bit domain, not sample execution. The original selector is
 // still consumed at its old switch point, so this exports no definedness fact.
 class StateValues {
@@ -78,10 +131,16 @@ class StateValues {
   std::set<ViewedValue> active, nodes;
   std::optional<ViewedValue> atom;
   bool failed = false;
+  bool batch = false;
   bool integer(Value *v) {
     return v->getType()->isIntegerTy() && v->getType()->getIntegerBitWidth() <= 128;
   }
   bool observe(Value *v) {
+    // A flagged i1 cast/binary is not an opaque observation: treating it as
+    // the atom would skip the very flag proof requested for this operation.
+    // The legacy admission path is intentionally unchanged.
+    if (batch)
+      if (auto *i = dyn_cast<Instruction>(v); i && i->hasPoisonGeneratingFlags()) return false;
     if (v->getType()->isIntegerTy(1) && !isa<Constant>(v)) return true;
     auto *i = dyn_cast<BinaryOperator>(v);
     if (!i || i->getOpcode() != Instruction::And) return false;
@@ -133,7 +192,7 @@ class StateValues {
     auto *i = dyn_cast<Instruction>(v);
     // The first prototype deliberately does not infer safety of flagged
     // arithmetic. Original flags/ops are retained by the corridor copy.
-    if (!i || i->hasPoisonGeneratingFlags()) return done({});
+    if (!i || (!batch && i->hasPoisonGeneratingFlags())) return done({});
     auto operand = [&](unsigned n) {
       View nextView = view;
       if (view == View::Current)
@@ -151,6 +210,7 @@ class StateValues {
     if (auto *c = dyn_cast<CastInst>(i)) {
       auto value = operand(0);
       if (!value) return done({});
+      if (batch) return done(batchCast(*c, *value));
       unsigned width = c->getType()->getIntegerBitWidth();
       switch (c->getOpcode()) {
       case Instruction::ZExt: return done(value->zext(width));
@@ -160,11 +220,12 @@ class StateValues {
       }
     }
     auto *binary = dyn_cast<BinaryOperator>(i);
-    if (!binary || (!isa<ConstantInt>(i->getOperand(0)) &&
-                    !isa<ConstantInt>(i->getOperand(1)))) return done({});
+    if (!binary || (!batch && !isa<ConstantInt>(i->getOperand(0)) &&
+                              !isa<ConstantInt>(i->getOperand(1)))) return done({});
     auto a = operand(0);
     auto b = operand(1);
     if (!a || !b) return done({});
+    if (batch) return done(batchBinary(*binary, *a, *b));
     switch (i->getOpcode()) {
     case Instruction::Add: return done(*a + *b);
     case Instruction::Sub: return done(*a - *b);
@@ -180,7 +241,7 @@ class StateValues {
     }
   }
 public:
-  StateValues(Plan &p, Work &w) : plan(p), work(w) {}
+  StateValues(Plan &p, Work &w, bool batchMode = false) : plan(p), work(w), batch(batchMode) {}
   bool run(Value *selector) {
     auto a = get(selector, false, 0);
     auto b = get(selector, true, 0);
@@ -192,9 +253,10 @@ public:
     return plan.states.size() == 2 || !plan.mayPoison;
   }
 };
+BasicBlock *destination(SwitchInst &, const APInt &);
 bool preflight(Function &f, const DispatchCorridorEdge &edge,
                DispatchCorridorOptions const &options, Work &work, Plan &plan,
-               std::string &reason) {
+               std::string &reason, bool batch = false) {
   auto reject = [&](const char *message) { reason = message; return false; };
   if (!edge.source || edge.source->getParent() != &f || edge.path.empty())
     return reject("invalid original corridor path");
@@ -235,10 +297,14 @@ bool preflight(Function &f, const DispatchCorridorEdge &edge,
       for (auto *next : successors(b)) {
         if (!work.spend()) return false;
         if (next == edge.path[n + 1]) continues = true;
-        else if (plan.position.contains(next)) return reject("nonlinear corridor reentry");
+        else if (plan.position.contains(next)) {
+          if (!batch || n || next != b || !branch->isConditional())
+            return reject("nonlinear corridor reentry");
+          plan.boundsSelfEdge = true;
+        }
       }
       if (!continues) return reject("corridor does not contain an actual continuing edge");
-    } else for (auto *next : successors(b))
+    } else if (!batch) for (auto *next : successors(b))
       if (plan.position.contains(next)) return reject("switch successor reenters copied region");
     BasicBlock *from = n ? edge.path[n - 1] : edge.source;
     for (auto &phi : b->phis()) {
@@ -322,7 +388,58 @@ bool preflight(Function &f, const DispatchCorridorEdge &edge,
       }
     }
   }
-  if (!StateValues(plan, work).run(sw->getCondition())) return reject("selector lacks a complete safe finite state proof");
+  if (!StateValues(plan, work, batch).run(sw->getCondition())) return reject("selector lacks a complete safe finite state proof");
+  if (batch) for (const auto &state : plan.states) {
+    if (!work.spend(1 + sw->getNumCases())) return false;
+    if (plan.position.contains(destination(*sw, state)))
+      return reject("proved switch destination reenters copied region");
+  }
+  if (plan.boundsSelfEdge) {
+    auto *head = edge.path.front();
+    auto *branch = cast<BranchInst>(head->getTerminator());
+    auto *compare = dyn_cast<ICmpInst>(branch->getCondition());
+    if (!compare || compare->getParent() != head || compare->hasPoisonGeneratingFlags())
+      return reject("bounds self-edge lacks an original pure integer comparison");
+    for (auto &i : *head) {
+      if (!work.spend(1 + i.getNumOperands())) return false;
+      if (&i == branch) continue;
+      if ((!isa<PHINode, BinaryOperator, ICmpInst, ZExtInst, SExtInst, TruncInst, SelectInst>(i)) ||
+          !i.getType()->isIntegerTy() || i.getType()->getIntegerBitWidth() > 128)
+        return reject("bounds self-edge head is not pure integer code");
+      if (auto *phi = dyn_cast<PHINode>(&i)) {
+        auto *self = incoming(*phi, *head);
+        if (!self || literalBad(self)) return reject("unsafe bounds self-edge PHI input");
+      }
+    }
+    auto *selector = sw->getCondition();
+    unsigned stateOperand = 0;
+    auto *bound = dyn_cast<ConstantInt>(compare->getOperand(1));
+    if (compare->getOperand(0) != selector || !bound) {
+      stateOperand = 1; bound = dyn_cast<ConstantInt>(compare->getOperand(0));
+      if (compare->getOperand(1) != selector || !bound)
+        return reject("bounds state differs from the proved original selector");
+    }
+    // The same Value* may mean an old later-header execution at the bounds
+    // use and its fresh execution at the switch. Such a proof is not shared.
+    for (const auto &use : plan.historicalUses)
+      if (use.instruction == compare && use.operand == stateOperand)
+        return reject("bounds state is a different historical observation");
+    for (const auto &state : plan.states) {
+      if (state.getBitWidth() != bound->getBitWidth()) return reject("bounds state width mismatch");
+      const APInt &a = stateOperand ? bound->getValue() : state;
+      const APInt &b = stateOperand ? state : bound->getValue();
+      bool selected;
+      switch (compare->getPredicate()) {
+      case ICmpInst::ICMP_ULT: selected = a.ult(b); break;
+      case ICmpInst::ICMP_ULE: selected = a.ule(b); break;
+      case ICmpInst::ICMP_UGT: selected = a.ugt(b); break;
+      case ICmpInst::ICMP_UGE: selected = a.uge(b); break;
+      default: return reject("unsupported bounds self-edge predicate");
+      }
+      if (!work.spend() || branch->getSuccessor(selected ? 0 : 1) != edge.path[1])
+        return reject("proved starting state does not select the bounds continuation");
+    }
+  }
   std::size_t live = 0, externalUses = plan.snapshots.size();
   for (auto *definition : plan.definitions) {
     bool used = false;
@@ -343,6 +460,9 @@ bool preflight(Function &f, const DispatchCorridorEdge &edge,
   }
   const auto blocks = edge.path.size() + !plan.snapshots.empty();
   plan.repairCells = live * (f.size() + blocks);
+  // A batch prepays one union repair footprint after every plan is proved.
+  // Per-edge repair/growth accounting remains exactly the legacy path below.
+  if (batch) return true;
   const auto instructions = plan.instructions + plan.snapshots.size() +
                             !plan.snapshots.empty() + (plan.states.size() == 2);
   auto &stats = work.stats;
@@ -571,19 +691,265 @@ bool unsupportedMetadata(Metadata *metadata, Work &work, std::set<Metadata *> &s
     }
   return false;
 }
+struct BatchCopy {
+  Plan *plan = nullptr;
+  ValueToValueMapTy map;
+  std::map<Value *, Value *> old;
+  std::vector<BasicBlock *> blocks;
+  BasicBlock *bridge = nullptr;
+};
+// No original instruction/edge is changed until all plans and the complete
+// shared repair footprint have passed. All maps refer to this one owned trial.
+bool applyBatch(Function &f, const std::vector<FrozenEdge> &frozen,
+                const std::vector<BasicBlock *> &originalBlocks,
+                const DispatchCorridorOptions &options, Work &work) {
+  auto &stats = work.stats;
+  auto fail = [&](const std::string &message) {
+    stats.changed = false; stats.complete = false; stats.rejected = frozen.size();
+    stats.rewrittenEdges = stats.clonedBlocks = stats.clonedInstructions = 0;
+    stats.snapshots = stats.repairPhis = stats.repairCells = 0;
+    stats.message = message; return false;
+  };
+  std::vector<std::unique_ptr<Plan>> plans;
+  std::vector<Instruction *> definitions;
+  std::set<Instruction *> seenDefinitions;
+  std::size_t blocks = 0, instructions = 0, snapshots = 0;
+  for (const auto &item : frozen) {
+    ++stats.candidatesVisited;
+    DispatchCorridorEdge edge{originalBlocks.at(item.source), item.slot, {}};
+    for (auto index : item.path) edge.path.push_back(originalBlocks.at(index));
+    auto plan = std::make_unique<Plan>();
+    std::string reason;
+    if (!preflight(f, edge, options, work, *plan, reason, true))
+      return fail(reason.empty() ? stats.message : reason);
+    const auto addedBlocks = edge.path.size() + !plan->snapshots.empty();
+    const auto addedInstructions = plan->instructions + plan->snapshots.size() +
+                                   !plan->snapshots.empty() + (plan->states.size() == 2);
+    if (plans.size() == options.maxRewrites || addedBlocks > options.maxClonedBlocks - blocks ||
+        addedInstructions > options.maxClonedInstructions - instructions) {
+      stats.budgetExhausted = true;
+      return fail("shared batch copy growth budget");
+    }
+    blocks += addedBlocks; instructions += addedInstructions; snapshots += plan->snapshots.size();
+    for (auto *definition : plan->definitions)
+      if (seenDefinitions.insert(definition).second) definitions.push_back(definition);
+    plans.push_back(std::move(plan));
+  }
+  if (plans.empty()) return true;
+  // Prepay every original definition, conservatively including definitions
+  // whose external use disappears after the simultaneous edge removals. This
+  // is one union footprint, never one footprint per candidate/copy.
+  const auto finalBlocks = f.size() + blocks;
+  if (definitions.size() > options.maxRepairCells / finalBlocks) {
+    stats.budgetExhausted = true; return fail("shared batch SSA repair budget");
+  }
+  const auto repairCells = definitions.size() * finalBlocks;
+  if (!work.spend(instructions + repairCells)) return fail(stats.message);
+  std::vector<std::unique_ptr<BatchCopy>> copies;
+  std::set<BasicBlock *> addedBlocks;
+  for (auto &ownedPlan : plans) {
+    auto &plan = *ownedPlan;
+    auto ownedCopy = std::make_unique<BatchCopy>();
+    auto &copy = *ownedCopy; copy.plan = &plan;
+    if (!plan.snapshots.empty()) {
+      copy.bridge = BasicBlock::Create(f.getContext(), "dispatch.history", &f);
+      addedBlocks.insert(copy.bridge);
+      for (auto *value : plan.snapshots) {
+        auto *snapshot = PHINode::Create(value->getType(), 1, "dispatch.old", copy.bridge);
+        snapshot->addIncoming(value, plan.edge.source); copy.old[value] = snapshot;
+        copy.map[snapshot] = snapshot;
+      }
+    }
+    std::map<Instruction *, Instruction *> instructionCopies;
+    for (auto *block : plan.edge.path) {
+      auto *cloned = CloneBasicBlock(block, copy.map, ".dispatch.edge", &f);
+      copy.map[block] = cloned; copy.blocks.push_back(cloned); addedBlocks.insert(cloned);
+      auto origin = block->begin();
+      for (auto &instruction : *cloned) instructionCopies[&*origin++] = &instruction;
+    }
+    auto selectedInput = [&](Value *value, unsigned block) -> Value * {
+      if (auto *instruction = dyn_cast<Instruction>(value)) {
+        auto pos = plan.position.find(instruction->getParent());
+        if (block && pos != plan.position.end() && pos->second < block)
+          return copy.map.lookup(value);
+      }
+      if (auto it = copy.old.find(value); it != copy.old.end()) return it->second;
+      return value;
+    };
+    for (unsigned n = 0; n != plan.edge.path.size(); ++n)
+      for (auto &phi : plan.edge.path[n]->phis())
+        copy.map[&phi] = selectedInput(plan.phiInputs.at(&phi), n);
+    for (auto *block : copy.blocks)
+      while (auto *phi = dyn_cast<PHINode>(&block->front())) phi->eraseFromParent();
+    for (const auto &use : plan.historicalUses)
+      instructionCopies.at(use.instruction)->setOperand(use.operand, copy.old.at(use.value));
+    for (auto *block : copy.blocks) for (auto &instruction : *block)
+      RemapInstruction(&instruction, copy.map, RF_IgnoreMissingLocals | RF_NoModuleLevelChanges);
+    if (plan.boundsSelfEdge) {
+      auto *branch = cast<BranchInst>(copy.blocks.front()->getTerminator());
+      if (plan.states.size() == 1) {
+        BranchInst::Create(copy.blocks[1], branch); branch->eraseFromParent();
+      } else {
+        // Do not introduce an early equality/freeze of the selector. Preserve
+        // the ORIGINAL condition consumption here, before any later effects.
+        // Both complete numeric states take the original continuation; the
+        // duplicate new slots merely eliminate its impossible structural loop.
+        branch->setSuccessor(0, copy.blocks[1]);
+        branch->setSuccessor(1, copy.blocks[1]);
+      }
+    }
+    auto *originalSwitch = cast<SwitchInst>(plan.edge.path.back()->getTerminator());
+    auto *newSwitch = cast<SwitchInst>(copy.blocks.back()->getTerminator());
+    auto *first = destination(*originalSwitch, plan.states.front());
+    if (plan.states.size() == 1) BranchInst::Create(first, newSwitch);
+    else {
+      auto *condition = new ICmpInst(newSwitch, ICmpInst::ICMP_EQ, newSwitch->getCondition(),
+          ConstantInt::get(f.getContext(), plan.states.front()), "dispatch.choose");
+      BranchInst::Create(first, destination(*originalSwitch, plan.states.back()), condition, newSwitch);
+    }
+    newSwitch->eraseFromParent();
+    if (copy.bridge) BranchInst::Create(copy.blocks.front(), copy.bridge);
+    copies.push_back(std::move(ownedCopy));
+  }
+  // All paths have been cloned from the unchanged originals. Now add exactly
+  // one PHI incoming per actual NEW successor slot, including duplicate slots.
+  for (const auto &ownedCopy : copies) {
+    auto &copy = *ownedCopy; auto &plan = *copy.plan;
+    for (unsigned n = 0; n != copy.blocks.size(); ++n) {
+      auto *original = plan.edge.path[n]; auto *block = copy.blocks[n];
+      for (auto *next : successors(block)) {
+        if (addedBlocks.contains(next)) continue;
+        for (auto &phi : next->phis()) {
+          auto expected = plan.exitInputs.find({original, &phi});
+          if (expected == plan.exitInputs.end()) return fail("batch external exit PHI lacks a proved input");
+          auto *value = expected->second.first;
+          if (expected->second.second) value = copy.old.at(value);
+          else if (auto found = copy.map.find(value); found != copy.map.end()) value = found->second;
+          phi.addIncoming(value, block);
+        }
+      }
+    }
+  }
+  for (const auto &ownedCopy : copies) {
+    auto &copy = *ownedCopy; auto &plan = *copy.plan;
+    auto *source = plan.edge.source;
+    source->getTerminator()->setSuccessor(plan.edge.successorSlot,
+                                         copy.bridge ? copy.bridge : copy.blocks.front());
+    for (auto &phi : plan.edge.path.front()->phis()) {
+      int index = phi.getBasicBlockIndex(source);
+      if (index < 0) return fail("batch source slot lacks its original PHI incoming");
+      phi.removeIncomingValue(static_cast<unsigned>(index), false);
+    }
+  }
+  std::map<Instruction *, std::vector<std::pair<BasicBlock *, Value *>>> available;
+  for (auto *definition : definitions) for (const auto &ownedCopy : copies) {
+    auto &copy = *ownedCopy;
+    if (!copy.plan->position.contains(definition->getParent())) continue;
+    auto *block = dyn_cast_or_null<BasicBlock>(copy.map.lookup(definition->getParent()));
+    Value *value = copy.map.lookup(definition);
+    if (!block || !value || literalBad(value))
+      return fail("batch copy lacks a safe available definition");
+    // An updater may create new PHIs after the all-use snapshot below. Its
+    // available values must not introduce a new use of ANOTHER original
+    // definition which that definition's snapshot could have missed. Fresh
+    // inputs are copies; historical instruction inputs must have a bridge.
+    if (auto *instruction = dyn_cast<Instruction>(value);
+        instruction && !addedBlocks.contains(instruction->getParent()))
+      return fail("batch available value is an unversioned original instruction");
+    available[definition].push_back({block, value});
+  }
+  // Structural mutation is finished. Snapshot EVERY remaining original-value
+  // use before any updater runs; PHI operand arrays will no longer be resized.
+  // Cross-copy and history uses are intentional users and must not be skipped
+  // merely because their instruction happens to live in a copied block.
+  std::map<Instruction *, SmallVector<Use *, 32>> uses;
+  for (auto *definition : definitions) for (auto &use : definition->uses()) {
+    if (!work.spend()) return fail(stats.message);
+    if (repairUse(use, *definition->getParent())) uses[definition].push_back(&use);
+  }
+  for (auto *definition : definitions) {
+    auto foundUses = uses.find(definition);
+    if (foundUses == uses.end() || foundUses->second.empty()) continue;
+    SmallVector<PHINode *, 8> phis;
+    SSAUpdater updater(&phis);
+    updater.Initialize(definition->getType(), "dispatch.live");
+    updater.AddAvailableValue(definition->getParent(), definition);
+    for (const auto &[block, value] : available.at(definition))
+      updater.AddAvailableValue(block, value);
+    for (auto *use : foundUses->second) updater.RewriteUse(*use);
+    for (auto *phi : phis) for (auto &value : phi->incoming_values())
+      if (literalBad(value)) return fail("batch SSA repair invented an unsafe incoming");
+    stats.repairPhis += phis.size();
+  }
+  stats.rewrittenEdges = plans.size(); stats.clonedBlocks = blocks;
+  stats.clonedInstructions = instructions; stats.snapshots = snapshots; stats.repairCells = repairCells;
+  return true;
+}
+// LLVM's removeUnreachableBlocks also constant-folds reachable terminators.
+// In particular it erases a conditional br with identical successor slots,
+// dropping precisely the bounds condition consumption retained by the batch.
+// Here deletion is based only on the actual CFG, without folding instructions.
+bool removeBatchUnreachable(Function &f, Work &work) {
+  std::set<BasicBlock *> reachable;
+  std::vector<BasicBlock *> pending{&f.getEntryBlock()};
+  reachable.insert(pending.front());
+  while (!pending.empty()) {
+    auto *block = pending.back(); pending.pop_back();
+    if (!work.spend(1 + block->getTerminator()->getNumSuccessors())) return false;
+    for (auto *next : successors(block))
+      if (reachable.insert(next).second) pending.push_back(next);
+  }
+  std::vector<BasicBlock *> dead;
+  for (auto &block : f) {
+    if (!work.spend()) return false;
+    if (!reachable.contains(&block)) dead.push_back(&block);
+  }
+  // Remove one incoming for each actual dead predecessor slot. Do not invoke
+  // removePredecessor's PHI simplification, or any terminator simplification.
+  for (auto *block : dead) for (auto *next : successors(block)) {
+    if (!work.spend()) return false;
+    if (!reachable.contains(next)) continue;
+    for (auto &phi : next->phis()) {
+      if (!work.spend()) return false;
+      int index = phi.getBasicBlockIndex(block);
+      if (index < 0) {
+        work.stats.message = "dead batch edge lacks its actual PHI slot"; return false;
+      }
+      phi.removeIncomingValue(static_cast<unsigned>(index), false);
+    }
+  }
+  // A missed reaching definition is a failed trial, never an invented undef
+  // or poison. Only after checking all surviving users may dead SCCs be freed.
+  for (auto *block : dead) for (auto &instruction : *block) {
+    if (!work.spend()) return false;
+    for (auto &use : instruction.uses()) {
+      if (!work.spend()) return false;
+      auto *user = dyn_cast<Instruction>(use.getUser());
+      if (!user || reachable.contains(user->getParent())) {
+        work.stats.message = "dead batch definition still has a surviving use"; return false;
+      }
+    }
+  }
+  for (auto *block : dead) block->dropAllReferences();
+  for (auto *block : dead) block->eraseFromParent();
+  return true;
+}
 } // namespace
 static DispatchCorridorStats run(Function &f,
     const std::vector<DispatchCorridorEdge> &candidates, const DispatchCorridorOptions &options,
-    unsigned forceCommitFailure) {
+    unsigned forceCommitFailure, bool batch = false) {
   DispatchCorridorStats stats; Work work{stats, options};
   auto rejectAll = [&](const char *message) {
     stats.complete = false; stats.rejected = candidates.size(); stats.message = message; return stats;
   };
   if (!f.getParent() || !f.hasName() || f.isDeclaration() || f.hasPersonalityFn() || f.getSubprogram() ||
-      !options.maxCandidates || options.maxCandidates > 512 || !options.maxRewrites || options.maxRewrites > 64 ||
-      !options.maxClonedBlocks || options.maxClonedBlocks > 64 || !options.maxClonedInstructions || options.maxClonedInstructions > 16384 ||
-      !options.maxRepairCells || options.maxRepairCells > 262144 || !options.maxWork || options.maxWork > 1000000)
+      !options.maxCandidates || options.maxCandidates > 512 || !options.maxRewrites || options.maxRewrites > (batch ? 512 : 64) ||
+      !options.maxClonedBlocks || options.maxClonedBlocks > (batch ? 4096 : 64) ||
+      !options.maxClonedInstructions || options.maxClonedInstructions > (batch ? 262144 : 16384) ||
+      !options.maxRepairCells || options.maxRepairCells > (batch ? 4194304 : 262144) ||
+      !options.maxWork || options.maxWork > (batch ? 16777216 : 1000000))
     return rejectAll("invalid corridor request or option bounds");
+  if (batch && candidates.empty()) return stats;
   if (candidates.size() > options.maxCandidates || f.size() > MaxFunctionBlocks) {
     stats.budgetExhausted = true; return rejectAll("original candidate or function block cap");
   }
@@ -634,11 +1000,10 @@ static DispatchCorridorStats run(Function &f,
     }
     moduleInstructions += b.size();
   }
-  struct Frozen { unsigned source, slot; std::vector<unsigned> path; };
-  std::vector<Frozen> frozen;
+  std::vector<FrozenEdge> frozen;
   for (const auto &edge : candidates) {
     if (!indexes.contains(edge.source)) return rejectAll("candidate does not belong to the original function");
-    Frozen item{indexes.at(edge.source), edge.successorSlot, {}};
+    FrozenEdge item{indexes.at(edge.source), edge.successorSlot, {}};
     for (auto *block : edge.path) {
       if (!indexes.contains(block)) return rejectAll("path does not belong to the original function");
       item.path.push_back(indexes.at(block));
@@ -651,12 +1016,20 @@ static DispatchCorridorStats run(Function &f,
   for (unsigned n = 1; n < frozen.size(); ++n)
     if (frozen[n - 1].source == frozen[n].source && frozen[n - 1].slot == frozen[n].slot)
       return rejectAll("duplicate original candidate edge");
+  if (batch) {
+    std::set<unsigned> sources;
+    for (const auto &item : frozen) sources.insert(item.source);
+    for (const auto &item : frozen) for (auto block : item.path)
+      if (sources.contains(block)) return rejectAll("batch candidate source intersects an original copied path");
+  }
   auto trial = CloneModule(*f.getParent());
   auto *function = trial->getFunction(f.getName());
   if (!function || function->getFunctionType() != f.getFunctionType())
     return rejectAll("original function missing from owned trial");
   std::vector<BasicBlock *> blocks; for (auto &b : *function) blocks.push_back(&b);
-  for (const auto &item : frozen) {
+  if (batch) {
+    if (!applyBatch(*function, frozen, blocks, options, work)) return stats;
+  } else for (const auto &item : frozen) {
     ++stats.candidatesVisited;
     DispatchCorridorEdge edge{blocks.at(item.source), item.slot, {}};
     for (auto index : item.path) edge.path.push_back(blocks.at(index));
@@ -674,10 +1047,18 @@ static DispatchCorridorStats run(Function &f,
     }
   }
   if (!stats.rewrittenEdges) return stats;
-  removeUnreachableBlocks(*function);
+  if (batch) {
+    if (!removeBatchUnreachable(*function, work)) {
+      stats.changed = false; stats.complete = false; stats.rejected = candidates.size();
+      stats.rewrittenEdges = stats.clonedBlocks = stats.clonedInstructions = 0;
+      stats.snapshots = stats.repairPhis = stats.repairCells = 0;
+      return stats;
+    }
+  } else removeUnreachableBlocks(*function);
   if (verifyModule(*trial) || !commit(f, *function, forceCommitFailure)) {
     stats.complete = false; stats.changed = false;
     stats.rewrittenEdges = stats.clonedBlocks = stats.clonedInstructions = stats.snapshots = stats.repairPhis = 0;
+    if (batch) { stats.repairCells = 0; stats.rejected = candidates.size(); }
     stats.message = "owned trial verification or body commit failed; original unchanged"; return stats;
   }
   stats.changed = true;
@@ -688,11 +1069,28 @@ DispatchCorridorStats threadDispatchCorridor(Function &f,
     const std::vector<DispatchCorridorEdge> &candidates, const DispatchCorridorOptions &options) {
   return run(f, candidates, options, 0);
 }
+static DispatchCorridorOptions batchLimits(const DispatchCorridorBatchOptions &options) {
+  DispatchCorridorOptions limits;
+  limits.maxCandidates = options.maxCandidates; limits.maxRewrites = options.maxRewrites;
+  limits.maxClonedBlocks = options.maxClonedBlocks;
+  limits.maxClonedInstructions = options.maxClonedInstructions;
+  limits.maxRepairCells = options.maxRepairCells; limits.maxWork = options.maxWork;
+  return limits;
+}
+DispatchCorridorStats threadDispatchCorridorBatch(Function &f,
+    const std::vector<DispatchCorridorEdge> &candidates, const DispatchCorridorBatchOptions &options) {
+  return run(f, candidates, batchLimits(options), 0, true);
+}
 #ifdef DRAGON_DISPATCH_CORRIDOR_TESTING
 DispatchCorridorStats threadDispatchCorridorCommitFailureForTest(Function &f,
     const std::vector<DispatchCorridorEdge> &candidates, unsigned stage,
     const DispatchCorridorOptions &options) {
   return run(f, candidates, options, stage);
+}
+DispatchCorridorStats threadDispatchCorridorBatchCommitFailureForTest(Function &f,
+    const std::vector<DispatchCorridorEdge> &candidates, unsigned stage,
+    const DispatchCorridorBatchOptions &options) {
+  return run(f, candidates, batchLimits(options), stage, true);
 }
 #endif
 } // namespace dragon::llvmlifter::detail

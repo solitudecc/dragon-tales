@@ -42,4 +42,31 @@ DispatchCorridorStats threadDispatchCorridor(
     llvm::Function &, const std::vector<DispatchCorridorEdge> &originalCandidates,
     const DispatchCorridorOptions & = {});
 
+// Separate opt-in whole-batch transaction. These are total limits, not limits
+// reset for each edge; none changes the legacy entry point's bounds/defaults.
+struct DispatchCorridorBatchOptions {
+  std::size_t maxCandidates = 512;
+  std::size_t maxRewrites = 512;
+  std::size_t maxClonedBlocks = 4096;
+  std::size_t maxClonedInstructions = 262144;
+  std::size_t maxRepairCells = 4194304;
+  std::size_t maxWork = 16777216;
+};
+// All candidates are frozen and proved before any copying. A refused candidate
+// or exhausted total budget refuses the entire batch. Definitions shared by
+// paths are repaired once with all original/copied available values. Candidate
+// sources may not themselves occur in any candidate path. Two-state selectors
+// are consumed at the original switch point, exactly as in the legacy entry.
+// A pure integer head's bounds self-edge may be omitted only when the complete
+// domain of that same execution's state proves the original comparison must
+// take its continuing successor. A defined singleton may branch directly;
+// two states keep the actual original conditional branch, with BOTH successor
+// slots continuing, so poison/undef are not consumed earlier or silently made
+// defined. No domain or definedness fact is accepted from the caller. The
+// transaction/identity and
+// handle-lifetime rules of threadDispatchCorridor apply to this entry point.
+DispatchCorridorStats threadDispatchCorridorBatch(
+    llvm::Function &, const std::vector<DispatchCorridorEdge> &originalCandidates,
+    const DispatchCorridorBatchOptions & = {});
+
 } // namespace dragon::llvmlifter::detail
