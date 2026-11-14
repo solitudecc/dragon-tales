@@ -15,6 +15,7 @@ add_library(libdragon SHARED
         LLVMDeflattening.cpp
         CallEffectSummary.cpp
         GuestMemorySSA.cpp
+        LLVMGuestCellSSA.cpp
         GuestMemoryEdges.cpp
         GuardedTransitions.cpp
         GuardedTargetSets.cpp

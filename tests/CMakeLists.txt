@@ -94,6 +94,7 @@ add_executable(dragon_tests
         lifters/TestLLVMPreparedRegion.cpp
         lifters/TestLLVMLiftProvenance.cpp
         lifters/TestLLVMGuestMemorySSA.cpp
+        lifters/TestLLVMGuestCellSSA.cpp
         lifters/TestLLVMGuestMemoryJoinEdges.cpp
         lifters/TestLLVMGuestIndexProofCache.cpp
         lifters/TestLLVMGuestAddressWidths.cpp
