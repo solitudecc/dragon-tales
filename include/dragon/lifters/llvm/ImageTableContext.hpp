@@ -41,6 +41,10 @@ struct ImageTableContextStats {
 // access must be within the table under its original path conditions. Every
 // write on a path to another table read must preserve those bytes. Unknown
 // calls/aliases/ranges refuse closure. Terminal effects remain executable.
+// Complete byte-word equality checks on other canonical initial register
+// LOADs may constrain those exact SSA snapshots after the accepted guard.
+// Partial checks, another LOAD at the same offset, future register values and
+// Guest reloads gain no fact. No memory/register noalias assumption is made.
 //
 // A successful rewrite uses the actual index, not a predicted value. Its
 // default retains the original target LOAD/switch. Existing bounds, errors,

@@ -1,0 +1,335 @@
+{
+  "allowed_cpus": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "build_manifest": {
+    "path": "/ABSOLUTE/FROZEN/BUILD-RESULT.json",
+    "sha256": "d49983770ed9a23fd45a32f4e23e0598646cb88ea38feb556d36a43cb7ec83fd"
+  },
+  "case": "flatten-switch-O2",
+  "driver": {
+    "path": "/ABSOLUTE/SELECTED50/sources/frozen-driver.c",
+    "sha256": "e0fb71e08b117ddb6c929dc60ff66af938073695ced0fe68b6f50aa9c69c75bb",
+    "size": 1829
+  },
+  "host_llvm_levels": [
+    "O0",
+    "O2"
+  ],
+  "inputs": [
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-0.bin",
+        "sha256": "2d5e3cae56faa5553242f2d2b4024a27f455c05f9cf858c1899fb548ca4c131e",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-0.bin",
+        "sha256": "cde6b37715543c1c8d128c9040dd4b772c1eca7f65bc24c008e87369157fba90",
+        "size": 66048
+      },
+      "trial": 0,
+      "value": 0
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-1.bin",
+        "sha256": "4c84d930ce00742a2e03e4699712bd5913c8e1171853572ac6b9a58d34966ffd",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-1.bin",
+        "sha256": "3fa662dc8f97945e589cbb94d227209db8cf49df8203d615216d3953747837ee",
+        "size": 66048
+      },
+      "trial": 1,
+      "value": 1
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-2.bin",
+        "sha256": "bdb254be1e20b1ef78474870bc20b1e296ca2a568ea68fd746fdec045f19282f",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-2.bin",
+        "sha256": "424d4852b9fc66f6b720a30c0eb64e7d98c634a06f3c356eaeb17ba83743faed",
+        "size": 66048
+      },
+      "trial": 2,
+      "value": 2
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-3.bin",
+        "sha256": "a068e6772b33f772f6ec44006ca10abbfe5e2d7d33620e3c8e7916911b8b3391",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-3.bin",
+        "sha256": "65b0a5c1b1e1522f6e2386f06c5c6168d6ab2614558435b95adecadde7f7f819",
+        "size": 66048
+      },
+      "trial": 3,
+      "value": 7
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-4.bin",
+        "sha256": "0e0fc4c8030ef14266bd43fc2c2fed9685c247e26234ab61ca4b7dfaead5f1d9",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-4.bin",
+        "sha256": "7a0c119e03e14d2a9a1c99dd978106a2b700088568553ad2d2b47ad6e802b6e2",
+        "size": 66048
+      },
+      "trial": 4,
+      "value": 127
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-5.bin",
+        "sha256": "4c9e3cf75131fdf421cb74ae05c311249427ba73d1dcdad154fbb237fe888c42",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-5.bin",
+        "sha256": "bbab64fd9429c214c008fafc3870eac733c767da83f326214f517f7c04c36bef",
+        "size": 66048
+      },
+      "trial": 5,
+      "value": 128
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-6.bin",
+        "sha256": "2eb8af078a9aa5bdfe1de1a402eded137c5ad060737f51b2d92b6337825fa143",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-6.bin",
+        "sha256": "bf0d8b7cd0d6408564c6f02477fd231d03e06daf63a8a9856f1684ed37afa2b4",
+        "size": 66048
+      },
+      "trial": 6,
+      "value": 32767
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-7.bin",
+        "sha256": "97fa233f0ef80af6b0dbe1f82469400b88303e76c36dcc3f5a09ff9cc9746e43",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-7.bin",
+        "sha256": "05f3f9db5dfc2a96005391401d9ae13367cb816e0ce77c041196d9a058956de9",
+        "size": 66048
+      },
+      "trial": 7,
+      "value": 32768
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-8.bin",
+        "sha256": "905d099a260d018bfb1f3aca4206e53f4f458db84b65c3432f9743c56da4fc11",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-8.bin",
+        "sha256": "0ee73d1b7fd8e6afc345737ff03dccb9398dc51c064b7f7dcb6da8d9a2c83d2e",
+        "size": 66048
+      },
+      "trial": 8,
+      "value": 2147483647
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-9.bin",
+        "sha256": "a93ac5a209bba1b3c1e5909ccc7f5ebc068cb1326992ef5dfea059eaa58bb26b",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-9.bin",
+        "sha256": "3e6229c969db2cc35272b424a24d485d3cb721acdb70455ba1eb89849b689763",
+        "size": 66048
+      },
+      "trial": 9,
+      "value": 2147483648
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-10.bin",
+        "sha256": "24a49b9ad2db8fe9153a30879f077eca1b68da4422d48800c049c43786176796",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-10.bin",
+        "sha256": "ea96d977fa1641399d0596b2de21e28999c0a33fc269459e20ae72d76bc976bd",
+        "size": 66048
+      },
+      "trial": 10,
+      "value": 4294967294
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-11.bin",
+        "sha256": "f1c51d76131212228f77231e6192a893c9ef454cb09ac18749513ccf031cbe13",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-11.bin",
+        "sha256": "f9537afbfe225749fbcf081bfd159d2231b04a0d298b111dccb203c57e9bbdc2",
+        "size": 66048
+      },
+      "trial": 11,
+      "value": 4294967295
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-12.bin",
+        "sha256": "201d1b2a1b028c3d8b66d0b205530410db5e0eea4e378530978a444f83ccfd04",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-12.bin",
+        "sha256": "ead03b0db651aa18ee8c24a1875c3f29eb0034221484863bded2646a33cc338a",
+        "size": 66048
+      },
+      "trial": 12,
+      "value": 8
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-13.bin",
+        "sha256": "b403547a2f547be02604cbcba3e471c02f4977f73e871e0832bc3ebf16d5b3c9",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-13.bin",
+        "sha256": "cb06bd5a605c3cb913c5f5bec7c495026f7627eb7820d2777284728928b613b0",
+        "size": 66048
+      },
+      "trial": 13,
+      "value": 15
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-14.bin",
+        "sha256": "9a2c53612ac2ecd151e6b377e0b5a1a63d4ff3105225a405e3c8f8fb26ae5311",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-14.bin",
+        "sha256": "877a4f0447a80bfcd0034fc13f896b0024619ef26f8ed90211e6f2c77c325761",
+        "size": 66048
+      },
+      "trial": 14,
+      "value": 16
+    },
+    {
+      "expected": {
+        "path": "/ABSOLUTE/SELECTED50/reference/expected-15.bin",
+        "sha256": "b656b5d6b719f3020c546f7ba00846c9983cf3fea7b0cbfc54c7082a1ab0d7c4",
+        "size": 66136
+      },
+      "input": {
+        "path": "/ABSOLUTE/SELECTED50/inputs/input-15.bin",
+        "sha256": "39db85b6265f95d7018d45b15d17358362a3ad6999087e6c61ce6e4203841aa8",
+        "size": 66048
+      },
+      "trial": 15,
+      "value": 31
+    }
+  ],
+  "limits": {
+    "guest_steps": 1000000,
+    "running_free": 67108864,
+    "start_free": 536870912,
+    "subprocess_seconds": 180
+  },
+  "note": "NONEXECUTABLE ready=false example;freeze every explicit path/hash after review;never infer paths from historical HOME strings.",
+  "python": {
+    "path": "/ABSOLUTE/CORRECT-REFERENCE/venv/bin/python",
+    "sha256": "06dbbe8641183e6db09f8540e7e69c9507304ee469dd9992cc5d20a13466aa3b",
+    "size": 5668008
+  },
+  "raw": {
+    "path": "/ABSOLUTE/ACTUAL-DECODED-REGION/before.ll",
+    "sha256": "4315ddcd08fd7e26861197be9a550ca7a1eee685be4206cc56f8c828d07abc05",
+    "size": 747549
+  },
+  "raw_ModuleID_literal": "; ModuleID = 'lifted'",
+  "ready": false,
+  "reference_environment": {
+    "path": "/ABSOLUTE/FROZEN-REFERENCE/READY.json",
+    "sha256": "13bcf93208151b824f57522df826cd49fb297ba8815d284be38fe19dded00351",
+    "size": 3505
+  },
+  "runtime": {
+    "backend": {
+      "path": "/ABSOLUTE/CURRENT-SDK/lib/libdragon.so",
+      "sha256": "28ddd0d889f8ae6e28ad8a41abfbd69a811600e90f40db2e3e1ac4a12b1e48e6"
+    },
+    "library_path": [
+      "/ABSOLUTE/CURRENT-SDK/lib",
+      "/ABSOLUTE/PINNED-WHEEL-Z3"
+    ],
+    "shim": {
+      "path": "/ABSOLUTE/CURRENT-SDK/c_shim/libdragon_c.so",
+      "sha256": "9d95c6402f624f277900746e3493f2e65039a8e51b93561fde66454e84583efa"
+    }
+  },
+  "schema": "tigress-dispatch-native-before-plan-v1",
+  "script": {
+    "path": "/ABSOLUTE/FROZEN-SOURCE/tigress_dispatch_native_before.py",
+    "sha256": "8c283ece2b49114d61d96a08b356b37846d6572326c50c4138664d366ee7f7a9",
+    "size": 24060
+  },
+  "solver": {
+    "enabled": true,
+    "library": {
+      "path": "/ABSOLUTE/PINNED-WHEEL-Z3/libz3.so.4.13",
+      "sha256": "4da2bb3189b8fa131a6d5a1ee5dac1b1a82792a4ba8a0374b0df4715eb85d82a"
+    }
+  },
+  "source": {
+    "files": {
+      "c_shim/dragon_c.h": "abbeefc409a09067f6f246e62fef26a45b6b8c7dd09d2ffcc670c55e33460873",
+      "include/dragon/lifters/llvm/Execution.h": "b0674f3684a1393a89c06b00beee6402eaa20e388f418491b7c1713016b1b560",
+      "python/dragon.py": "4cd267443b7b9c41c05ba3764658ba83ea4b4d13f69b137d34b4a6aabb6d8e73",
+      "scripts/validation/dispatch_corridor_real_replay.py": "b5516949a17d9de8c71f3529ae3df777f75a9a89ad20d72533ef16f1b2813e5a",
+      "scripts/validation/function_dispatch_diff.py": "e4171416d4f52a0fefa146dc6f639031f7c32f512e66be34332ede66b8c26c78",
+      "scripts/validation/function_guest_diff.py": "339e67785f78279b10609a4f06ad41871bbdd0cce192abf9a09a177c0e93624e",
+      "scripts/validation/function_llvm_diff.py": "9a4511ffddd5589cfab8b11b5c4e3b9fd6e5f827f9f40619bdfc9d71b6da9a90",
+      "scripts/validation/guarded_store_expression_real_replay.py": "2353173c73a6585cb25e140019e5daa2c56c1dd6009836082fda4700b558c7ab"
+    },
+    "root": "/ABSOLUTE/CURRENT-SDK"
+  },
+  "tools": {
+    "cc": {
+      "path": "/usr/bin/gcc-14",
+      "sha256": "6eee4bc4cddb8c5897d76db9c5356b9bdcadd1aab663509dd9748b6dfc93ecfd",
+      "size": 1096576
+    },
+    "llc": {
+      "path": "/usr/bin/llc-21",
+      "sha256": "83ebf3c6459934f2c4cf9a3e944520184b564168d2f403ca248c5666a1149d9d",
+      "size": 167920
+    },
+    "opt": {
+      "path": "/usr/bin/opt-21",
+      "sha256": "3eeda4891930c918baf026b916cfe321e68bd13536ace18238a57787cf1c4228",
+      "size": 245360
+    }
+  },
+  "transfer": {
+    "path": "/ABSOLUTE/SELECTED50/TRANSFER-MANIFEST.json",
+    "root": "/ABSOLUTE/SELECTED50",
+    "sha256": "719ca007dcbf1c790bfe14104a71fb8a7ab648d04a848d6db50bc5c45fc6fc07",
+    "size": 33170
+  }
+}

@@ -223,3 +223,32 @@ stat/ctime/SHA保持。该操作没有再运行target，也没有删除或改写
 
 root独立核对上述关键结果SHA、1233项及0skip字段，并重哈希Mac五产品包。封存时新机
 可用441605824512字节；后续Git文档提交receipt作为外部新记录，不改这些冻结证据。
+
+## 2026-11-15：主库与无 Z3 构建均已验证
+
+上述“未构建 No-Z3 / 未做新模块 native”描述的是 11 月 14 日冻结基线。现在主库与
+独立 `build-noz3` 都已完成入口快照 / SP 证明记录修复及本机验证，详见
+[本轮实现及边界](image-guarded-register-snapshots-20261115.md)。最终主库 CTest
+1239/1239，无 Z3 1093/1093，均无失败、跳过或 disabled；对应 image 相关各12/1359，
+SP focused 各3/78。两套注册用例差146项，No-Z3严格为main子集，构建选项及测试源码
+排除规则没有改动。没有把历史 VM 的测试数用于本机通过声明。
+
+No-Z3仍使用相同 GCC14 / LLVM21 / C++ Unicorn2.1.4 / Python dev参考、UBSan与link pool1，
+只关闭 `DRAGON_USE_Z3`。首次完整冷构建1144.346秒，最初CPU0–3，随后当前进程树迁移
+CPU4–7，没有重启；修正后的增量157.530秒在CPU0–3完成，测试在CPU4–7执行。
+实际 ELF 依赖没有 Z3，独立 load-only /proc maps 和 focused/related loader init
+同样无Z3。主库实际solver仍是原 `libz3.so.4.13`。未声称逐个审计完整CTest的子进程映射。
+
+最终 backend SHA：main `a8690acf6be36264fd628aa1ebdb8075605f452327609aa91fae63e4f35b1de3`，
+No-Z3 `b081c487ab301b8b8752c7fc6bab84f5fbdf6b07a80009a0713654f6216e8882`。
+No-Z3 full结果SHA为`8d1bc7f7ac6f7c2ebf948ebb45d4c4cc0d94794ba115c9b136327788cc4991a9`。
+新No-Z3 v1/v2各自保留六个完整产物、源码、源/TU pins、构建日志和实际验证证据，
+双端根为`validation-artifacts/tigress-register-context-noz3-20261115-v{1,2}/ROCK-V{1,2}`
+及ROCK同名run根；v2为48payloads/428251359字节，双端证书
+`24f7c06c271816f07d34913106f0511fad7108aabad8d18d4a559c4cc80fdc52`。
+v1没有运行full CTest；v2的load-only准备曾因shell quoting在worker启动前失败，原零target
+收据保留，随后使用字面脚本完成检查，没有修改语义测试或比较。
+
+另有独立main synthetic C/Python/LLVM before/after完整物理状态对照及新机real raw
+before校准；见各自报告，不把复制、saved-only复核或旧C/Unicorn参考重计为新运行。
+较大真实Flatten仍拒绝可能覆盖表的写，没有宣称完整去平坦化。

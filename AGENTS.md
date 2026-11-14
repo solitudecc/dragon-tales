@@ -70,7 +70,8 @@ the isolated `rock5b-ucdev-reference-20261114-v1/venv/bin/python` with source
 HEAD `2a05c418`, because stock has the unsigned RET-imm16 reference bug.
 That reference covers x86/ARM/AArch64, with unchanged framework test cases;
 its Z3/cffi reuse the base files. Main uses `build`; no-Z3 uses a separate
-`build-noz3` when built.
+`build-noz3`. Both were built and validated on ROCK on 2026-11-15; see the
+dated update in the environment notes.
 See `docs/rock5b-validation-environment-20261114.md` for exact versions,
 provenance, build status and test results. Do not infer new-host validation
 from historical VM counts.
@@ -241,6 +242,33 @@ Gotchas:
   command-line option registration with the main suite's static LLVM linkage.
 
 ## 4. Validation tools (`scripts/validation/`)
+
+Guarded register snapshots and SP observation retention (2026-11-15, base
+`281d4b2`): Image consumes complete executable equality checks on the exact
+initial register SSA observation, never future loads or address-wide facts.
+Temporary private `llvm.fake.use` calls keep otherwise unused SP expressions
+through normalization, then disappear before table selection/proof; preserve
+musttail adjacency and preexisting declarations/calls. No default pipeline,
+ABI, alias assumption or budget change. Old register regressions run on the
+baseline SDK:3/352 with8failed assertions; old SP regressions each3/52 with4
+failures on both intermediate backends. Restored baseline28dd SDK also fails
+SP3/52 with4assertions through two UND API overloads; active products unchanged.
+New each image12/1359, SP3/78 pass;
+ROCK full main1239/1239 and no-Z31093/1093, no failures/skips/disabled tests.
+No-Z3's146fewer registered tests are the unchanged build-option subset, not
+new exclusions. Independent main native beforeC48/LLVM48, after48 all match
+complete66112-byte physical arenas,3600comparator controls;48wrong-IR
+observations detect16/16specified faults. Fresh-register/Guest alias and
+unknown-call refusals remain exact. Synthetic v1's first after refusal (SP
+observation lost) is retained; its model/input/comparison never changed.
+Real larger Flatten80slots/75targets still refuses a possibly table-aliasing
+STORE: final A/B work128584/128611,35preserved stores, no budget exhaustion,
+no module change. No complete real loop de-flattening is claimed. Separate
+new real raw LLVM32snapshots/96controls pass against old references; no new
+real C/Unicorn or69-input/instruction campaign. See
+`docs/image-guarded-register-snapshots-20261115.md`, its native report and
+`scripts/validation/tigress_dispatch_context_probe.md`. Both failed and passed
+evidence trees are dual-host verified; exact runtime archives are separate.
 
 Checked dispatch components (2026-11-14, base `3f0a572`, implementation `05c6ab2`):
 see `docs/llvm-checked-dispatch-components.md` and

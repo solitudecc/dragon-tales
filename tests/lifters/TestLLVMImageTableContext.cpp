@@ -6,6 +6,8 @@
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
@@ -149,6 +151,11 @@ fallback:
               "  call void @ordinary(ptr %state, ptr %memory, ptr %runtime, ptr %exit)\n  ret void\ndead:\n  ret void\n}\n@held = global ptr blockaddress(@view, %dead)");
       break;
     case 19: ir += "\n@held = global ptr blockaddress(@view, %finished)\n"; break;
+    case 21:
+      // No invented table target returns to the prologue. The private SP
+      // expression may become dead after all Guest addresses are reassociated.
+      replace("    i64 4096, label %prologue\n", "");
+      break;
     case 20:
       replace("%t1, 4608", "%t1, 4352");
       replace("a:\n  %asp", "a:\n  %alive = phi i32 [ %index, %read ], [ 7, %b ]\n  %asp");
@@ -165,6 +172,118 @@ fallback:
   std::string ir() const { std::string result; llvm::raw_string_ostream out(result); module->print(out, nullptr); return out.str(); }
   ImageTableContextRequest request() const { return {"view", 8192, {4352, mode == 20 ? 4352u : 4608u}}; }
 };
+
+// An actual entry snapshot guard is useful beyond SP: an output pointer can
+// write on every dispatcher iteration.  Only that exact loaded observation
+// is constrained; another load from the same address is not a fact.
+struct RegisterGuardFixture : Fixture {
+  enum Kind { Exact, Missing, Partial, FreshGuard, FreshUse, NotEqual,
+              Conflicting, GuestAliasWrite, AliasThenFreshUse, UnknownCall,
+              UndefCheck, PoisonCheck };
+  explicit RegisterGuardFixture(Kind kind = Exact, unsigned bits = 64) {
+    auto *f = module->getFunction("view");
+    auto named = [&](llvm::StringRef name) -> llvm::Value * {
+      for (auto &b : *f) for (auto &i : b) if (i.getName() == name) return &i;
+      return nullptr;
+    };
+    auto block = [&](llvm::StringRef name) -> llvm::BasicBlock * {
+      for (auto &b : *f) if (b.getName() == name) return &b;
+      return nullptr;
+    };
+    auto *regs = named("regs"); auto *guest = named("guest");
+    REQUIRE(regs); REQUIRE(guest);
+    auto *fallback = block("fallback"); auto *a = block("a");
+    auto *spcheck = block("spcheck"); REQUIRE(fallback); REQUIRE(a); REQUIRE(spcheck);
+    llvm::IRBuilder<> entry(f->getEntryBlock().getTerminator());
+    auto *address = entry.CreateGEP(entry.getInt8Ty(), regs, entry.getInt64(48), "output.snapshot.address");
+    auto *snapshot = entry.CreateAlignedLoad(entry.getIntNTy(bits), address, llvm::Align(1), "initial.output");
+    if (kind != Missing) {
+      auto *spbranch = llvm::cast<llvm::BranchInst>(spcheck->getTerminator());
+      auto *next = spbranch->getSuccessor(0);
+      auto *check = llvm::BasicBlock::Create(context, "output.check", f, next);
+      spbranch->setSuccessor(0, check);
+      llvm::IRBuilder<> guard(check);
+      llvm::Value *actual = snapshot;
+      if (kind == Partial) actual = guard.CreateTrunc(actual, guard.getInt32Ty());
+      if (kind == FreshGuard) actual = guard.CreateAlignedLoad(guard.getInt64Ty(), address, llvm::Align(1), "another.output");
+      if (kind == UndefCheck) actual = llvm::UndefValue::get(guard.getInt64Ty());
+      if (kind == PoisonCheck) actual = llvm::PoisonValue::get(guard.getInt64Ty());
+      auto *expected = llvm::ConstantInt::get(actual->getType(), 32768);
+      auto *equal = kind == NotEqual ? guard.CreateICmpNE(actual, expected) : guard.CreateICmpEQ(actual, expected);
+      if (kind == Conflicting) {
+        auto *again = llvm::BasicBlock::Create(context, "output.conflict", f, next);
+        guard.CreateCondBr(equal, again, fallback);
+        llvm::IRBuilder<> other(again);
+        other.CreateCondBr(other.CreateICmpEQ(snapshot, other.getInt64(36864)), next, fallback);
+      } else guard.CreateCondBr(equal, next, fallback);
+    }
+    if (kind == GuestAliasWrite || kind == AliasThenFreshUse) {
+      // Guest may physically overlap the register snapshot. This store must
+      // not change the meaning of the already loaded SSA value, while any
+      // later register load remains a separate observation.
+      llvm::IRBuilder<> body(block("prologue")->getTerminator());
+      auto *pointer = body.CreateGEP(body.getInt8Ty(), guest, body.getInt64(36864), "possible.register.alias");
+      body.CreateAlignedStore(body.getInt64(8192), pointer, llvm::Align(1));
+    }
+    llvm::IRBuilder<> body(a->getTerminator());
+    llvm::Value *output = bits == 64 ? static_cast<llvm::Value *>(snapshot) :
+        body.CreateZExt(snapshot, body.getInt64Ty(), "output.wide");
+    if (kind == FreshUse || kind == AliasThenFreshUse)
+      output = body.CreateAlignedLoad(body.getInt64Ty(), address, llvm::Align(1), "future.output");
+    if (kind == UnknownCall) body.CreateCall(module->getFunction("unknown_call"), {guest});
+    auto *pointer = body.CreateGEP(body.getInt8Ty(), guest, output, "output.pointer");
+    body.CreateAlignedStore(body.getInt32(123), pointer, llvm::Align(1));
+    REQUIRE_FALSE(llvm::verifyModule(*module, &llvm::errs()));
+  }
+};
+}
+
+TEST_CASE("Image context consumes exactly guarded initial register snapshots", "[llvm][image-table-context][image-guarded-registers]") {
+  for (bool closed : {false, true})
+    for (auto kind : {RegisterGuardFixture::Exact, RegisterGuardFixture::GuestAliasWrite})
+      DYNAMIC_SECTION("closed " << closed << " kind " << kind) {
+        RegisterGuardFixture f(kind);
+        auto *view = f.module->getFunction("view"); auto *argument = view->getArg(0);
+        const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+        INFO(result.message);
+        REQUIRE(result.closed); REQUIRE(result.changed); CHECK_FALSE(result.budgetExhausted);
+        CHECK(f.module->getFunction("view") == view); CHECK(view->getArg(0) == argument);
+        CHECK(result.guardedBytes == 16); CHECK(result.preservedStores >= 4);
+        CHECK(f.ir().find("@ordinary") != std::string::npos);
+        CHECK(f.ir().find("32768") != std::string::npos);
+        if (kind == RegisterGuardFixture::GuestAliasWrite)
+          CHECK(f.ir().find("36864") != std::string::npos);
+        REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+      }
+}
+
+TEST_CASE("Image context never promotes unguarded or later register observations", "[llvm][image-table-context][image-guarded-registers]") {
+  for (bool closed : {false, true})
+    for (auto kind : {RegisterGuardFixture::Missing, RegisterGuardFixture::Partial,
+         RegisterGuardFixture::FreshGuard, RegisterGuardFixture::FreshUse,
+         RegisterGuardFixture::NotEqual, RegisterGuardFixture::Conflicting,
+         RegisterGuardFixture::AliasThenFreshUse, RegisterGuardFixture::UnknownCall,
+         RegisterGuardFixture::UndefCheck, RegisterGuardFixture::PoisonCheck})
+      DYNAMIC_SECTION("closed " << closed << " kind " << kind) {
+        RegisterGuardFixture f(kind); const auto before = f.ir();
+        auto *view = f.module->getFunction("view"); auto *entry = &view->getEntryBlock();
+        const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+        INFO(result.message); CHECK_FALSE(result.closed); CHECK_FALSE(result.changed);
+        CHECK(f.ir() == before); CHECK(f.module->getFunction("view") == view);
+        CHECK(&view->getEntryBlock() == entry);
+        REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+      }
+}
+
+TEST_CASE("Image context preserves the width of complete guarded words", "[llvm][image-table-context][image-guarded-registers]") {
+  for (bool closed : {false, true}) for (unsigned bits : {16u, 32u})
+    DYNAMIC_SECTION("closed " << closed << " snapshot width " << bits) {
+      RegisterGuardFixture f(RegisterGuardFixture::Exact, bits);
+      const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+      INFO(result.message); REQUIRE(result.closed); REQUIRE(result.changed);
+      CHECK_FALSE(result.budgetExhausted);
+      REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+    }
 }
 
 TEST_CASE("Image table context closes base and every loop step before rewriting", "[llvm][image-table-context]") {
@@ -390,3 +509,60 @@ TEST_CASE("Image table context restores metadata and old body on controlled comm
     }
 }
 #endif
+
+
+TEST_CASE("Image context retains private SP observations through normalization", "[llvm][image-table-context][image-sp-observations]") {
+  for (bool closed : {false, true}) DYNAMIC_SECTION("closed " << closed) {
+    Fixture f(21); auto *view = f.module->getFunction("view"); auto *argument = view->getArg(0);
+    REQUIRE_FALSE(f.module->getFunction("llvm.fake.use"));
+    const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+    INFO(result.message); REQUIRE(result.closed); REQUIRE(result.changed); CHECK_FALSE(result.budgetExhausted);
+    CHECK(f.module->getFunction("view") == view); CHECK(view->getArg(0) == argument);
+    CHECK_FALSE(f.module->getFunction("llvm.fake.use"));
+    REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+  }
+}
+
+TEST_CASE("Image context preserves preexisting unused fake use declaration exactly", "[llvm][image-table-context][image-sp-observations]") {
+  for (bool closed : {false, true}) DYNAMIC_SECTION("closed " << closed) {
+    Fixture f(21);
+    auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(f.context), {}, true);
+    auto *declaration = llvm::Function::Create(type, llvm::GlobalValue::ExternalLinkage,
+                                              "llvm.fake.use", *f.module);
+    declaration->addFnAttr("fixture.existing.declaration", "keep-original");
+    const auto attributes = declaration->getAttributes();
+    const auto callingConvention = declaration->getCallingConv();
+    REQUIRE(declaration->use_empty());
+    REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+    const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+    INFO(result.message); REQUIRE(result.closed); REQUIRE(result.changed); CHECK_FALSE(result.budgetExhausted);
+    CHECK(f.module->getFunction("llvm.fake.use") == declaration); CHECK(declaration->use_empty());
+    CHECK(declaration->getAttributes() == attributes); CHECK(declaration->getCallingConv() == callingConvention);
+    REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+  }
+}
+
+TEST_CASE("Image context never erases an original business fake use call", "[llvm][image-table-context][image-sp-observations]") {
+  for (bool closed : {false, true}) DYNAMIC_SECTION("closed " << closed) {
+    Fixture f(21);
+    auto *type = llvm::FunctionType::get(llvm::Type::getVoidTy(f.context), {}, true);
+    auto *declaration = llvm::Function::Create(type, llvm::GlobalValue::ExternalLinkage,
+                                              "llvm.fake.use", *f.module);
+    declaration->addFnAttr("fixture.existing.declaration", "keep-original");
+    auto *view = f.module->getFunction("view"); llvm::BasicBlock *step = nullptr; llvm::Value *index = nullptr;
+    for (auto &block : *view) {
+      if (block.getName() == "a") step = &block;
+      for (auto &instruction : block) if (instruction.getName() == "index") index = &instruction;
+    }
+    REQUIRE(step); REQUIRE(index);
+    auto *originalCall = llvm::IRBuilder<>(step->getTerminator()).CreateCall(declaration, {index});
+    const auto before = f.ir(); const auto attributes = declaration->getAttributes();
+    REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+    const auto result = runImageTableCheckedContext(*f.module, f.request(), closed);
+    INFO(result.message); CHECK_FALSE(result.closed); CHECK_FALSE(result.changed); CHECK_FALSE(result.budgetExhausted);
+    CHECK(f.ir() == before); CHECK(f.module->getFunction("llvm.fake.use") == declaration);
+    CHECK(declaration->getAttributes() == attributes); CHECK(originalCall->getParent() == step);
+    CHECK(originalCall->getCalledFunction() == declaration);
+    REQUIRE_FALSE(llvm::verifyModule(*f.module, &llvm::errs()));
+  }
+}

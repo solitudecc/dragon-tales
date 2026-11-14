@@ -63,6 +63,10 @@ bool fallbackBlock(BasicBlock *block, Function &view) {
   return true;
 }
 struct Guards {
+  struct RegisterFact {
+    WeakTrackingVH observation;
+    ConstantInt *expected = nullptr;
+  };
   BasicBlock *accepted = nullptr;
   BasicBlock *fallback = nullptr;
   Value *guest = nullptr;
@@ -70,6 +74,10 @@ struct Guards {
   AllocaInst *spSlot = nullptr;
   std::uint64_t sp = 0;
   std::set<BasicBlock *> chain;
+  // Facts constrain the already executed SSA observation, not the register
+  // address or a future reload. Value handles follow only LLVM's equivalent
+  // replacements during the private normalization step.
+  std::vector<RegisterFact> registers;
 };
 bool guardFacts(Function &function, const ImageTableContextRequest &request,
                 Guards &g, Work &work) {
@@ -179,6 +187,21 @@ bool guardFacts(Function &function, const ImageTableContextRequest &request,
         g.sp = constant->getZExtValue();
       }
       auto *load = dyn_cast<LoadInst>(actual);
+      if (constant && load && load != g.initialSP && load->isSimple() &&
+          load->getParent() == &entry && load->getType()->isIntegerTy() &&
+          constant->getBitWidth() % 8 == 0 && constant->getBitWidth() <= 64 &&
+          offset(load->getPointerOperand(), registers)) {
+        if (!work.spend()) return false;
+        bool found = false;
+        for (const auto &fact : g.registers) {
+          if (!work.spend()) return false;
+          if (fact.observation != load) continue;
+          found = true;
+          if (fact.expected->getValue() != constant->getValue())
+            return fail(stats, "conflicting initial register checks");
+        }
+        if (!found) g.registers.push_back({load, constant});
+      }
       if (constant && load && load->isSimple() && load->getType()->isIntegerTy() &&
           constant->getBitWidth() % 8 == 0 && constant->getBitWidth() <= 64) {
         auto at = offset(load->getPointerOperand(), g.guest);
@@ -261,11 +284,27 @@ bool flattenGuestPointers(Function &f, Value *guest, Work &work) {
   return true;
 }
 bool normalize(Function &f, Guards &g, SPObservations &sp, Work &work) {
-  for (auto &block : f) {
+  // A value handle does not keep an otherwise unused SP expression alive.
+  // Give each observation a real use only while InstCombine normalizes the
+  // private trial. Remove these uses before table discovery or any proof.
+  auto *anchorFunction = f.getParent()->getFunction("llvm.fake.use");
+  const bool createdAnchorFunction = !anchorFunction;
+  if (!anchorFunction) {
     if (!work.spend()) return false;
-    IRBuilder<> builder(block.getTerminator());
-    sp.emplace(&block, builder.CreateLoad(builder.getInt64Ty(), g.spSlot,
-                                          "image.table.sp.observation"));
+    anchorFunction = Intrinsic::getOrInsertDeclaration(f.getParent(), Intrinsic::fake_use);
+  }
+  SmallVector<WeakTrackingVH, 64> anchors;
+  for (auto &block : f) {
+    if (!work.spend(2)) return false;
+    auto *insertion = block.getTerminator();
+    if (auto *call = dyn_cast_or_null<CallInst>(insertion->getPrevNode());
+        isa<ReturnInst>(insertion) && call && call->isMustTailCall())
+      insertion = call; // The private promotable SP slot cannot escape to it.
+    IRBuilder<> builder(insertion);
+    auto *value = builder.CreateLoad(builder.getInt64Ty(), g.spSlot,
+                                    "image.table.sp.observation");
+    sp.emplace(&block, value);
+    anchors.emplace_back(builder.CreateCall(anchorFunction, {value}));
   }
   SmallVector<AllocaInst *, 64> allocas;
   for (auto &i : f.getEntryBlock()) if (auto *a = dyn_cast<AllocaInst>(&i)) {
@@ -276,6 +315,18 @@ bool normalize(Function &f, Guards &g, SPObservations &sp, Work &work) {
   DominatorTree dom(f);
   PromoteMemToReg(allocas, dom);
   instCombine(f);
+  for (auto &anchor : anchors) {
+    if (!work.spend()) return false;
+    if (anchor) cast<Instruction>(static_cast<Value *>(anchor))->eraseFromParent();
+  }
+  if (createdAnchorFunction) {
+    if (!work.spend()) return false;
+    if (!anchorFunction->use_empty())
+      return fail(work.stats, "private SP observation escaped normalization");
+    anchorFunction->eraseFromParent();
+  }
+  // Do not run DCE here: the now unused observation nodes must remain until
+  // explicit proof folding replaces them. Handles track changes, not liveness.
   return flattenGuestPointers(f, g.guest, work);
 }
 struct Table {
@@ -402,6 +453,33 @@ bool substituteGuardedSP(Function &f, const Guards &g, Work &work) {
     Use &use = *it++;
     auto *i = dyn_cast<Instruction>(use.getUser());
     if (i && dom.dominates(g.accepted, i->getParent())) use.set(constant);
+  }
+  return true;
+}
+bool substituteGuardedRegisters(Function &f, const Guards &g, Work &work) {
+  if (!substituteGuardedSP(f, g, work)) return false;
+  if (g.registers.empty()) return true;
+  DominatorTree dom(f);
+  for (const auto &fact : g.registers) {
+    if (!work.spend()) return false;
+    Value *observation = fact.observation;
+    if (!observation || observation->getType() != fact.expected->getType())
+      return fail(work.stats, "guarded register observation did not survive normalization");
+    if (auto *constant = dyn_cast<ConstantInt>(observation)) {
+      if (constant != fact.expected)
+        return fail(work.stats, "normalized register observation disagrees with its check");
+      continue;
+    }
+    auto *definition = dyn_cast<Instruction>(observation);
+    if (!definition || definition->getFunction() != &f)
+      return fail(work.stats, "guarded register observation escaped its function");
+    for (auto it = observation->use_begin(); it != observation->use_end();) {
+      if (!work.spend()) return false;
+      Use &use = *it++;
+      auto *user = dyn_cast<Instruction>(use.getUser());
+      if (user && user->getFunction() == &f && dom.dominates(g.accepted, user->getParent()))
+        use.set(fact.expected);
+    }
   }
   return true;
 }
@@ -964,6 +1042,13 @@ static ImageTableContextStats runImageTableContext(Module &module,
   proofGuards.fallback = cast<BasicBlock>(mapped(guards.fallback));
   proofGuards.guest = mapped(guards.guest);
   proofGuards.initialSP = cast<LoadInst>(mapped(guards.initialSP));
+  proofGuards.registers.clear();
+  for (const auto &fact : guards.registers) {
+    if (!work.spend() || !fact.observation) return stats;
+    auto *observation = mapped(fact.observation);
+    if (!observation) { fail(stats, "guarded register observation cannot be mapped"); return stats; }
+    proofGuards.registers.push_back({observation, fact.expected});
+  }
   proofGuards.chain.clear();
   for (auto &block : *function) if (guards.chain.contains(&block))
     proofGuards.chain.insert(cast<BasicBlock>(mapped(&block)));
@@ -985,7 +1070,7 @@ static ImageTableContextStats runImageTableContext(Module &module,
     if (i.getType()->isIntegerTy()) facts.emplace_back(&i, mapped(&i));
     }
   if (!replaceCandidateSwitch(proofTable, work)) return stats;
-  if (!substituteGuardedSP(*proofFunction, proofGuards, work)) return stats;
+  if (!substituteGuardedRegisters(*proofFunction, proofGuards, work)) return stats;
   WeakTrackingVH proofIndex(proofTable.index);
   if (!foldConstants(*proofFunction, work)) return stats;
   proofTable.index = proofIndex;
@@ -997,7 +1082,7 @@ static ImageTableContextStats runImageTableContext(Module &module,
   // base/step proof. Ordinary functions and guard-failure snapshots do not
   // acquire those facts. No assumption instruction or noalias is introduced.
   DominatorTree originalDom(*function);
-  if (!substituteGuardedSP(*function, guards, work)) { stats.closed = false; return stats; }
+  if (!substituteGuardedRegisters(*function, guards, work)) { stats.closed = false; return stats; }
   for (auto &[old, proofValue] : facts) {
     if (!work.spend()) { stats.closed = false; return stats; }
     auto *constant = proofValue ? dyn_cast<ConstantInt>(static_cast<Value *>(proofValue)) : nullptr;
