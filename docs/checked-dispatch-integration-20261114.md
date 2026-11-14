@@ -1,6 +1,6 @@
 # Checked dispatch 三组件接入与验证
 
-状态：正式 C++ 接入、完整回归与功能验证完成；双端封存及 main 合并待收口。接口与合同见
+状态：正式 C++ 接入、完整回归、原生与边界验证、双端封存校验全部完成。接口与合同见
 [组件说明](llvm-checked-dispatch-components.md)。这是显式 custom-pass 能力，不改变默认
 六步优化，也不把验证脚本中的自动候选枚举注册为默认 pass。
 
@@ -154,4 +154,36 @@ reason、不改输入或比较范围。v2的2次尝试不充作成功校准，�
 当前正式成功统计可分为：基础normal320/fault128/controls3520，边界normal24（含8原LLVM
 peer校准、16实际after）/fault8/controls72。合计344/136/3592时必须保留此分层，不能把
 before-peer比较当独立机器oracle，或把重复backend/hostopt当新输入。完整逻辑size/错误
-边界验证的是原LLVM与改写LLVM等价；没有新的Unicorn架构异常对拍。最终双端档案仍待封存。
+边界验证的是原LLVM与改写LLVM等价；没有新的Unicorn架构异常对拍。
+
+## 最终封存
+
+实现提交 `05c6ab2`、验证提交 `d347234`。源码包同时绑定实际编译的11份实现/头/CMake、
+最终回归及4个实际执行的adapter；测试EOF例外保持独立证据。后置纯读取审计再次通过：
+synthetic8条流/384帧、real64完整raw及192控制、boundary24/8/72、全部文件集/原始失败
+与缓存事故恢复均复核，未再执行target。正式SUMMARY SHA
+`dcd94605b02af2cba98f3239d6ea6602c60cca96e2948394f66966a16f42562d`；独立audit REPORT
+`5cb69ce35b1124e6014bf678f6ae30c07aee5781b5b25596394fb8a06466bd91`。
+
+三层完整档案在VM和Mac各执行一次unchanged-v5检查，逐成员集合、长度和SHA全部匹配，
+无symlink/hardlink/special成员。源与4份旧完整档案、2份Git包的stat/ctime/hash在读取前后
+保持一致。总计3775个payload、1727180227字节，压缩250668216字节；非target备份时间
+单列，没有改变180秒target或64MiB运行门槛，没有归档后删除证据。
+
+| 档案 | 压缩字节 | SHA256 |
+|---|---:|---|
+| historical-prototypes-and-campaigns | 108492232 | `0141795851ba5915bf68267a6fe092128356c2041e5bda341c7422506e7d927a` |
+| actual-production-runtime | 99756720 | `c261f2c4a9344ddc6ebf023d088e75edd1e78d8b4e4ec01555c09e86c7d3ef7a` |
+| final-production-validation-and-source | 42419264 | `ffefe433e229119e3e2fffbba91c739777763d22ee61d25ca594577162be7ae9` |
+
+文件均为 `ordered-dispatch-<档案>-20261114-v1.tar.xz`。Mac目录：
+`/Users/c/Desktop/deob/validation-artifacts/ordered-dispatch-components-20261114/`；VM目录：
+`/home/cc/vmc-runs/`。总证书 `DUAL-HOST-COMPLETE-VERIFIED-v1.json` 的SHA为
+`b973676a094513f2ece56d2a5a7cabff9479ec8d55a4a50dc619511d50c3447c`。这份证书记录封存时
+的索引服务暂停状态；随后独立恢复记录 `TRACKER-SERVICE-RESTORED-v1.json`（SHA
+`93bd6cc16222bb8a94fae59b43a388d85b9c19eb73114d4e038e2900435c17cf`）证明原static/active
+状态已恢复，仅移除runtime mask，无persistent配置或gsettings修改。
+
+索引缓存可重建，不是永久空间收益。恢复后实际可用空间约422MB，低于下一轮fresh build/
+full所需1GiB；后续应先扩容或按既有双端验证/消费者闭包规则回收重复产物，不降低门槛。
+本节是封存后记录，未声称被先前的Git源码包包含；实现及实测adapter源码保持不变。

@@ -251,14 +251,22 @@ No new C/UC, skips or normalization. Boundary v1 fails before any target; v2
 retains2before attempts with an incorrect enum expectation. v3 expects exactly
 TRANSFER2/BRANCH1/known high target, not UNKNOWN_TARGET4 or NEED_TARGET3; source
 and ABI independently confirm this. Do not count failed2 as successful domain.
-Boundary RESULTS d206f45a. No more target work remains; dual-host sealing and
-main merge are pending.
+Boundary RESULTS d206f45a. Post-freeze saved-only audit5cb69ce3 passes all streams,
+raw frames/controls and file sets, without more target execution. Formal SUMMARY
+dcd94605; complete three-layer dual-host archives250668216B/3775payloads1727180227B
+pass exact unchanged-v5 membership/size/SHA checks on both hosts. Certificate
+b973676a; part SHA01417958/c261f2c4/ffefe433. Source05/d347 cover implementation
+and actual adapters; the later sealing-document commit changes no tested code.
+No new target work remains.
 Conditional view completion is not unconditional cleanup of every ordinary root
 or proof for all unknown protection. No new instruction/IGNIL/69-input campaign.
 Storage: five closed archived old RAM libraries were retired via exact verified
 members/two process scans, all objects/current806d689e retained. Three stopped
-LocalSearch index cache leaves have exact Mac backups; runtime service mask must
-be removed and original active/static service restored after the final window.
+LocalSearch index cache leaves have exact Mac backups; after the final window
+the runtime mask was removed and original active/static service restored under
+receipt93bd6cc1. No persistent settings changed. Regrowing index is not permanent
+storage savings: observed free space~422MB is below fresh/full1GiB; reclaim only
+verified closed duplicate outputs or expand storage before another campaign.
 Do not reopen retired old runtime paths without exact archive restoration.
 The earlier28 closed Cell output leaves were separately retired under certificate
 7ca3ea79; old frozen manifests were not edited. Restore exact4f8/d380 members via
