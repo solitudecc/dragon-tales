@@ -82,3 +82,25 @@ flags 继续拒绝；legacy 单边 API 的域保持不变。不加入样本地�
 `analysis-bit-native-20261115-v1/`（独立执行），`analysis-bit-real-20261115-v1/`
 （真实输入）。诊断首版/候选、旧新客户端和初次Catch头路径准备失败均保留；
 正式归档引用在后续封存记录中追加，当前没有删除旧证据。
+
+## 第一阶段封存
+
+实现提交为 `5e13a05d3453a79df244acec622a345b91e1d2e3`。该提交的全部1213个跟踪文件
+已独立抓取，381个实际编译源内容逐项相等；ROCK实际仍是历史Git checkout加受控内容
+覆盖，不能称为干净5e13a05重编。八个实际通过完整测试的产物都在包内。
+
+完整包 `analysis-bit-complete-evidence.tar.gz`：389,005,654字节，SHA256
+`dc6f1b98b5d2bf0178c82d0021e18db07d7accbd94d62b4d01851c733f4f1404`。
+2473个payload / 1,070,577,135逻辑字节，加manifest共2474个regular成员，无链接。
+包括八产品、完整源快照、完整测试记录、独立native及真实回放、临时诊断和准备失败。
+旧SDK通过先前完整归档 `fa93df0f…` 精确引用，不重复嵌套。
+
+- Mac根：`/Users/c/Desktop/deob/validation-artifacts/analysis-bit-sealing-20261115-v1/`
+- ROCK根：`/home/ubuntu/vmc-runs/analysis-bit-sealing-20261115-v1/`
+- manifest SHA256：`be5b1c9bc5ba744a05eca8f294578935162709339bd49436bc77c2794e290215`
+- 两端同名 `DUAL-HOST-CERTIFICATE.json`：1120字节，SHA256
+  `e29788ae79b7fa4a7514c0ca90e11dba99678cd8e133760e659562c3d25c4635`
+
+两端独立核对全部成员集合 / 大小 / SHA、单gzip EOF及tar零填充。原归档输入大小 /
+mtime / ctime / SHA 前后相同。封存无新增目标执行、归一化或删除；不含完整OS及依赖
+环境。此封存记录属于随后验证提交，未包含在已冻结的5e13a05源快照中。

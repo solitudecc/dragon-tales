@@ -260,6 +260,11 @@ both closed and all4IR each byte-equal old; combo now reaches work exhaustion
 instead of the first finite-domain refusal, still closed0. This is NOT full
 combo removal or business-view/pseudocode delivery. See
 `docs/analysis-view-integration-20261115.md` and native protocol sources.
+Milestone implementation5e13a05 is dual-host sealed: archivedc6f1b98,
+2474regular/389,005,654B, cert e29788ae. All1213 tracked source files and the
+eight tested products are included;381actual compiled source contents bind
+exactly. Historical ROCK Git overlay is explicit; no clean rebuild/whole OS
+backup or full combination closure claim. No old evidence deleted.
 
 Large combined holdout validation (2026-11-15, unchanged product `9404326`):
 same large kernel/seed2026111307, Tigress2.1 array16/AddOpaque true6 ->
