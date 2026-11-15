@@ -726,6 +726,55 @@ TEST_CASE("Atomic dispatch batch proves integer flags over the entire one-bit do
  }
 }
 
+TEST_CASE("Atomic dispatch batch observes arbitrary bit positions without resolving their numeric input","[dispatch-corridor-batch][dispatch-bit-observation]"){
+ for(const std::string &leaf:{
+   " %bit=and i32 %raw,16\n %choice=add nuw nsw i32 %bit,60",
+   " %bit=and i32 16,%raw\n %choice=add nuw nsw i32 %bit,60",
+   " %bit=and i32 %raw,16\n %choice=add i32 %bit,2",
+   " %bit=and i32 %raw,2147483648\n %choice=or disjoint i32 %bit,2",
+   " %sign=lshr i32 %raw,31\n %choice=add nuw nsw i32 %sign,2",
+   " %shift=lshr i32 %raw,27\n %bit=and i32 %shift,16\n %choice=add nuw nsw i32 %bit,60"}){
+  INFO(leaf);Fixture x(bits(leaf));auto before=x.text();auto *fn=&x.f();
+  auto result=threadDispatchCorridorBatch(x.f(),{x.edge("seed",{"head","dispatch"})});
+  INFO(result.message);REQUIRE(result.changed);CHECK(result.complete);CHECK_FALSE(result.budgetExhausted);
+  CHECK(result.rewrittenEdges==1);CHECK(&x.f()==fn);x.verify();
+  unsigned choices=0;
+  for(auto &b:x.f())for(auto &i:b){
+   CHECK_FALSE(llvm::isa<llvm::FreezeInst>(i));
+   if(i.getName().starts_with("dispatch.choose")){
+    ++choices;CHECK(b.getName().starts_with("dispatch.dispatch.edge"));
+    auto *compare=llvm::dyn_cast<llvm::ICmpInst>(&i);REQUIRE(compare);
+    CHECK(compare->getPredicate()==llvm::ICmpInst::ICMP_EQ);
+    auto *constant=llvm::dyn_cast<llvm::ConstantInt>(compare->getOperand(1));REQUIRE(constant);
+    const bool sixty=leaf.find(",60")!=std::string::npos;
+    CHECK(constant->equalsInt(sixty?60:2));
+    auto *branch=llvm::dyn_cast<llvm::BranchInst>(b.getTerminator());REQUIRE(branch);
+    CHECK(branch->isConditional());
+    CHECK(branch->getSuccessor(0)==x.block(sixty?"error":"two"));
+    CHECK(branch->getSuccessor(1)==x.block(leaf.find("%sign=lshr")!=std::string::npos?"three":"error"));
+   }
+  }
+  CHECK(choices==1);
+  CHECK_FALSE(x.f().getArg(2)->hasAttribute(llvm::Attribute::NoUndef));
+ }
+}
+
+TEST_CASE("Atomic dispatch bit observations retain ambiguity and flag refusals","[dispatch-corridor-batch][dispatch-bit-observation]"){
+ for(const std::string &leaf:{
+   " %bit=and i32 %raw,48\n %choice=add i32 %bit,2",
+   " %bit=and i32 poison,16\n %choice=add i32 %bit,2",
+   " %bit=and i32 undef,16\n %choice=add i32 %bit,2",
+   " %bit=lshr exact i32 %raw,31\n %choice=add i32 %bit,2",
+   " %bit=and i32 %raw,16\n %choice=add nsw i32 %bit,2147483640",
+   " %bit=and i32 %raw,16\n %otherBit=zext i1 %choose to i32\n %choice=add i32 %bit,%otherBit"}){
+  INFO(leaf);Fixture x(bits(leaf));rejectBatch(x,{x.edge("seed",{"head","dispatch"})});
+ }
+ SECTION("legacy entry retains its original admission"){
+  Fixture x(bits(" %bit=and i32 %raw,16\n %choice=add i32 %bit,2"));
+  x.reject(x.edge("seed",{"head","dispatch"}));
+ }
+}
+
 TEST_CASE("Atomic dispatch batch checks only actual finite-domain switch destinations","[dispatch-corridor-batch]"){
  SECTION("an unselected padding case may point back into the original corridor"){
   auto ir=bits();const std::string last="i32 3,label %three]";auto at=ir.find(last);REQUIRE(at!=std::string::npos);

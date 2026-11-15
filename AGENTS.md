@@ -243,6 +243,24 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Analysis-view integration first milestone (2026-11-15, base `92ef68a`):
+batch-only exact two-value observations accept any one-hot AND position and
+unflagged logical sign extraction. Keep actual original selector/control use,
+all upper arithmetic flag checks, two distinct observation refusal and legacy
+single-edge admission unchanged. No assumed known memory/definedness/new ABI.
+First real combo failure is business case78 at0x1e3d: masked sign yields{0,16},
+then states{60,76}; old code needlessly expands historical R11D PHI. Same client
+old2/500 fails1 precision assertion; candidate/new both2/789pass. Both related
+28/7300; full main1334/no-Z3 1188 pass.381source/8product pre/post pins exact.
+Independent20fixtures/five widths8..128:5120raw+5120after complete80-byte IR
+matches,30720controls;2560faults=648specified detections+1912full nontriggers.
+Main/no-Z3 after20IR byte-equal, executed once;100streams saved-audited with
+zero new target calls. No new instruction/UC/corpus campaign. Real plain B
+both closed and all4IR each byte-equal old; combo now reaches work exhaustion
+instead of the first finite-domain refusal, still closed0. This is NOT full
+combo removal or business-view/pseudocode delivery. See
+`docs/analysis-view-integration-20261115.md` and native protocol sources.
+
 Large combined holdout validation (2026-11-15, unchanged product `9404326`):
 same large kernel/seed2026111307, Tigress2.1 array16/AddOpaque true6 ->
 EncodeArithmetic -> randomized/split Flatten switch. Final original/combined

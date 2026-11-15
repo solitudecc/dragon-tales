@@ -121,7 +121,7 @@ std::optional<APInt> batchBinary(BinaryOperator &i, const APInt &a, const APInt 
       (i.hasNoSignedWrap() && signedOverflow)) return {};
   return result;
 }
-// Exact full one-bit domain, not sample execution. The original selector is
+// Exact full two-value observation, not sample execution. The original selector is
 // still consumed at its old switch point, so this exports no definedness fact.
 class StateValues {
   Plan &plan;
@@ -135,19 +135,35 @@ class StateValues {
   bool integer(Value *v) {
     return v->getType()->isIntegerTy() && v->getType()->getIntegerBitWidth() <= 128;
   }
-  bool observe(Value *v) {
+  std::optional<APInt> observationMask(Value *v) {
     // A flagged i1 cast/binary is not an opaque observation: treating it as
     // the atom would skip the very flag proof requested for this operation.
     // The legacy admission path is intentionally unchanged.
     if (batch)
-      if (auto *i = dyn_cast<Instruction>(v); i && i->hasPoisonGeneratingFlags()) return false;
-    if (v->getType()->isIntegerTy(1) && !isa<Constant>(v)) return true;
+      if (auto *i = dyn_cast<Instruction>(v); i && i->hasPoisonGeneratingFlags()) return {};
+    if (v->getType()->isIntegerTy(1) && !isa<Constant>(v)) return APInt(1, 1);
     auto *i = dyn_cast<BinaryOperator>(v);
-    if (!i || i->getOpcode() != Instruction::And) return false;
+    if (!i) return {};
+    const unsigned width = v->getType()->getIntegerBitWidth();
+    // A sign-bit extraction is exactly {0,1}, independently of the numeric
+    // value or loop PHIs feeding it. Exact/poison-generating roots above are
+    // still evaluated normally instead of donating an observation.
+    if (batch && i->getOpcode() == Instruction::LShr) {
+      auto *count = dyn_cast<ConstantInt>(i->getOperand(1));
+      if (count && count->equalsInt(width - 1) && !literalBad(i->getOperand(0)))
+        return APInt(width, 1);
+    }
+    if (i->getOpcode() != Instruction::And) return {};
     auto *a = dyn_cast<ConstantInt>(i->getOperand(0));
     auto *b = dyn_cast<ConstantInt>(i->getOperand(1));
-    return (a && a->isOne() && !literalBad(i->getOperand(1))) ||
-           (b && b->isOne() && !literalBad(i->getOperand(0)));
+    auto admitted = [&](ConstantInt *mask, Value *input) -> std::optional<APInt> {
+      if (!mask || literalBad(input)) return {};
+      if (batch ? mask->getValue().isPowerOf2() : mask->isOne())
+        return mask->getValue();
+      return {};
+    };
+    if (auto mask = admitted(a, i->getOperand(1))) return mask;
+    return admitted(b, i->getOperand(0));
   }
   std::optional<APInt> get(Value *v, bool bit, unsigned depth,
                            View view = View::Current) {
@@ -172,13 +188,13 @@ class StateValues {
     auto done = [&](std::optional<APInt> result) {
       active.erase(key); if (!result) failed = true; return result;
     };
-    // Exhaustive AND1/i1 domains do not need a numeric value for their input.
+    // Exhaustive masked-bit/i1 domains do not need a numeric input value.
     // Current and historical executions of the same SSA instruction are
     // distinct observations and cannot share an assumed bit assignment.
-    if (observe(v)) {
+    if (auto mask = observationMask(v)) {
       if (atom && *atom != key) return done({});
       atom = key; plan.mayPoison = true;
-      return done(APInt(v->getType()->getIntegerBitWidth(), bit));
+      return done(bit ? *mask : APInt(mask->getBitWidth(), 0));
     }
     if (auto *phi = dyn_cast<PHINode>(v)) {
       // Conservative historical boundary: old numeric PHIs are not expanded
