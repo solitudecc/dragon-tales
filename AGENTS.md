@@ -76,7 +76,21 @@ See `docs/rock5b-validation-environment-20261114.md` for exact versions,
 provenance, build status and test results. Do not infer new-host validation
 from historical VM counts.
 
-The **previous Ubuntu VM remains the historical/reference host**
+The previous Ubuntu VM is the historical/reference host described below.
+**2026-11-15 project retirement migration:** development/tests and Tigress now
+run on ROCK. Project repositories (including dirty work), builds, corpus/tools
+and validation evidence passed full file-set/content verification on both Mac
+and ROCK; see `docs/host169-retirement-20261115.md` for the archives, receipts
+and restoration. No project work requires 169 to remain running. No files were
+deleted on 169; the owner decides when to remove the machine. This backup does
+not include unrelated personal directories or the operating system.
+
+The current ROCK checkout still has Git base `49f58f1` plus a controlled source
+overlay. Its 381 compiled-source and eight product pins are recorded by the
+`c092ec5` milestone. Do not treat it as a clean current-main checkout or reset
+it blindly; preserve/verify the overlay before changing the build inputs.
+
+Historical VM configuration (kept as provenance, not the active build target):
 (aarch64, owner expanded RAM to 8 GB; about 7.2 GiB visible): `ssh cc@192.168.10.169` (key-based; ask the owner if keys
 are missing). It has LLVM 21.1.8, Z3 4.13.3, Unicorn 2.1.4 (+ Python bindings),
 pyelftools, pefile, gcc, `i686-`/`x86_64-w64-mingw32-gcc`, `llc-21`.
