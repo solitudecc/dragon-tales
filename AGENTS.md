@@ -265,6 +265,23 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Batch original-use scan reuse (2026-11-15, base `5d8a1c6`, code base `5e13a05`):
+same-unchanged-trial structural Use checks/counts are shared only during atomic
+batch preflight. Candidate snapshots/caps stay independent; no PHI/state/history
+or memory truth is cached. Records die before mutation; later actual uses are
+still re-scanned for SSA repair. Old test-only main/no-Z3 each2/49498 fail one
+precision assertion; new each2/49783 pass. CTest1336/1336 and1190/1190 with381
+compiled sources/eight products stat+SHA stable. Independent LLVM native gives
+2048 raw+2048 transformed complete80-byte matches,12288 comparator controls and
+1024/1024 specified mutant detections. Two low-budget outputs equal old
+high-budget fixture controls/main/no-Z3 IR; common IR executed once. Ten saved
+streams re-audit4096 normal/1024fault frames without new executions. Real plain
+Flatten preserves all four IR stages byte-for-byte and reduces work984702 to
+747549; combo moves past the batch to PHI projection depth33/32 (nodes74/256),
+work796807,closed0, refusal IR unchanged. Not complete combo CFF/business output.
+No new instruction/Unicorn/full69 campaign. See
+`docs/dispatch-batch-use-reuse-20261115.md` and its native protocol.
+
 Analysis-view integration first milestone (2026-11-15, base `92ef68a`):
 batch-only exact two-value observations accept any one-hot AND position and
 unflagged logical sign extraction. Keep actual original selector/control use,

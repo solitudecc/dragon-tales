@@ -478,6 +478,82 @@ TEST_CASE("Atomic dispatch batch covers more than sixty four original loop edges
  }
 }
 
+namespace {
+std::string carriedBatchLoop(unsigned count) {
+ std::string ir="define i32 @f(ptr %guest,ptr %size,i32 %raw){\nentry:\n";
+ for(unsigned j=0;j<20;++j)
+  ir+=" %initial"+std::to_string(j)+"=xor i32 %raw,"+std::to_string(0x9e37u*(j+1))+"\n";
+ ir+=" br label %head\nhead:\n %state=phi i32 [0,%entry]";
+ for(unsigned n=0;n<count;++n)ir+=",["+std::to_string((n+1)%count)+",%seed"+std::to_string(n)+"]";
+ ir+="\n %counter=phi i32 [0,%entry]";
+ for(unsigned n=0;n<count;++n)ir+=",[%advanced,%seed"+std::to_string(n)+"]";
+ for(unsigned j=0;j<20;++j){
+  const auto id=std::to_string(j);ir+="\n %carried"+id+"=phi i32 [%initial"+id+",%entry]";
+  for(unsigned n=0;n<count;++n)ir+=",[%next"+std::to_string(n)+"_"+id+",%seed"+std::to_string(n)+"]";
+ }
+ ir+="\n %advanced=add i32 %counter,1\n %stamp=xor i32 %carried0,%carried1\n"
+     " store i32 %stamp,ptr %guest,align 1\n %limit=load i32,ptr %size,align 1\n"
+     " %fits=icmp ule i32 %advanced,%limit\n %bounded=icmp ule i32 %advanced,256\n"
+     " %continue=and i1 %fits,%bounded\n br i1 %continue,label %dispatch,label %fault\n"
+     "dispatch: switch i32 %state,label %error [";
+ for(unsigned n=0;n<count;++n)ir+="i32 "+std::to_string(n)+",label %seed"+std::to_string(n)+" ";
+ ir+="]\n";
+ for(unsigned n=0;n<count;++n){
+  const auto id=std::to_string(n);ir+="seed"+id+":\n";
+  for(unsigned j=0;j<20;++j)
+   ir+=" %next"+id+"_"+std::to_string(j)+"=add i32 %carried"+std::to_string(j)+","+std::to_string(n+j+1)+"\n";
+  ir+=" br label %head\n";
+ }
+ ir+="fault:\n %result0=xor i32 %advanced,%carried0\n";
+ for(unsigned j=1;j<20;++j)
+  ir+=" %result"+std::to_string(j)+"=xor i32 %result"+std::to_string(j-1)+",%carried"+std::to_string(j)+"\n";
+ ir+=" ret i32 %result19\nerror: ret i32 %advanced\n}\n";
+ return ir;
+}
+std::string useCapBatchLoop(unsigned stores) {
+ std::string ir=R"IR(define i32 @f(ptr %guest){
+entry: br label %head
+head:
+ %state=phi i32 [2,%entry],[2,%again]
+ %carried=phi i32 [11,%entry],[%next,%again]
+ %next=add i32 %carried,1
+ switch i32 %state,label %error [i32 2,label %again]
+again:
+)IR";
+ for(unsigned n=0;n<stores;++n)ir+=" store i32 %carried,ptr %guest,align 1\n";
+ return ir+" br label %head\nerror: ret i32 0\n}\n";
+}
+}
+
+TEST_CASE("Atomic dispatch batch shares complete structural use scans within fixed work","[dispatch-batch-use-reuse]"){
+ constexpr unsigned count=70;Fixture x(carriedBatchLoop(count));
+ DispatchCorridorBatchOptions options;options.maxWork=180000;
+ auto result=threadDispatchCorridorBatch(x.f(),batchLoopEdges(x,count),options);
+ INFO(result.message);INFO(result.work);
+ REQUIRE(result.changed);CHECK(result.complete);CHECK_FALSE(result.budgetExhausted);
+ CHECK(result.rewrittenEdges==count);CHECK(result.work<=options.maxWork);
+ x.verify();noCyclicSwitch(x);
+}
+
+TEST_CASE("Atomic dispatch batch reapplies use caps with each historical snapshot footprint","[dispatch-batch-use-reuse]"){
+ SECTION("a complete first plan fits the original external-use cap"){
+  Fixture x(useCapBatchLoop(8191));
+  auto result=threadDispatchCorridorBatch(x.f(),{x.edge("entry",{"head"})});
+  INFO(result.message);REQUIRE(result.changed);CHECK(result.complete);x.verify();
+ }
+ SECTION("a later plan's snapshot still exceeds the cap after sharing use scans"){
+  Fixture x(useCapBatchLoop(8191));
+  rejectBatch(x,{x.edge("entry",{"head"}),x.edge("again",{"head"})},{},true);
+ }
+ SECTION("a refused earlier batch cannot donate stale use scans to another invocation"){
+  Fixture x(useCapBatchLoop(8190));DispatchCorridorBatchOptions tooSmall;tooSmall.maxRepairCells=1;
+  rejectBatch(x,{x.edge("entry",{"head"})},tooSmall,true);
+  auto *before=x.block("again")->getTerminator();
+  for(unsigned n=0;n<3;++n)new llvm::StoreInst(x.instruction("carried"),x.f().getArg(0),before);
+  x.verify();rejectBatch(x,{x.edge("entry",{"head"})},{},true);
+ }
+}
+
 TEST_CASE("Atomic dispatch batch repairs repeated actual edge and exit slots","[dispatch-corridor-batch]"){
  Fixture x(R"IR(define i32 @f(ptr %guest,i32 %raw,i1 %choose){
 entry: br i1 %choose,label %seed,label %other

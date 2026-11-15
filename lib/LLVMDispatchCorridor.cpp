@@ -56,6 +56,10 @@ struct Plan {
   bool mayPoison = false;
   bool boundsSelfEdge = false;
 };
+// Only structural uses of original definitions are shared. This map belongs
+// to the all-plan preflight of one unchanged owned trial, never to a selected
+// PHI/state/history context or to the later mutating SSA-repair phase.
+using BatchUseCounts = std::map<Instruction *, std::size_t>;
 Value *incoming(PHINode &phi, BasicBlock &from) {
   Value *value = nullptr;
   for (unsigned n = 0; n != phi.getNumIncomingValues(); ++n)
@@ -272,7 +276,7 @@ public:
 BasicBlock *destination(SwitchInst &, const APInt &);
 bool preflight(Function &f, const DispatchCorridorEdge &edge,
                DispatchCorridorOptions const &options, Work &work, Plan &plan,
-               std::string &reason, bool batch = false) {
+               std::string &reason, bool batch = false, BatchUseCounts *useCounts = nullptr) {
   auto reject = [&](const char *message) { reason = message; return false; };
   if (!edge.source || edge.source->getParent() != &f || edge.path.empty())
     return reject("invalid original corridor path");
@@ -458,19 +462,35 @@ bool preflight(Function &f, const DispatchCorridorEdge &edge,
   }
   std::size_t live = 0, externalUses = plan.snapshots.size();
   for (auto *definition : plan.definitions) {
-    bool used = false;
-    for (auto &use : definition->uses()) {
-      if (!work.spend()) return false;
-      if (!repairUse(use, *definition->getParent())) continue;
-      auto *user = dyn_cast<Instruction>(use.getUser());
-      if (!user || user->getFunction() != &f || user->getParent()->isEHPad())
-        return reject("unsupported external SSA use");
-      used = true;
-      if (++externalUses > MaxExternalUses) {
-        work.stats.budgetExhausted = true; return reject("external use cap");
+    if (useCounts && !work.spend()) return false; // Every original-key lookup.
+    auto found = useCounts ? useCounts->find(definition) : BatchUseCounts::iterator{};
+    std::size_t count = 0;
+    if (useCounts && found != useCounts->end()) count = found->second;
+    else {
+      for (auto &use : definition->uses()) {
+        if (!work.spend()) return false;
+        if (!repairUse(use, *definition->getParent())) continue;
+        auto *user = dyn_cast<Instruction>(use.getUser());
+        if (!user || user->getFunction() != &f || user->getParent()->isEHPad())
+          return reject("unsupported external SSA use");
+        if (++count > MaxExternalUses - externalUses) {
+          work.stats.budgetExhausted = true; return reject("external use cap");
+        }
+      }
+      // Publish only a complete scan. Pay publication and eventual retirement
+      // before storing the record; no partial result survives a failed scan.
+      if (useCounts) {
+        if (!work.spend(2)) return false;
+        useCounts->emplace(definition, count);
       }
     }
-    if (used && ++live > MaxLiveOuts) {
+    // Snapshots and the accumulated footprint remain candidate-specific even
+    // when this definition's structural scan was shared with an earlier edge.
+    if (count > MaxExternalUses - externalUses) {
+      work.stats.budgetExhausted = true; return reject("external use cap");
+    }
+    externalUses += count;
+    if (count && ++live > MaxLiveOuts) {
       work.stats.budgetExhausted = true; return reject("liveout value cap");
     }
   }
@@ -730,27 +750,30 @@ bool applyBatch(Function &f, const std::vector<FrozenEdge> &frozen,
   std::vector<Instruction *> definitions;
   std::set<Instruction *> seenDefinitions;
   std::size_t blocks = 0, instructions = 0, snapshots = 0;
-  for (const auto &item : frozen) {
-    ++stats.candidatesVisited;
-    DispatchCorridorEdge edge{originalBlocks.at(item.source), item.slot, {}};
-    for (auto index : item.path) edge.path.push_back(originalBlocks.at(index));
-    auto plan = std::make_unique<Plan>();
-    std::string reason;
-    if (!preflight(f, edge, options, work, *plan, reason, true))
-      return fail(reason.empty() ? stats.message : reason);
-    const auto addedBlocks = edge.path.size() + !plan->snapshots.empty();
-    const auto addedInstructions = plan->instructions + plan->snapshots.size() +
-                                   !plan->snapshots.empty() + (plan->states.size() == 2);
-    if (plans.size() == options.maxRewrites || addedBlocks > options.maxClonedBlocks - blocks ||
-        addedInstructions > options.maxClonedInstructions - instructions) {
-      stats.budgetExhausted = true;
-      return fail("shared batch copy growth budget");
+  {
+    BatchUseCounts useCounts;
+    for (const auto &item : frozen) {
+      ++stats.candidatesVisited;
+      DispatchCorridorEdge edge{originalBlocks.at(item.source), item.slot, {}};
+      for (auto index : item.path) edge.path.push_back(originalBlocks.at(index));
+      auto plan = std::make_unique<Plan>();
+      std::string reason;
+      if (!preflight(f, edge, options, work, *plan, reason, true, &useCounts))
+        return fail(reason.empty() ? stats.message : reason);
+      const auto addedBlocks = edge.path.size() + !plan->snapshots.empty();
+      const auto addedInstructions = plan->instructions + plan->snapshots.size() +
+                                     !plan->snapshots.empty() + (plan->states.size() == 2);
+      if (plans.size() == options.maxRewrites || addedBlocks > options.maxClonedBlocks - blocks ||
+          addedInstructions > options.maxClonedInstructions - instructions) {
+        stats.budgetExhausted = true;
+        return fail("shared batch copy growth budget");
+      }
+      blocks += addedBlocks; instructions += addedInstructions; snapshots += plan->snapshots.size();
+      for (auto *definition : plan->definitions)
+        if (seenDefinitions.insert(definition).second) definitions.push_back(definition);
+      plans.push_back(std::move(plan));
     }
-    blocks += addedBlocks; instructions += addedInstructions; snapshots += plan->snapshots.size();
-    for (auto *definition : plan->definitions)
-      if (seenDefinitions.insert(definition).second) definitions.push_back(definition);
-    plans.push_back(std::move(plan));
-  }
+  } // Retire every shared structural fact before the first IR mutation.
   if (plans.empty()) return true;
   // Prepay every original definition, conservatively including definitions
   // whose external use disappears after the simultaneous edge removals. This
