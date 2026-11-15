@@ -63,3 +63,25 @@ small PHI 依次消耗64、83、89等节点，随后又在一个候选中触顶�
 `~/vmc-runs/phi-forward-depth-20261115-v1/`、`v2/`、`v3/`（后两项同完整前缀）；
 原始诊断 `phi-projection-diagnostic-20261115-v1/v2` 已在前一里程碑归档；本轮后续诊断
 为 `phi-forward-diagnostic-20261115-v1/`、`phi-forward-diagnostic-20261115-v2/`。
+
+## 完整封存
+
+实现提交 `24c72f8cc86a8e2caa495eadc677d309af0c1295` 的1229个跟踪文件已完整
+抓取，381个实际编译源内容逐项相同；八个最终通过完整测试的产品均在包内。ROCK
+仍为历史Git基线加受控源覆盖，不称为干净24c72f8重编。旧SDK精确引用前一完整包
+`f96841b9…`，原真实输入沿原带SHA证据引用，不重复嵌套；本包含全部新输出。
+
+`phi-forward-complete-evidence.tar.gz`：398,006,381字节，SHA256
+`d9620b5d7ffb66fb83da8cab4eb13d93decbf50296384f67ebf26283ada64cd7`。
+1701个payload / 1,100,835,076逻辑字节，加manifest共1702个regular成员，无链接。
+manifest SHA256：`2d71a46e4b2ffae7c7f61f08b8a058fef91cb19f083dda77aedf0132259fea10`。
+
+- Mac：`/Users/c/Desktop/deob/validation-artifacts/phi-forward-sealing-20261115-v1/`
+- ROCK：`/home/ubuntu/vmc-runs/phi-forward-sealing-20261115-v1/`
+
+两端独立核对全部成员集合、大小、SHA、单gzip CRC/EOF及tar零填充；归档输入大小/
+mtime/ctime/SHA前后相同。`DUAL-HOST-CERTIFICATE.json` 同时明确v2正式中间SDK
+没有冻结的边界，共1085字节，SHA256为
+`33782c1e8cb5f2243741b6be07b178f0bc2e7f8fb9a1a7f3ab6e62b3863dde05`。
+封存无新增目标执行、跳过、归一化或删除，不含完整OS及依赖环境。
+本节和随后的进展文档更新属于后续验证提交，不包含在已冻结的24c72f8源快照中。
