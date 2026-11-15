@@ -9,6 +9,14 @@ this file is about *how to work here* and *what state things are in*.
 
 The repository owner communicates in Chinese; reply to them in Chinese.
 
+**Product goal (owner clarified 2026-11-15):** after deobfuscation, the reader
+must clearly see the function's pre-obfuscation business logic: computations,
+real branches/loops, observable memory effects and calls. Deliver readable,
+semantically justified business IR/pseudocode, with unresolved behavior marked.
+CFG recovery, verified execution-state IR, reduced dispatcher counts and passing
+tests are intermediate milestones, not final product acceptance. Follow the
+end-to-end criteria in `docs/analysis-view-integration-20261115.md`.
+
 ---
 
 ## 1. Ground rules
