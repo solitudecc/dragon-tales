@@ -94,8 +94,8 @@ deleted on 169; the owner decides when to remove the machine. This backup does
 not include unrelated personal directories or the operating system.
 
 The current ROCK checkout still has Git base `49f58f1` plus a controlled source
-overlay. Its 381 compiled-source and eight product pins are recorded by the
-`c092ec5` milestone. Do not treat it as a clean current-main checkout or reset
+overlay. Use the latest dated §4 milestone's 381 compiled-source/eight-product
+pins; older frozen SDKs remain separate references. Do not treat it as a clean current-main checkout or reset
 it blindly; preserve/verify the overlay before changing the build inputs.
 
 Historical VM configuration (kept as provenance, not the active build target):
@@ -264,6 +264,24 @@ Gotchas:
   command-line option registration with the main suite's static LLVM linkage.
 
 ## 4. Validation tools (`scripts/validation/`)
+
+Iterative PHI forwarding (2026-11-15, base `3238aea`): relation strip tails and
+strict dominating single-actual-edge definition transfers use iteration.
+Original pair/definition nodes and every definition-graph edge remain charged;
+SCC seeds, ordinary PHI recursion, root-search/depth/node/work caps and effect
+cuts are unchanged. Final same client old3/143 fails2 positives; candidate and
+formal each3/730 pass. Earlier definition-only v2 test-only old builds each2/153
+fail1 and new2/451 pass, separately retained; v1 mixed fixture fails both and
+is kept, with its relation path included positively in final tests. CTest1339/
+1339 and1193/1193;381 compiled sources/eight products stat+SHA stable.
+Native four40/80-layer fixtures:2048 raw+2048 after complete80-byte matches,
+12288 comparator controls,1024/1024 compiled mutant detections; main/no-Z3 IR
+equal, common products execute once. Twenty saved streams audit without new
+targets. Real ordinary Flatten all four IR stages unchanged,work747549->747565.
+Combo remains closed0,work889951; third query now hits256 nodes at depth1 after
+failed pair attempts, not the prior depth33 failure. Refusal IR unchanged.
+No new instruction/Unicorn/full69 campaign or full business pseudocode success.
+See `docs/phi-forward-depth-20261115.md` and native protocol.
 
 Batch original-use scan reuse (2026-11-15, base `5d8a1c6`, code base `5e13a05`):
 same-unchanged-trial structural Use checks/counts are shared only during atomic

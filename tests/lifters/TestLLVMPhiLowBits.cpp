@@ -170,3 +170,94 @@ TEST_CASE("Original PHI projection preserves direct effect cut operands","[phi-l
   auto ir=loop();const std::string store="store i32 %next,ptr %memory";auto at=ir.find(store);REQUIRE(at!=std::string::npos);
   ir.replace(at,store.size(),"store i32 %low,ptr %memory");Fixture x(ir);x.reject({x.trunc()});
 }
+
+namespace {
+std::string relationForwardedLoop(unsigned count,bool duplicate=false,const std::string &entry="",
+                          const std::string &seed="%initial") {
+ std::string setup=" %initial=freeze i32 %arg\n"+entry+" %initialWide=zext i32 "+seed+" to i64\n";
+ auto ir=loop("%initialWide",seed,setup);
+ const std::string wide=" %wide=zext i32 %next to i64\n";
+ auto at=ir.find(wide);REQUIRE(at!=std::string::npos);ir.erase(at,wide.size());
+ at=ir.find("[%next,%back]");REQUIRE(at!=std::string::npos);
+ ir.replace(at,std::string("[%next,%back]").size(),"[%forward"+std::to_string(count-1)+",%back]");
+ at=ir.find("label %back,label %done");REQUIRE(at!=std::string::npos);
+ ir.replace(at,std::string("label %back,label %done").size(),"label %chain0,label %done");
+ std::string chain;
+ for(unsigned n=0;n<count;++n){
+  const auto id=std::to_string(n),previous=n?"chain"+std::to_string(n-1):"head";
+  const auto value=n?"%forward"+std::to_string(n-1):"%next";
+  chain+="chain"+id+":\n %forward"+id+"=phi i32 ["+value+",%"+previous+"]";
+  if(duplicate&&n)chain+=",["+value+",%"+previous+"]";
+  const auto next=n+1<count?"chain"+std::to_string(n+1):"back";
+  chain+=duplicate&&n+1<count?"\n br i1 %take,label %"+next+",label %"+next+"\n":"\n br label %"+next+"\n";
+ }
+ chain+="back:\n %wide=zext i32 %forward"+std::to_string(count-1)+" to i64\n br label %head";
+ at=ir.find("back: br label %head");REQUIRE(at!=std::string::npos);ir.replace(at,std::string("back: br label %head").size(),chain);
+ return ir;
+}
+std::string forwardedLoop(unsigned count,bool duplicate=false,const std::string &entry="",
+                          const std::string &seed="%initial") {
+ auto ir=relationForwardedLoop(count,duplicate,entry,seed);
+ auto replace=[&](const std::string &from,const std::string &to){
+  auto at=ir.find(from);REQUIRE(at!=std::string::npos);ir.replace(at,from.size(),to);
+ };
+ // The relation sees the same non-PHI step on both arms. Definedness must
+ // still traverse every forwarding PHI feeding that step, as in the real
+ // failing definition query. Keep the earlier relation-stress shape below.
+ replace(" %next=add i32 %low,1"," %observed=add i32 %low,1");
+ replace("store i32 %next,ptr","store i32 %observed,ptr");
+ replace("icmp ult i32 %next,4","icmp ult i32 %observed,4");
+ replace("done: ret i32 %next","done: ret i32 %observed");
+ replace("[%forward"+std::to_string(count-1)+",%back]","[%next,%back]");
+ replace("[%next,%head]","[%low,%head]");
+ replace("back:\n %wide=zext i32 %forward"+std::to_string(count-1)+" to i64",
+         "back:\n %next=add i32 %forward"+std::to_string(count-1)+",1\n %wide=zext i32 %next to i64");
+ return ir;
+}
+}
+
+TEST_CASE("Original PHI definition proof walks dominating forwarding chains iteratively","[phi-low-forward]") {
+ for(unsigned count:{40u,80u}){
+  INFO(count);Fixture x(forwardedLoop(count));auto *old=x.trunc();auto *small=x.phi("small");
+  EffectSnapshot effects(x.f());auto *function=&x.f();PhiLowBitsOptions options;
+  options.maxDepth=8;options.maxNodes=128;
+  auto result=replacePhiLowTruncs(x.f(),{old},options);INFO(result.message);INFO(result.nodes);
+  REQUIRE(result.changed);CHECK(result.complete);CHECK_FALSE(result.budgetExhausted);
+  CHECK(result.nodes>=count);CHECK(result.nodes<=options.maxNodes);
+  CHECK(x.i("observed")->getOperand(0)==small);CHECK(x.trunc()==old);CHECK(&x.f()==function);
+  effects.check(x.f());x.verify();
+ }
+}
+
+TEST_CASE("Iterative PHI forwarding retains node and genuine recursive transfer caps","[phi-low-forward]") {
+ SECTION("every forwarded original vertex still consumes the shared node cap"){
+  Fixture x(forwardedLoop(40));PhiLowBitsOptions options;options.maxNodes=16;
+  x.reject({x.trunc()},options,true);
+ }
+ SECTION("nonidentity arithmetic still consumes recursive depth"){
+  std::string entry;std::string value="%initial";
+  for(unsigned n=0;n<40;++n){auto next="%expression"+std::to_string(n);entry+=" "+next+"=add i32 "+value+",1\n";value=next;}
+  Fixture x(forwardedLoop(40,false,entry,value));x.reject({x.trunc()},{},true);
+ }
+ SECTION("duplicate actual incoming slots are not single-edge identities"){
+  Fixture x(forwardedLoop(40,true));x.reject({x.trunc()},{},true);
+ }
+ SECTION("a load or flagged leaf is not made defined by a short forwarding chain"){
+  for(const std::string &step:{"load i32,ptr %memory,align 1","add nsw i32 %arg,1"}){
+   auto ir=forwardedLoop(4);const std::string initial="freeze i32 %arg";auto at=ir.find(initial);REQUIRE(at!=std::string::npos);ir.replace(at,initial.size(),step);
+   Fixture x(ir);x.reject({x.trunc()});
+  }
+ }
+}
+
+TEST_CASE("Original PHI relation proof walks checked representation identities iteratively","[phi-low-forward]") {
+ for(unsigned count:{40u,80u}){
+  INFO(count);Fixture x(relationForwardedLoop(count));auto *old=x.trunc();auto *small=x.phi("small");
+  EffectSnapshot effects(x.f());PhiLowBitsOptions options;options.maxDepth=8;
+  auto result=replacePhiLowTruncs(x.f(),{old},options);INFO(result.message);INFO(result.nodes);
+  REQUIRE(result.changed);CHECK(result.complete);CHECK_FALSE(result.budgetExhausted);
+  CHECK(result.nodes>=count);CHECK(result.nodes<=options.maxNodes);
+  CHECK(x.i("next")->getOperand(0)==small);CHECK(x.trunc()==old);
+  effects.check(x.f());x.verify();
+ }
+}

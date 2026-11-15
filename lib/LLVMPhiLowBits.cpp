@@ -102,56 +102,85 @@ class Proof {
     return v;
   }
   bool relation(Value *a, Value *b, unsigned depth) {
-    if (!work.spend() || !integer(a) || !integer(b) || !inFunction(a) || !inFunction(b) ||
-        a->getType()->getIntegerBitWidth() < width || b->getType()->getIntegerBitWidth() < width) return false;
-    Pair key{a,b};
-    if (relations.contains(key)) return true; // gray is pending, never exported
-    if (!work.node(depth)) return false;
-    relations[key] = 1;
-    if (a == b) { relations[key] = 2; return true; }
-    auto *left = strip(a); auto *right = strip(b);
-    if (!left || !right) return false;
-    if (left != a || right != b) {
-      if (!relation(left,right,depth+1)) return false;
-      relations[key] = 2; return true;
+    SmallVector<Pair, 8> forwarded;
+    auto finish = [&] {
+      for (const auto &key : forwarded) relations[key] = 2;
+      return true;
+    };
+    for (;;) {
+      if (!work.spend() || !integer(a) || !integer(b) || !inFunction(a) || !inFunction(b) ||
+          a->getType()->getIntegerBitWidth() < width || b->getType()->getIntegerBitWidth() < width) return false;
+      Pair key{a,b};
+      if (relations.contains(key)) return finish(); // gray is pending, never exported
+      if (!work.node(depth)) return false;
+      relations[key] = 1;
+      if (a == b) { relations[key] = 2; return finish(); }
+      auto *left = strip(a); auto *right = strip(b);
+      if (!left || !right) return false;
+      if (left != a || right != b) {
+        // strip already checked the low-bit identity and, for a PHI, every
+        // actual slot plus availability at the PHI. Keep all pair-node charges
+        // but walk these tail transfers without another recursive frame.
+        forwarded.push_back(key); a = left; b = right;
+        continue;
+      }
+      if (auto *x = dyn_cast<ConstantInt>(a)) {
+        auto *y = dyn_cast<ConstantInt>(b);
+        if (!y || x->getValue().trunc(width) != y->getValue().trunc(width)) return false;
+        relations[key] = 2; return finish();
+      }
+      auto *x = dyn_cast<PHINode>(a); auto *y = dyn_cast<PHINode>(b);
+      if (!x || !y || x->getParent() != y->getParent()) return false;
+      std::map<BasicBlock *, Value *> xs,ys;
+      if (!inputs(*x,preds,work,xs) || !inputs(*y,preds,work,ys)) return false;
+      for (auto *from : preds.at(x->getParent()))
+        if (!relation(xs.at(from),ys.at(from),depth+1)) return false;
+      relations[key] = 2; return finish();
     }
-    if (auto *x = dyn_cast<ConstantInt>(a)) {
-      auto *y = dyn_cast<ConstantInt>(b);
-      if (!y || x->getValue().trunc(width) != y->getValue().trunc(width)) return false;
-      relations[key] = 2; return true;
-    }
-    auto *x = dyn_cast<PHINode>(a); auto *y = dyn_cast<PHINode>(b);
-    if (!x || !y || x->getParent() != y->getParent()) return false;
-    std::map<BasicBlock *, Value *> xs,ys;
-    if (!inputs(*x,preds,work,xs) || !inputs(*y,preds,work,ys)) return false;
-    for (auto *from : preds.at(x->getParent()))
-      if (!relation(xs.at(from),ys.at(from),depth+1)) return false;
-    relations[key] = 2; return true;
   }
   bool definition(Value *v, unsigned depth) {
-    if (!work.spend() || !integer(v) || !inFunction(v)) return false;
-    if (defined.contains(v)) return true; // all pending cycles checked below
-    if (!work.node(depth)) return false;
-    defined[v] = 1;
-    auto &children = graph[v];
-    if (isa<ConstantInt, FreezeInst>(v)) { defined[v] = 2; return true; }
-    auto *i = dyn_cast<Instruction>(v);
-    if (!i || i->hasPoisonGeneratingFlags()) return false;
-    if (auto *phi = dyn_cast<PHINode>(i)) {
-      std::map<BasicBlock *, Value *> incoming;
-      if (!inputs(*phi,preds,work,incoming)) return false;
-      for (auto *from : preds.at(phi->getParent())) children.push_back(incoming.at(from));
-    } else if (isa<TruncInst,ZExtInst,SExtInst>(i)) children.push_back(i->getOperand(0));
-    else if (auto *binary = dyn_cast<BinaryOperator>(i)) {
-      switch (binary->getOpcode()) {
-      case Instruction::Add: case Instruction::Sub: case Instruction::Mul:
-      case Instruction::And: case Instruction::Or: case Instruction::Xor:
-        children.push_back(binary->getOperand(0)); children.push_back(binary->getOperand(1)); break;
-      default: return false;
-      }
-    } else return false;
-    for (auto *child : children) if (!definition(child,depth+1)) return false;
-    defined[v] = 2; return true;
+    // Walk checked one-edge identities without adding C++ recursion. Every
+    // original vertex/edge stays in the definedness graph and pays the same
+    // shared node cap; nonidentity transfers retain the original depth cap.
+    SmallVector<Value *, 8> forwarded;
+    auto finish = [&] {
+      for (auto *value : forwarded) defined[value] = 2;
+      return true;
+    };
+    for (;;) {
+      if (!work.spend() || !integer(v) || !inFunction(v)) return false;
+      if (defined.contains(v)) return finish(); // pending cycles checked below
+      if (!work.node(depth)) return false;
+      defined[v] = 1;
+      auto &children = graph[v];
+      if (isa<ConstantInt, FreezeInst>(v)) { defined[v] = 2; return finish(); }
+      auto *i = dyn_cast<Instruction>(v);
+      if (!i || i->hasPoisonGeneratingFlags()) return false;
+      if (auto *phi = dyn_cast<PHINode>(i)) {
+        std::map<BasicBlock *, Value *> incoming;
+        if (!inputs(*phi,preds,work,incoming)) return false;
+        for (auto *from : preds.at(phi->getParent())) children.push_back(incoming.at(from));
+        if (children.size() == 1 && children.front() != phi) {
+          if (!work.spend()) return false; // Check identity availability here.
+          auto *input = children.front();
+          auto *definition = dyn_cast<Instruction>(input);
+          if (isa<ConstantInt>(input) || (definition && dom.dominates(definition, phi))) {
+            forwarded.push_back(v); v = input;
+            continue;
+          }
+        }
+      } else if (isa<TruncInst,ZExtInst,SExtInst>(i)) children.push_back(i->getOperand(0));
+      else if (auto *binary = dyn_cast<BinaryOperator>(i)) {
+        switch (binary->getOpcode()) {
+        case Instruction::Add: case Instruction::Sub: case Instruction::Mul:
+        case Instruction::And: case Instruction::Or: case Instruction::Xor:
+          children.push_back(binary->getOperand(0)); children.push_back(binary->getOperand(1)); break;
+        default: return false;
+        }
+      } else return false;
+      for (auto *child : children) if (!definition(child,depth+1)) return false;
+      defined[v] = 2; return finish();
+    }
   }
   bool realSeeds() {
     std::map<Value *, unsigned> index,low,component;
