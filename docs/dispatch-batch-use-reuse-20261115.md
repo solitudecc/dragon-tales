@@ -60,3 +60,25 @@ STORE后LOAD、正常继续和错误出口。没有跳过、排除或归一化�
 费用诊断为 `loop-work-diagnostic-20261115-v1/`，下一阻塞诊断为
 `phi-projection-diagnostic-20261115-v1/`、`phi-projection-diagnostic-20261115-v2/`。
 本轮没有新增机器指令差分或全69输入语料 campaign。
+
+## 完整封存
+
+实现提交 `8a339a70a51efd854c9febe82cb9347c7190b5e2` 的1221个跟踪文件已完整
+抓取，381个实际编译源内容逐项相同；八个实际通过完整测试的产品均在包内。ROCK
+仍为历史Git基线加受控覆盖，不能称为干净8a339a7重编。旧SDK通过前一完整归档
+`dc6f1b98…` 精确引用，不重复嵌套。
+
+包 `loop-use-complete-evidence.tar.gz` 共381,992,811字节，SHA256
+`f96841b96870e5d1902a6dc1c9d9c5e70fff76f6140effc006eed7ba27bed778`。
+1551个payload / 1,054,122,127逻辑字节，加manifest共1552个regular成员，无链接。
+manifest SHA256 为 `53a249a96afd8870a106dd74bc1ddf25d689b870307be769d4181a8728df13f4`。
+
+- Mac：`/Users/c/Desktop/deob/validation-artifacts/loop-use-sealing-20261115-v1/`
+- ROCK：`/home/ubuntu/vmc-runs/loop-use-sealing-20261115-v1/`
+
+两端独立检查完整成员集合、大小、SHA、单gzip CRC/EOF及tar零填充；归档输入大小/
+mtime/ctime/SHA前后相同。同名 `DUAL-HOST-CERTIFICATE.json` 记录两端结论及当前
+业务输出未完成的边界，共1043字节，SHA256为
+`4b7ff9cb9661a61fa2eeefbf1560f167e368bb2db629e88dc1ced0fc7e2fb11d`。
+封存无新目标执行、归一化、排除或删除，不含完整OS/依赖环境。
+本封存记录属于后续验证提交，不在已冻结的8a339a7源快照内。
