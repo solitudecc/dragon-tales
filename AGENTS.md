@@ -270,7 +270,8 @@ failures remain preserved; the final finite leaf is a different program and
 must not be called a fix for those original index shapes. Source856f43bf,
 test5ede859f, CLIe7ae4b9a. See `docs/loop-pipeline-integration-20261115.md`,
 `docs/deobfuscation-workflow.md` and the independent reports. Final source/8
-product sealing is a subsequent record; no old evidence is deleted.
+product sealing is recorded separately in
+`docs/loop-pipeline-final-validation-20261115.md`; no old evidence is deleted.
 
 Selected Loop B readability cleanup (2026-11-15, after `9e04118`): unchanged
 validation-only emitter0ffa applies the existing six LLVM control-flow passes

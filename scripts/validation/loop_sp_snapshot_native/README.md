@@ -76,3 +76,26 @@ fails only the new positive closure assertion; new 48cb 2 cases/77 assertions
 passes. Neither those assertions nor earlier native campaigns are added to the
 counts above. This nine-frame finite check does not prove all-input equivalence
 or extend the arbitrary-Guest execution contract.
+
+Final evidence references (all payload members and compressed EOF checked on
+both hosts):
+
+- Native archive: Mac
+  `/Users/c/Desktop/deob/validation-artifacts/loop-sp-snapshot-native-20261115-v1.tar.xz`;
+  ROCK
+  `/home/ubuntu/vmc-runs/loop-sp-snapshot-native-20261115-v1/loop-sp-snapshot-native-20261115-v1.tar.xz`.
+  Size 5,807,224 bytes, 140 members; SHA256
+  `dcea7e5555449e3ebe5646b57ca03a381a5bcad6b9079df02a81a5843440c31d`.
+  The `MANIFEST.json` in each expanded evidence root is
+  `dff5df35ad5fcba25c2e88a7a8a0ba3b47bb816076a1b74c5562f0898e685857`.
+- Focused same-client archive: Mac
+  `/Users/c/Desktop/deob/validation-artifacts/loop-sp-snapshot-same-client-20261115-v1.tar.xz`;
+  ROCK
+  `/home/ubuntu/vmc-runs/loop-sp-snapshot-same-client-20261115-v1/loop-sp-snapshot-same-client-20261115-v1.tar.xz`.
+  Size 4,955,244 bytes, 40 members; SHA256
+  `b70c4a4abb03242bfe1680048a5e694927daa39f1d8af944ca4f5321e69820b0`.
+- The combined `CERTIFICATE.json` is a final sidecar in both native expanded
+  evidence roots above, SHA256
+  `bd60d91464725239e062ff84e8c5f5dda51ddf9863fec02c1ac3716469898e8c`.
+  It binds the focused old/new counts and native closure. It does not alter
+  either frozen archive or add parent-owned full-suite/native results.
