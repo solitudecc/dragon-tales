@@ -1,0 +1,46 @@
+{
+  "actual_main_report_sha256": "aebcd589202cced2d99411fc6524648ca7bceef10d4e9a0bb83ba5e718b0b1c0",
+  "actual_main_result_sha256": "549e9aba8b767bd82b03598b4c2c91dfc0c7b752cd0dc512b3f4a4cecea736f6",
+  "actual_namespace": "/home/ubuntu/vmc-runs/loop-image-intrinsic-import-probe-20261115-v2",
+  "actual_source_freeze_sha256": "e4fce2caa9fef138687f91c25f721ae5f45206d7104abb52cd80ec51808a1b4b",
+  "control_failures": 0,
+  "controller_is_exact_executed_artifact_specific_script_not_portable_adapter": true,
+  "controls": 14,
+  "files": [
+    {
+      "relative_path": "SOURCE-FREEZE.json",
+      "sha256": "e4fce2caa9fef138687f91c25f721ae5f45206d7104abb52cd80ec51808a1b4b",
+      "size": 740
+    },
+    {
+      "relative_path": "SOURCE-PROVENANCE.json",
+      "sha256": "ef8595f9d918f2daecd60b8a2794dd99b5db8c383a057b26893a1b1baec2b881",
+      "size": 803
+    },
+    {
+      "relative_path": "controller.py",
+      "sha256": "156ea04470a88ff30b77d4c7380dd5d3fdb331d8035672718964b7ff7ade2e8f",
+      "size": 5759
+    },
+    {
+      "relative_path": "source/identity_controls.cpp",
+      "sha256": "d1beb485b11cc2b3b03963ca266b8a31133200014a2c40f1727c1b96aaf76422",
+      "size": 4603
+    },
+    {
+      "relative_path": "source/probe.cpp",
+      "sha256": "ba124cfdeaf5fa93fe78699d2eaada1ddd9daf2a5f9520d112ee609effeef757",
+      "size": 21762
+    },
+    {
+      "relative_path": "source/probe_identity.hpp",
+      "sha256": "dc510f36ddd1d848a74863d9a0b73fdbdca7a8d54908d806444830fcb4ea7028",
+      "size": 8109
+    }
+  ],
+  "new_Guest_native": 0,
+  "old_strict_failure_retained": true,
+  "schema": "exact-executed-probe-replay-source-v1",
+  "source_bytes_all_equal_executed_files": true,
+  "v1_compile_failure_retained": true
+}

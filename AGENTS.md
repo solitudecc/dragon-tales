@@ -243,6 +243,27 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Loop branch checkpoint (2026-11-15, after `60d3365`, Image `e39195a4`,
+Path `c12b6702`/header `02e9783c`): masks, legal bounded shifts, paid same-SSA
+constant/opaque footprints and frozen closed-overlay consumption retain every
+original instruction/effect/CFG node. A WeakVH physical-effect/marker/count
+inventory avoids repeated ignored-node walks. Explicit Path BranchConditions
+accounting preserves the old three-arg ctor symbol/default policy and rebuilds
+fresh facts after SSA use changes. Main14focus/full1317/1317 and NoZ14focus/
+1171/1171 pass on isolated reference4-7/j4, no new skips/exclusions. Same actual
+producer with only LD changed: old ef35 B1M refuses unchanged; main d446 and
+NoZ d98 B985771 closes,68stores/73cutpoints,733blocks/entry1switch/cyclic0.
+Both complete after IRs SHA714701bc are byte-equal; A still correctly refuses.
+Old strict producer fails its exact function-set gate on canonical fshl.i32,
+an import already allowed by old commit(). Preserve that failure and the
+zero-call checker compile error. New typed check has14 valid-IR controls and
+retains all existing-function/argument/global/metadata checks; only the one
+canonical declaration with5 view-local direct users is added. Main/NoZ source
+and runtime pins are frozen. **After-native remains0 at this checkpoint**;
+old before32+96 and synthetic adapter36 checks are not rewritten-Guest results.
+Feature branch must not merge until remaining native validation completes.
+See `docs/loop-image-branch-milestone-20261115.md` and the individual reports.
+
 Loop Image implementation milestone (2026-11-15, base `e952100`, Image source
 `2a3f4b0c`): new opt-in C++ `runLoopImageTableContext` combines bounded input
 threading with OriginalIR low-bit/path/constant-PHI proofs and complete Guest

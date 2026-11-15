@@ -1,0 +1,24 @@
+{
+  "Guest_native_runs": 0,
+  "Image_calls_controls": 0,
+  "control_cases_expected": 14,
+  "files": {
+    "SOURCE-PROVENANCE.json": {
+      "sha256": "ef8595f9d918f2daecd60b8a2794dd99b5db8c383a057b26893a1b1baec2b881",
+      "size": 803
+    },
+    "source/identity_controls.cpp": {
+      "sha256": "d1beb485b11cc2b3b03963ca266b8a31133200014a2c40f1727c1b96aaf76422",
+      "size": 4603
+    },
+    "source/probe.cpp": {
+      "sha256": "ba124cfdeaf5fa93fe78699d2eaada1ddd9daf2a5f9520d112ee609effeef757",
+      "size": 21762
+    },
+    "source/probe_identity.hpp": {
+      "sha256": "dc510f36ddd1d848a74863d9a0b73fdbdca7a8d54908d806444830fcb4ea7028",
+      "size": 8109
+    }
+  },
+  "schema": "identity-checker-and-producer-source-freeze-v2"
+}

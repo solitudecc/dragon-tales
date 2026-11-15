@@ -100,8 +100,12 @@ add_executable(dragon_tests
         lifters/TestLLVMLoopRangeDepth.cpp
         lifters/TestLLVMLoopMemoryDefinitions.cpp
         lifters/TestLLVMLoopLiteralStoreSpans.cpp
+        lifters/TestLLVMLoopMaskMemoryRefinement.cpp
+        lifters/TestLLVMLoopBoundedVariableShifts.cpp
+        lifters/TestLLVMLoopConsumePlans.cpp
         lifters/TestLLVMPhiLowBits.cpp
         lifters/TestLLVMPathValueRanges.cpp
+        lifters/TestLLVMPathRangeTraversal.cpp
         lifters/TestLLVMPhiConstant.cpp
         lifters/TestLLVMOpaqueIntegerAdmission.cpp
         lifters/TestLLVMOpaquePhiRegions.cpp

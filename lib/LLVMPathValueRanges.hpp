@@ -15,6 +15,10 @@ struct PathValueRange {
   unsigned bits;
 };
 
+// Explicit traversal accounting. The historical mode also counts every
+// instruction through BasicBlock::size(); neither mode infers facts from it.
+enum class PathRangeTraversal { WholeFunction, BranchConditions };
+
 // Private consumer of independently proved, stable, defined SSA observations.
 // A witness is not an address-wide fact or a caller-provided integer range.
 // No facts are inferred from other observations, separate freezes, or LOADs.
@@ -23,6 +27,8 @@ class PathValueRanges {
 public:
   PathValueRanges(llvm::Function &, const std::vector<llvm::Value *> &witnesses,
                   std::size_t maxWork);
+  PathValueRanges(llvm::Function &, const std::vector<llvm::Value *> &witnesses,
+                  std::size_t maxWork, PathRangeTraversal);
   ~PathValueRanges();
   PathValueRanges(const PathValueRanges &) = delete;
   PathValueRanges &operator=(const PathValueRanges &) = delete;

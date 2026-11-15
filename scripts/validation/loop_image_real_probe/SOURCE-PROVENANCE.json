@@ -1,0 +1,14 @@
+{
+  "source_original_public_probe_sha256": "af0a84734b7ff72149e932d6ed36534d73f61200849e16619b5089ebb074b7ea",
+  "old_identity_failure_preserved": "/home/ubuntu/vmc-runs/loop-image-branch-accounting-20261115-v1",
+  "new_import_allowlist": [
+    "llvm.fshl.i32"
+  ],
+  "no_other_function_definition_extern_or_unused_import_allowed": true,
+  "API_return_saved_pending_before_postvalidation": true,
+  "native": 0,
+  "product_source_model_inputs_budgets_changed": false,
+  "prior_compile_failure_namespace": "/home/ubuntu/vmc-runs/loop-image-intrinsic-import-probe-20261115-v1",
+  "prior_source_freeze_sha256": "5b2db906dd9f3b1c3e06585729b2a70c24fe48e232df4020a93427b82f292ab0",
+  "compile_only_fix": "LLVM21 getAttributes requires existing exact FunctionType third argument; no acceptance-policy change"
+}

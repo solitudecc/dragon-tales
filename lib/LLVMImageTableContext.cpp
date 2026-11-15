@@ -1102,7 +1102,10 @@ bool unsupportedMetadata(Metadata *metadata, Work &work, std::set<Metadata *> &s
 // complete equal-constant PHI rule, and ConstantFoldInstOperands invocation
 // below match shadowConstants. New facts are candidate-local and published
 // only after this entire worklist closes within the unchanged shared Work.
-bool loopShadowConstants(Function &f, ConstantFacts &facts, Work &work) {
+using LoopConstantPlan =
+    std::map<std::size_t, std::pair<WeakVH, ConstantInt *>>;
+bool loopShadowConstants(Function &f, ConstantFacts &facts, Work &work,
+                         LoopConstantPlan &plan) {
   constexpr std::size_t hardLimit = 65536;
   ConstantFacts discovered;
   std::deque<Instruction *> ready;
@@ -1207,9 +1210,56 @@ bool loopShadowConstants(Function &f, ConstantFacts &facts, Work &work) {
       if (!enqueue(user)) return false; // Every unique user is still charged.
   }
 
-  // Work stays spent on failure. No partially expanded overlay escapes.
-  if (!work.spend(discovered.size())) return false;
+  // Freeze a deterministic consumption order while the original ordinals are
+  // available. This is still only a hypothesis: no use may change until the
+  // complete original write set has closed under this exact cell overlay.
+  LoopConstantPlan planned;
+  auto remember = [&](Value *value, ConstantInt *constant) {
+    if (!work.spend(3)) return false; // lookup, record and eventual retirement
+    auto *i = dyn_cast<Instruction>(value);
+    auto ordinal = i ? ordinals.find(i) : ordinals.end();
+    if (!i || ordinal == ordinals.end() || i->getFunction() != &f ||
+        !constant || i->getType() != constant->getType())
+      return fail(work.stats,"loop constant plan lost an original typed instruction");
+    if (!planned.emplace(ordinal->second,
+                         std::pair<WeakVH, ConstantInt *>{i,constant}).second)
+      return fail(work.stats,"duplicate original instruction in loop constant plan");
+    return true;
+  };
+  for (const auto &[value, constant] : facts)
+    if (!remember(value,constant)) return false;
+  for (const auto &[value, constant] : discovered)
+    if (!remember(value,constant)) return false;
+  // Work stays spent on failure. No partial overlay or plan escapes.
+  if (!work.spend(discovered.size()+1)) return false;
   facts.insert(discovered.begin(), discovered.end());
+  plan.swap(planned);
+  return true;
+}
+
+bool consumeLoopConstants(Function &f, const LoopConstantPlan &plan, Work &work) {
+  auto spend = [&](std::size_t n = 1) {
+    if (work.spend(n)) return true;
+    return fail(work.stats,"closed loop constant consumption work exhausted");
+  };
+  for (const auto &[ordinal, entry] : plan) {
+    if (!spend()) return false;
+    auto *i = dyn_cast_or_null<Instruction>(static_cast<Value *>(entry.first));
+    auto *constant = entry.second;
+    if (!i || !i->getParent() || i->getFunction() != &f || !constant ||
+        i->getType() != constant->getType() || i->hasPoisonGeneratingAnnotations() ||
+        i->isTerminator() || isa<CallBase,FreezeInst>(i))
+      return fail(work.stats,"closed loop constant plan changed shape");
+    if (auto *load = dyn_cast<LoadInst>(i)) {
+      if (!load->isSimple()) return fail(work.stats,"closed loop constant LOAD changed shape");
+    } else if (i->mayReadOrWriteMemory())
+      return fail(work.stats,"closed loop constant plan contains an effect");
+    // Pay for reading each actual use and for RAUW's second visit. Keep all
+    // original instructions, effects, branches and their metadata in place.
+    for (auto &use : i->uses())
+      if (!spend(2)) return false;
+    i->replaceAllUsesWith(constant);
+  }
   return true;
 }
 
@@ -1222,8 +1272,20 @@ class LoopRanges {
         phis(*cast<Instruction>(base)->getFunction(),overlay),
         opaque(*cast<Instruction>(base)->getFunction(),overlay) {}
   std::optional<Range> get(Value *value, Instruction *at) {
-    nodes = points = 0; active.clear(); memoryActive.clear();
+    nodes = points = 0; active.clear(); memoryActive.clear(); paidKnownLeaves.clear();
+    paidOpaqueShapes.clear();
     return visit(value, 0, true, at);
+  }
+  // Only an outer STORE query may reset the local proof counters.
+  struct WriteSpan { std::uint64_t start, bytes; };
+  std::optional<Range> getForWrite(Value *value, StoreInst *store,
+                                 std::uint64_t bytes,
+                                 const std::vector<WriteSpan> &protectedSpans) {
+    // A nested alias must use the inherited-depth helper, NEVER this reset.
+    if (!observationTrials.empty() || independentAnchors) return {};
+    nodes = points = 0; active.clear(); memoryActive.clear(); paidKnownLeaves.clear();
+    paidOpaqueShapes.clear();
+    return rangeForWriteAtOriginalStore(value, 0, store, bytes, protectedSpans);
   }
  private:
   Work &work;
@@ -1233,6 +1295,14 @@ class LoopRanges {
   PhiConstantGraph phis;
   OpaqueIntegerAdmission opaque;
   unsigned nodes = 0, points = 0;
+  // Same-SSA literal/immutable-H_C leaves need one scalar node per root query.
+  // This is accounting only: every visit still pays Work and checks depth.
+  // Never populate it from Path/Phi, numeric LOAD caches or provisional D.
+  std::set<Value *> paidKnownLeaves;
+  // Only complete same-root shapes whose footprint this query already paid.
+  // A repeated use still pays its root node, Work and the ordinary depth check.
+  // This ledger is independent of numeric D assumptions and cache rollback.
+  std::map<PHINode *, std::size_t> paidOpaqueShapes;
   std::set<Value *> active;
   std::set<LoadInst *> memoryActive;
   std::map<LoadInst *, Range> loads;
@@ -1307,19 +1377,75 @@ class LoopRanges {
     }
     ~OriginalStoreScalarScope() { owner.active.swap(saved); }
   };
+  // State is per original STORE query. Nested anchors/aliases must never
+  // inherit or report into their parent's mask demand.
+  struct WriteMaskQuery {
+    bool strong;
+    bool *eligibleSeen;
+  };
+  WriteMaskQuery *writeMaskQuery = nullptr;
+  struct OriginalStoreMaskScope {
+    LoopRanges &owner;
+    WriteMaskQuery *previous;
+    WriteMaskQuery query;
+    OriginalStoreMaskScope(LoopRanges &o, bool strong, bool *eligible)
+        : owner(o), previous(o.writeMaskQuery),
+          query{strong && !o.independentAnchors,
+                o.independentAnchors ? nullptr : eligible} {
+      owner.writeMaskQuery = &query;
+    }
+    ~OriginalStoreMaskScope() { owner.writeMaskQuery = previous; }
+  };
+
   std::optional<Range> rangeAtOriginalStore(Value *value, unsigned depth,
-                                           StoreInst *store) {
+                                           StoreInst *store, bool strong = false,
+                                           bool *eligibleSeen = nullptr) {
     if (!work.spend()) return {};
-    // This is a fresh pure-expression DFS at that ORIGINAL historical STORE,
-    // not a numeric budget reset or an equality between fresh/old values.
-    // In particular a historical offset.b can reach its exact LOAD assumption
-    // rather than being cut off by the outer current offset.b recursion set.
-    OriginalStoreScalarScope scope(*this);
+    OriginalStoreMaskScope maskScope(*this, strong, eligibleSeen);
+    OriginalStoreScalarScope scalarScope(*this);
     return visit(value, depth, true, store);
+  }
+
+  bool writeSpanDisjoint(const Range &address, std::uint64_t bytes,
+                        const std::vector<WriteSpan> &protectedSpans) const {
+    if (address.bits != 64 || !bytes || address.low > address.high ||
+        bytes > UINT64_MAX - address.high) return false;
+    for (const auto &span : protectedSpans)
+      if (!(address.high + bytes <= span.start ||
+            address.low >= span.start + span.bytes)) return false;
+    return true;
+  }
+
+  std::optional<Range> rangeForWriteAtOriginalStore(
+      Value *value, unsigned depth, StoreInst *store, std::uint64_t bytes,
+      const std::vector<WriteSpan> &protectedSpans) {
+    // The existing caller still pays its per-STORE/alias obligation fee.
+    // At most T+C, or one exact D span, are accepted by this private helper.
+    if (!bytes || protectedSpans.empty() || protectedSpans.size() > 2) return {};
+    for (const auto &span : protectedSpans)
+      if (!span.bytes || span.bytes > UINT64_MAX - span.start) return {};
+    bool eligible = false;
+    auto coarse = rangeAtOriginalStore(value, depth, store, false, &eligible);
+    if (!coarse || work.stats.budgetExhausted || coarse->bits != 64) return {};
+    if (writeSpanDisjoint(*coarse, bytes, protectedSpans)) return coarse;
+    if (!eligible || independentAnchors) return {};
+    // Only a valid ambiguous span retries. No second get(), no node/point/
+    // depth/Work reset, and no retry after a hazard/null/budget failure.
+    if (!work.spend()) return {};
+    auto strong = rangeAtOriginalStore(value, depth, store, true);
+    if (!strong || work.stats.budgetExhausted ||
+        !writeSpanDisjoint(*strong, bytes, protectedSpans)) return {};
+    return strong;
   }
   bool budget(unsigned depth, Value *value, Instruction *at) {
     if (!work.spend()) return false;
-    if (depth <= 32 && ++nodes <= 128) return true;
+    if (depth <= 32) {
+      const bool knownLeaf = value->getType()->isIntegerTy() &&
+          value->getType()->getIntegerBitWidth() <= 64 &&
+          !isa<UndefValue, PoisonValue>(value) && known(value);
+      if ((knownLeaf && !paidKnownLeaves.insert(value).second) || ++nodes <= 128)
+        return true;
+    }
     work.stats.budgetExhausted = true;
     std::string operand;
     raw_string_ostream stream(operand);
@@ -1522,10 +1648,10 @@ class LoopRanges {
       auto *gep = dyn_cast<GetElementPtrInst>(store->getPointerOperand());
       if (!gep) return {}; // Pure range helpers must not mutate source IR.
       const auto width = store->getValueOperand()->getType()->getIntegerBitWidth();
-      auto interval = rangeAtOriginalStore(gep->idx_begin()->get(), scalarDepth + 1, store);
-      if (!interval || interval->bits != 64 || width / 8 > UINT64_MAX - interval->high ||
-          !(interval->high + width / 8 <= *at || interval->low >= *at + bits / 8))
-        return {};
+      auto interval = rangeForWriteAtOriginalStore(
+          gep->idx_begin()->get(), scalarDepth + 1, store, width/8,
+          {{*at, bits/8}});
+      if (!interval) return {};
     }
     // This exact observation (and conditional nested successes) may escape only
     // after every structural/anchor/alias obligation passes. On any earlier
@@ -1740,14 +1866,24 @@ class LoopRanges {
         // iteratively; retain the original operations and every consume. A
         // direct PHI-only copying region is one structural shape node; every
         // physical PHI and actual slot is nevertheless checked and charged.
-        auto shape=opaque.getPhiRegions(phi,128-nodes+1,work.limit-work.stats.work);
+        const auto paid=paidOpaqueShapes.find(phi);
+        const auto allowance=paid==paidOpaqueShapes.end() ? 128-nodes+1 : paid->second;
+        auto shape=opaque.getPhiRegions(phi,allowance,work.limit-work.stats.work);
         if (!work.spend(shape.work)) return {};
         if (shape.budgetExhausted) {
           work.stats.budgetExhausted=true;
           fail(work.stats,shape.message);return {};
         }
-        if (shape.uniqueNodes) nodes+=shape.uniqueNodes-1; // root already paid.
-        return shape.admitted ? std::optional(full) : std::nullopt;
+        if (!shape.admitted) return {};
+        if (!shape.uniqueNodes || shape.uniqueNodes>allowance ||
+            (paid!=paidOpaqueShapes.end() && shape.uniqueNodes!=paid->second)) {
+          fail(work.stats,"loop opaque shape footprint changed within one query");return {};
+        }
+        if (paid==paidOpaqueShapes.end()) {
+          nodes+=shape.uniqueNodes-1; // this use's root node was already paid.
+          paidOpaqueShapes.emplace(phi,shape.uniqueNodes);
+        }
+        return full;
       }
     }
     if (isa<FreezeInst>(v)) return full;
@@ -1804,15 +1940,32 @@ class LoopRanges {
     }
     // A real mask bounds its result without needing a range of the old cell.
     // Still traverse BOTH operands for visible poison/undef/illegal shifts.
-    const bool masked = binary->getOpcode() == Instruction::And &&
-                        (known(binary->getOperand(0)) || known(binary->getOperand(1)));
-    auto a = visit(binary->getOperand(0), depth + 1, resolveMemory && !masked, at);
-    auto b = visit(binary->getOperand(1), depth + 1, resolveMemory && !masked, at);
+    auto *constantMask = binary->getOpcode() == Instruction::And
+        ? known(binary->getOperand(0)) : nullptr;
+    if (!constantMask && binary->getOpcode() == Instruction::And)
+      constantMask = known(binary->getOperand(1));
+    const bool masked = constantMask != nullptr;
+    const bool lowDiscarding = masked && !constantMask->isZero() &&
+                               !(constantMask->getZExtValue() & 1);
+    if (resolveMemory && lowDiscarding && writeMaskQuery &&
+        !writeMaskQuery->strong && writeMaskQuery->eligibleSeen && !independentAnchors)
+      *writeMaskQuery->eligibleSeen = true;
+    const bool refineMask = resolveMemory && lowDiscarding && writeMaskQuery &&
+                            writeMaskQuery->strong && !independentAnchors;
+    const bool childMemory = resolveMemory && (!masked || refineMask);
+    // Both operand/hazard traversals remain. All low-ones masks still use
+    // Coarse even within a strong outer expression; they continue to cut
+    // irrelevant memory-value cycles as before.
+    auto a = visit(binary->getOperand(0), depth + 1, childMemory, at);
+    auto b = visit(binary->getOperand(1), depth + 1, childMemory, at);
     if (!a || !b) return done({});
+
     switch (binary->getOpcode()) {
     case Instruction::And:
-      if (a->low == a->high) return done(Range{0,a->high,bits});
-      if (b->low == b->high) return done(Range{0,b->high,bits});
+      if (a->low == a->high)
+        return done(Range{0, std::min(a->high, b->high), bits});
+      if (b->low == b->high)
+        return done(Range{0, std::min(a->high, b->high), bits});
       return done(full);
     case Instruction::Or: case Instruction::Xor: {
       auto cover = [](std::uint64_t x) { return x == UINT64_MAX ? x : mask(std::bit_width(x)); };
@@ -1825,10 +1978,13 @@ class LoopRanges {
       if (a->low >= b->high) return done(Range{a->low-b->high,a->high-b->low,bits});
       return done(full);
     case Instruction::Shl: case Instruction::LShr: case Instruction::AShr:
-      if (b->low != b->high || b->high >= bits) return done({});
-      if (binary->getOpcode() == Instruction::LShr) return done(Range{a->low>>b->high,a->high>>b->high,bits});
+      // A bounded count need not be a singleton. Every possible count must
+      // still be legal; retain the original shift and its poison/flag uses.
+      if (b->low > b->high || b->high >= bits) return done({});
+      if (binary->getOpcode() == Instruction::LShr)
+        return done(Range{a->low>>b->high,a->high>>b->low,bits});
       if (binary->getOpcode() == Instruction::Shl && a->high <= (mask(bits)>>b->high))
-        return done(Range{a->low<<b->high,a->high<<b->high,bits});
+        return done(Range{a->low<<b->low,a->high<<b->high,bits});
       return done(full);
     default: return done(full);
     }
@@ -1864,49 +2020,90 @@ bool loopRegion(Function &f, const Guards &g, const std::vector<LoadInst *> &cut
   }
   return !region.preserving.empty() || fail(work.stats,"loop has no reachable table cutpoint");
 }
-bool loopWrites(Function &f, const Guards &g, const ImageTableContextRequest &r,
-                const InvariantRegion &region, Work &work, LoopRanges &ranges,
-                const SeededCell *cell=nullptr) {
-  const auto end=r.tableOffset+r.targets.size()*8;
-  for (auto &block:f) if (region.preserving.contains(&block)) for (auto &i:block) {
-    if (!work.spend()) return false;
+struct LoopEffectIdentity {
+  WeakVH instruction;
+  BasicBlock *block;
+  unsigned opcode;
+  Type *type, *effectType;
+};
+struct LoopInventory {
+  std::size_t instructions = 0;
+  std::vector<std::pair<WeakVH,MDNode *>> markers;
+  std::vector<LoopEffectIdentity> effects;
+};
+bool isLoopEffect(const Instruction &i) {
+  return isa<CallBase,LoadInst,StoreInst,FenceInst>(i) || i.mayWriteToMemory();
+}
+Type *loopEffectType(Instruction &i) {
+  if (auto *store=dyn_cast<StoreInst>(&i)) return store->getValueOperand()->getType();
+  if (auto *call=dyn_cast<CallBase>(&i)) return call->getFunctionType();
+  return i.getType();
+}
+Instruction *checkedLoopEffect(Function &f, const LoopEffectIdentity &identity, Work &work) {
+  if (!work.spend()) return nullptr;
+  auto *i=dyn_cast_or_null<Instruction>(static_cast<Value *>(identity.instruction));
+  if (!i || i->getParent()!=identity.block || i->getFunction()!=&f ||
+      i->getOpcode()!=identity.opcode || i->getType()!=identity.type ||
+      loopEffectType(*i)!=identity.effectType || !isLoopEffect(*i)) {
+    fail(work.stats,"loop effect inventory changed after recovery");return nullptr;
+  }
+  return i;
+}
+bool checkLoopEffect(Instruction &i, const Guards &g, const ImageTableContextRequest &r,
+                     Work &work, LoopRanges &ranges, const SeededCell *cell) {
     if (auto *call=dyn_cast<CallBase>(&i)) {
       if (!mathematicalCall(*call)) return fail(work.stats,"loop call has no preservation proof");
-      continue;
+      return true;
     }
     if (auto *load=dyn_cast<LoadInst>(&i)) {
       if (!load->isSimple()) return fail(work.stats,"observable loop read");
-      continue;
+      return true;
     }
     auto *store=dyn_cast<StoreInst>(&i);
     if (!store) {
       if (i.mayWriteToMemory() || isa<FenceInst>(i)) return fail(work.stats,"unknown loop memory effect");
-      continue;
+      return true;
     }
     auto *gep=dyn_cast<GetElementPtrInst>(store->getPointerOperand());
     if (!store->isSimple() || !store->getValueOperand()->getType()->isIntegerTy() ||
         !gep || gep->getPointerOperand()!=g.guest || gep->getNumIndices()!=1 ||
         !gep->getSourceElementType()->isIntegerTy(8)) return fail(work.stats,"unclassified loop write");
     const auto bits=store->getValueOperand()->getType()->getIntegerBitWidth();
-    auto at=ranges.get(gep->idx_begin()->get(),store);
+    if (!bits || bits % 8)
+      return fail(work.stats,"loop STORE has a non-byte width");
+    std::vector<LoopRanges::WriteSpan> protectedSpans{
+        {r.tableOffset, r.targets.size()*8}};
+    if (cell && store != cell->seed)
+      protectedSpans.push_back({cell->address, cell->bits/8});
+    auto at = ranges.getForWrite(gep->idx_begin()->get(), store, bits/8, protectedSpans);
     if (!at && work.stats.budgetExhausted) return false;
-    if (!bits || bits%8 || !at || at->bits!=64 || bits/8>UINT64_MAX-at->high ||
-        !(at->high+bits/8<=r.tableOffset || at->low>=end))
-      return fail(work.stats,"loop STORE may overwrite a protected table byte");
-    if (cell && store!=cell->seed && !(at->high+bits/8<=cell->address || at->low>=cell->address+cell->bits/8))
-      return fail(work.stats,"loop STORE may overwrite the seeded cell");
+    if (!at)
+      return fail(work.stats,"loop STORE may overwrite a protected table or cell byte");
     ++work.stats.preservedStores;
+    return true;
+}
+bool loopWrites(Function &f, const Guards &g, const ImageTableContextRequest &r,
+                const InvariantRegion &region, const LoopInventory &inventory,
+                Work &work, LoopRanges &ranges, const SeededCell *cell=nullptr) {
+  for (const auto &identity:inventory.effects) {
+    auto *i=checkedLoopEffect(f,identity,work);
+    if (!i) return false;
+    if (region.preserving.contains(i->getParent()) &&
+        !checkLoopEffect(*i,g,r,work,ranges,cell)) return false;
   }
   return true;
 }
 bool projectLoopAddresses(Function &f, const Guards &g, const InvariantRegion &region,
-                          Work &work, std::vector<WeakTrackingVH> &witnesses) {
+                          const LoopInventory &inventory, Work &work,
+                          std::vector<WeakTrackingVH> &witnesses) {
   std::vector<Value *> pending;
   std::vector<TruncInst *> candidates;
   std::set<Value *> seen;
-  for (auto &block:f) if (region.preserving.contains(&block)) for (auto &i:block) {
-    if (!work.spend()) return false;
-    auto *store=dyn_cast<StoreInst>(&i);
+  for (const auto &identity:inventory.effects) {
+    auto *i=checkedLoopEffect(f,identity,work);
+    if (!i) return false;
+    if (!region.preserving.contains(i->getParent())) continue;
+    auto *store=dyn_cast<StoreInst>(i);
     auto *gep=store ? dyn_cast<GetElementPtrInst>(store->getPointerOperand()) : nullptr;
     if (gep && gep->getPointerOperand()==g.guest && gep->getNumIndices()==1)
       pending.push_back(gep->idx_begin()->get());
@@ -1989,7 +2186,8 @@ std::unique_ptr<PathValueRanges> loopPathRanges(Function &f,
   for (const auto &handle:witnesses)
     if (auto *phi=dyn_cast_or_null<PHINode>(static_cast<Value *>(handle))) stable.push_back(phi);
   if (stable.empty()) return {};
-  auto paths=std::make_unique<PathValueRanges>(f,stable,work.limit-work.stats.work);
+  auto paths=std::make_unique<PathValueRanges>(f,stable,work.limit-work.stats.work,
+                                             PathRangeTraversal::BranchConditions);
   if (!work.spend(paths->work())) return {};
   if (paths->budgetExhausted()) {
     work.stats.budgetExhausted=true;
@@ -2022,10 +2220,16 @@ bool loopCandidates(Function &f, const Guards &g, const Table &table, Work &work
   return !edges.empty() || fail(work.stats,"loop has no original outside-path input");
 }
 bool recoverLoop(Function &f, const ImageTableContextRequest &r, Work &work,
-                 std::size_t expectedGuards, Guards &g, std::vector<LoadInst *> &cuts) {
+                 std::size_t expectedGuards, Guards &g, std::vector<LoadInst *> &cuts,
+                 LoopInventory &inventory) {
   std::size_t guests=0,accepted=0,guards=0;
   for (auto &block:f) for (auto &i:block) {
     if (!work.spend()) return false;
+    ++inventory.instructions;
+    // This paid full scan records every kind the write checker inspects,
+    // including non-writing calls and reads. Later phases retain all nodes.
+    if (isLoopEffect(i)) inventory.effects.push_back(
+        {&i,&block,i.getOpcode(),i.getType(),loopEffectType(i)});
     auto *tag=i.getMetadata(LoopAnchorKind);
     if (!tag) continue;
     auto *value=tag->getNumOperands()==1 ? mdconst::dyn_extract<ConstantInt>(tag->getOperand(0)) : nullptr;
@@ -2054,6 +2258,7 @@ bool recoverLoop(Function &f, const ImageTableContextRequest &r, Work &work,
     }
     default:return fail(work.stats,"unknown private loop provenance");
     }
+    inventory.markers.emplace_back(&i,tag);
   }
   if (guests!=1 || accepted!=1 || guards!=expectedGuards || cuts.empty())
     return fail(work.stats,"private loop anchors were lost or duplicated");
@@ -2550,13 +2755,14 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
   // Do not invent SP observations for the new blocks.
   Guards current;
   std::vector<LoadInst *> cuts;
-  if (!recoverLoop(*function,request,work,guardCount,current,cuts)) return stats;
+  LoopInventory inventory;
+  if (!recoverLoop(*function,request,work,guardCount,current,cuts,inventory)) return stats;
   InvariantRegion region;
   if (!loopRegion(*function,current,cuts,work,region)) return stats;
   // Original-IR relations only. A general LLVM scalar optimization can refine
   // independent undef/freeze choices and is not a memory-preservation proof.
   std::vector<WeakTrackingVH> witnesses;
-  if (!projectLoopAddresses(*function,current,region,work,witnesses)) return stats;
+  if (!projectLoopAddresses(*function,current,region,inventory,work,witnesses)) return stats;
   auto paths=loopPathRanges(*function,witnesses,work);
   if (stats.budgetExhausted) return stats;
   ConstantFacts none;
@@ -2574,10 +2780,11 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
       if (!work.spend()) return stats;
       overlay.emplace(load,cell.value);
     }
-    if (!loopShadowConstants(*function,overlay,work)) return stats;
+    LoopConstantPlan plan;
+    if (!loopShadowConstants(*function,overlay,work,plan)) return stats;
     LoopRanges ranges(work,current.guest,overlay,paths.get());
     stats.preservedStores=0;
-    if (!loopWrites(*function,current,request,region,work,ranges,&cell)) {
+    if (!loopWrites(*function,current,request,region,inventory,work,ranges,&cell)) {
       if (stats.budgetExhausted) return stats;
       continue;
     }
@@ -2587,29 +2794,35 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
     for (auto *load:cell.loads) {
       if (!work.spend()) return stats;
       constantValues+=!load->use_empty();
-      load->replaceAllUsesWith(cell.value); // preserve the real LOAD itself.
     }
-    if (!foldConstants(*function,work)) return stats;
+    if (!consumeLoopConstants(*function,plan,work)) return stats;
     auto checkedPaths=loopPathRanges(*function,witnesses,work);
     if (stats.budgetExhausted) return stats;
     LoopRanges checked(work,current.guest,none,checkedPaths.get()); // fresh SSA/point caches.
     stats.preservedStores=0;
     if (!verify(*function,verification) ||
-        !loopWrites(*function,current,request,region,work,checked,&cell)) return stats;
+        !loopWrites(*function,current,request,region,inventory,work,checked,&cell)) return stats;
     closed=true;break;
   }
   if (!closed) {
     LoopRanges ordinary(work,current.guest,none,paths.get());
     stats.preservedStores=0;
-    if (!loopWrites(*function,current,request,region,work,ordinary)) return stats;
+    if (!loopWrites(*function,current,request,region,inventory,work,ordinary)) return stats;
   }
-  // Clearing metadata and final validation are still inside the owned trial.
-  // No post-batch InstCombine/DSE or CFG simplification is used by this API.
-  std::size_t finalInstructions=0;
-  for (auto &block:*function) for (auto &i:block) {
+  // Every operation since recoverLoop is read-only or RAUW-only: projection
+  // and constant consumption retain ALL original instructions and CFG nodes.
+  // Reuse that paid inventory; whole-module verification still runs below.
+  // Any future insert/erase/clone/CFG or effect change MUST rebuild it.
+  for (const auto &[handle, tag] : inventory.markers) {
     if (!work.spend()) return stats;
-    i.setMetadata(LoopAnchorKind,nullptr);++finalInstructions;
+    auto *i=dyn_cast_or_null<Instruction>(static_cast<Value *>(handle));
+    if (!i || !i->getParent() || i->getFunction()!=function ||
+        i->getMetadata(LoopAnchorKind)!=tag) {
+      fail(stats,"private loop marker changed after recovery");return stats;
+    }
+    i->setMetadata(LoopAnchorKind,nullptr);
   }
+  const auto finalInstructions=inventory.instructions;
   if (function->size()>request.maxBlocks || finalInstructions>request.maxInstructions ||
       !work.spend(finalInstructions+trial->global_size()+trial->size()) ||
       !verifyWhole(*trial,verification)) {

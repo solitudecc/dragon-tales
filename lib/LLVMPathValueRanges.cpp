@@ -146,8 +146,11 @@ struct PathValueRanges::Impl {
     }
   }
 
-  Impl(Function &f, const std::vector<Value *> &witnesses, std::size_t maxWork)
+  Impl(Function &f, const std::vector<Value *> &witnesses, std::size_t maxWork,
+       PathRangeTraversal traversal)
       : function(f), dominance(f), limit(std::min<std::size_t>(maxWork, 65536)) {
+    if (traversal != PathRangeTraversal::WholeFunction &&
+        traversal != PathRangeTraversal::BranchConditions) { valid = false; return; }
     if (witnesses.size() > 256 || f.size() > 4096) {
       exhausted = true; valid = false; return;
     }
@@ -161,7 +164,9 @@ struct PathValueRanges::Impl {
     }
     if (stable.empty()) return;
     for (auto &block : f) {
-      if (!spend(block.size()+1)) return;
+      // size() walks the instruction list. Branch-only clients inspect the
+      // terminator and its explicitly charged dependencies, so avoid that walk.
+      if (!spend(traversal == PathRangeTraversal::BranchConditions ? 1 : block.size()+1)) return;
       auto *branch = dyn_cast<BranchInst>(block.getTerminator());
       if (!branch || !branch->isConditional() || branch->getSuccessor(0) == branch->getSuccessor(1) ||
           !dominance.isReachableFromEntry(&block)) continue;
@@ -201,7 +206,10 @@ struct PathValueRanges::Impl {
 
 PathValueRanges::PathValueRanges(Function &f, const std::vector<Value *> &witnesses,
                                  std::size_t maxWork)
-    : impl(std::make_unique<Impl>(f, witnesses, maxWork)) {}
+    : PathValueRanges(f,witnesses,maxWork,PathRangeTraversal::WholeFunction) {}
+PathValueRanges::PathValueRanges(Function &f, const std::vector<Value *> &witnesses,
+                                 std::size_t maxWork, PathRangeTraversal traversal)
+    : impl(std::make_unique<Impl>(f,witnesses,maxWork,traversal)) {}
 PathValueRanges::~PathValueRanges() = default;
 std::optional<PathValueRange> PathValueRanges::get(Value *v, Instruction *at,
                                                 std::size_t availableWork) {
