@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "relative_path": "source/loop_accepted_view_cleanup.cpp",
+      "sha256": "0ffa1459a03ad2526b02dd1538326a6f7974895dde469d8c47cb9b061bc947b2",
+      "size": 23725
+    },
+    {
+      "relative_path": "source/readonly_table_lookup_inventory.cpp",
+      "sha256": "111cf2684d58ea9cc1dad402a6ade70f6a4a253fea2954e496291e6a52b72d76",
+      "size": 7076
+    }
+  ],
+  "new_Guest_runs": 0,
+  "new_cleanup_pass_runs": 0,
+  "only_change": "print actual counters before unchanged strict73 gate",
+  "prior_failure_retained": "/home/ubuntu/vmc-runs/loop-accepted-view-cleanup-preparation-20261115-v1",
+  "schema": "readonly-inventory-v2-diagnostic-only-source-freeze"
+}

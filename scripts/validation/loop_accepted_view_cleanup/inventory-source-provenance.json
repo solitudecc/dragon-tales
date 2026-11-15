@@ -1,0 +1,84 @@
+{
+  "actual_cleanup_output_separately_owned": true,
+  "files": [
+    {
+      "path": "inventory_v1/source/readonly_table_lookup_inventory.cpp",
+      "sha256": "cae85eb1bb86ae456cef2290b650d5a5563e73ebeac112e64714b009f6b44a0f",
+      "size": 6940
+    },
+    {
+      "path": "inventory_v1/source/loop_accepted_view_cleanup.cpp",
+      "sha256": "0ffa1459a03ad2526b02dd1538326a6f7974895dde469d8c47cb9b061bc947b2",
+      "size": 23725
+    },
+    {
+      "path": "inventory_v1/controller.py",
+      "sha256": "a870d9672895e9e610ee066b32414f391311b2e9b04e224d2872a5dec5c76b6c",
+      "size": 3851
+    },
+    {
+      "path": "inventory_v1/SOURCE-FREEZE.json",
+      "sha256": "9593543b376139a272dd1fea56c1c054a958be3e36ea839f17027e0b4e536d2b",
+      "size": 502
+    },
+    {
+      "path": "inventory_v2/source/readonly_table_lookup_inventory.cpp",
+      "sha256": "111cf2684d58ea9cc1dad402a6ade70f6a4a253fea2954e496291e6a52b72d76",
+      "size": 7076
+    },
+    {
+      "path": "inventory_v2/source/loop_accepted_view_cleanup.cpp",
+      "sha256": "0ffa1459a03ad2526b02dd1538326a6f7974895dde469d8c47cb9b061bc947b2",
+      "size": 23725
+    },
+    {
+      "path": "inventory_v2/controller.py",
+      "sha256": "4cbe52dca23ba02ebc63ed77dd215702ddd3b257e6fab25602a4c0f6fd043fbb",
+      "size": 3851
+    },
+    {
+      "path": "inventory_v2/SOURCE-FREEZE.json",
+      "sha256": "55a52e8b5cd4038d320c86aa627e0edddcb3458fb44f488fdfd3ff96a606d55f",
+      "size": 683
+    },
+    {
+      "path": "inventory_v3/source/readonly_table_lookup_inventory.cpp",
+      "sha256": "d02a98287888ebb7deca00df29bfafdc56402487382c4d3bd38fb53f685434c4",
+      "size": 3751
+    },
+    {
+      "path": "inventory_v3/source/loop_accepted_view_cleanup.cpp",
+      "sha256": "0ffa1459a03ad2526b02dd1538326a6f7974895dde469d8c47cb9b061bc947b2",
+      "size": 23725
+    },
+    {
+      "path": "inventory_v3/controller.py",
+      "sha256": "aeb82e8cf2097b969ec8df420feb305401b303b804335a830389acfab9699d99",
+      "size": 3813
+    },
+    {
+      "path": "inventory_v3/SOURCE-FREEZE.json",
+      "sha256": "30d8be2c659565605e33148ca10f79f95a6d3167242e73463abaf2f934b6282a",
+      "size": 804
+    },
+    {
+      "path": "prepare_input_seal.py",
+      "sha256": "680023c4da16e29173b1e424e2c7ffe8f26cffaf58099e56f592fb14da123b22",
+      "size": 3330
+    },
+    {
+      "path": "prepare_actual_plan.py",
+      "sha256": "5f53cc9a2fcdf009bdec61609915c6f6983df0ea68e7f293948cef2b15585638",
+      "size": 5684
+    }
+  ],
+  "no_Guest_native": true,
+  "original_artifact_roots": [
+    "/home/ubuntu/vmc-runs/loop-accepted-view-cleanup-inputs-20261115-v1",
+    "/home/ubuntu/vmc-runs/loop-accepted-view-cleanup-preparation-20261115-v1",
+    "/home/ubuntu/vmc-runs/loop-accepted-view-cleanup-preparation-20261115-v2",
+    "/home/ubuntu/vmc-runs/loop-accepted-view-cleanup-preparation-20261115-v3"
+  ],
+  "schema": "exact-executed-readonly-inventory-and-preparation-sources-v1",
+  "unchanged_emitter_sha256": "0ffa1459a03ad2526b02dd1538326a6f7974895dde469d8c47cb9b061bc947b2"
+}

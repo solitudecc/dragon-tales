@@ -1,0 +1,19 @@
+{
+  "SDKs_referenced_not_duplicated": true,
+  "actual_B_after_sha256": "8418fd314005fa8b771473ea56e907a352416b459246e4f0e39d796c55ee1d2e",
+  "archive_ROCK": "/home/ubuntu/vmc-runs/accepted-view-cleanup-own-evidence-20261115-v1/accepted-view-cleanup-own-evidence-20261115-v1.tar.xz",
+  "archive_mac": "/Users/c/Desktop/deob/validation-artifacts/accepted-view-cleanup-own-evidence-20261115-v1.tar.xz",
+  "archive_sha256": "63b3f054dc5eb06799e22da2d223b5f44d39076630efa3d10a2fb87194935f74",
+  "archive_size": 7482008,
+  "emitter_executable_sha256": "49b92cbadd07ca5563bafbfebb894c17a3dfecf800de9a7f39e25b912b4e8ae2",
+  "emitter_source_sha256": "0ffa1459a03ad2526b02dd1538326a6f7974895dde469d8c47cb9b061bc947b2",
+  "full_set_size_sha_tar_padding_single_XZ_EOF_verified_both_hosts": true,
+  "manifest_sha256": "46d9440650d25a66eb5a10dacea7e9f28b17e834c839df2d948f50fe9a6174fd",
+  "payload_bytes": 63074022,
+  "payload_files": 80,
+  "ready": true,
+  "schema": "accepted-view-cleanup-evidence-reference-v1",
+  "scope": "Own toy/build/one actual six-pass cleanup only;0Guest/native/Unicorn. Independent clean32+96 is not recounted.",
+  "source_and_namespaces_frozen_no_more_writes": true,
+  "tar_members_including_manifest": 81
+}

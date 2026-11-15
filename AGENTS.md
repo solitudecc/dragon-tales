@@ -243,6 +243,30 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Selected Loop B readability cleanup (2026-11-15, after `9e04118`): unchanged
+validation-only emitter0ffa applies the existing six LLVM control-flow passes
+once to the selected Function. Every stage verifies the whole Module and exact
+ordinary bodies/Function+Argument identity/bodyless module skeleton. Source7147
+is unchanged; after8418fd31 is733->448blocks,16814->10900instructions,
+switches1->0/cyclic0->0. Inventory is all419 original simple i64 LOADs,345
+survive: not419 target reads or74 target deletions. Retain the earlier69+80
+constant-address classification failures; complete physical enumeration supplies
+no numerical facts and stays under the original512 inventory cap. The same
+binding-only client passes9 mechanical checks and changes one wrapper callee;
+it emits no observer and keeps ordinary/view bodies exact. Clean O0/O2 each16
+inputs give32 full66136-byte matches and96 detected comparator faults against
+the unchanged references. Zero skips/exclusions/normalization/newC/UC or
+recounting of prior76 executions; no new clean-observer claim. Actual raw-view
+1/0 and guard-miss0/1 evidence remains separate. Product/default pipeline/ABI
+are unchanged from `5b748fe`; original main1317/NoZ1171 full results still
+apply. See `docs/loop-image-large-native-20261115.md` and the independent
+cleanup/native reports.
+Final clean evidence is independently dual-host verified: native package
+a8e436b0/305regular, certificate090cb740; mechanical+six-pass package
+63b3f054/81members, both single-XZ EOF/member checks pass; preparation evidence
+78regular, certificate6ec20de2. Saved clean audit6272adb2 rechecks32 full
+inputs/outputs and96 complete controls, no new target calls or deletions.
+
 Large Loop B independent native closure (2026-11-15, implementation `5b748fe`):
 the common main/no-Z3 after SHA714701bc passes32 uninstrumented and32 observer
 full66136-byte comparisons against the unchanged16 saved Unicorn frames at

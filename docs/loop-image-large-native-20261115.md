@@ -98,9 +98,81 @@ ROCK 根：`/home/ubuntu/vmc-runs/loop-real-native-four-controls-20261115-v1/`�
 完整六个产品与 25 个编译组件源另见
 [SDK 封存报告](loop-image-final-sdk-archive-20261115.md)，不重复打包或重计执行次数。
 
+## 固定 LLVM 清理：静态检查已经通过
+
+只在 B 视图内按现有顺序各执行一次 SCCP、DFAJumpThreading、JumpThreading、
+SimplifyCFG、InstCombine、DCE。每步执行 whole-module verifier，并严格检查所有
+普通函数全文、Function / Argument 对象身份及删除所选函数体后的模块骨架。
+六步均通过，没有增加新 intrinsic 的例外，没有修改生产源码、默认管线或预算。
+
+| 结构 | 清理前 | 清理后 |
+| --- | ---: | ---: |
+| 视图基本块 | 733 | 448 |
+| 视图 IR 指令 | 16814 | 10900 |
+| 视图 switch | 1 | 0 |
+| 循环内 switch | 0 | 0 |
+
+清理后完整 IR 为 1280465 字节，SHA256
+`8418fd314005fa8b771473ea56e907a352416b459246e4f0e39d796c55ee1d2e`；
+报告 SHA256 `6ed3489244c19e6c28b039b455810e06e19beda59aaf33dfbf31d3f2321c6c31`。
+ROCK 根为 `/home/ubuntu/vmc-runs/accepted-view-cleanup-real-B-20261115-v1/`。
+
+结构审计完整跟踪原视图全部 419 条 simple i64 LOAD，清理后剩余 345 条；
+这些包含寄存器、入口检查及业务读取，不能声称是 419 个跳转目标读取，
+也不能把 74 条删除等同于 74 个分发读取的删除。之前的纯常量地址分类只找到
+69 条候选与 80 条入口检查，严格 73 门因此拒绝，原 v1 / v2 源和失败保留。
+新库存改为按 LLVM 物理指令完整枚举，不按名称或地址推断，也不提供任何数值事实。
+原库存上限 512 和清理程序保持不变，覆盖扩大到完整原始读取超集。
+
+清理程序实际运行 40.154 秒，六步静态验证全部通过。
+
+## 清理后 IR：独立执行已经通过
+
+只复用已经验证的唯一 wrapper callee 改向逻辑，生成单独 native 适配副本；
+不要求清理后的 CFG 仍具有原入口 switch 或 guard block 布局，不改动生产 IR。
+同一 binding-only 客户端的 9 个机械检查通过，包含有效 IR 的重复调用 / 错误 tag
+拒绝及拒绝时整模块不变。实际适配只改一个 callee，普通函数、所选视图及全局
+保持原样，whole-module verify 通过。
+
+再次使用原 16 份输入、原编译链和原参考帧，O0 / O2 共 32 次执行全部匹配
+66136 个原始字节、76 个寄存器字段、ROOT_EXIT 和预算；96 个指定比较器故障
+全部检出。没有重计原 76 次执行，没有新增 C / Unicorn，跳过 / 排除 / 数据
+归一化均为零。源、输入、工具和动态库 pin 前后完全相同，守卫运行 17.470695 秒。
+
+本次没有新增清理后 accepted / fallback 计数器证据。原始 B 的 32 次实际 1/0
+和守卫失败的 4 次 0/1 是前面单独记录的测量；官方六步清理的严格隔离检查、
+单 callee 绑定检查及清理后完整执行对拍是本次新证据。
+
+ROCK 根 `/home/ubuntu/vmc-runs/loop-clean-native-20261115-v1/`；
+`native/RESULTS.json` SHA256：
+`25f39675fe2acda33b153b8141c10fdbd9da4de33326c36ed5d177a687313ba6`。
+生产 IR 仍为 `8418fd31…`；只供验证使用的绑定副本为 `a7870686…`。
+
+保存结果的独立审计重新检查 32 份原始输入 / 输出、96 个完整故障记录及绑定的
+单 callee 差异，报告 SHA256
+`6272adb21a420a4697be6c43de4785adf56a292c087eb41c2d2695f720fafd0d`。
+清理后的新执行证据包为 `loop-clean-native-evidence-20261115-v1.tar.gz`，
+7012255 字节，SHA256
+`a8e436b0afffa169c0339c61ffbd6b00c2c2516dc0d56d6e2fa14ff6fddda77a`；
+304 个 payload / 20436013 原字节，含 manifest 共 305 个 regular 成员。
+两端独立核对完整文件集、每成员大小与 SHA、gzip CRC / EOF，最终证书 SHA256
+`090cb7408c2da7cd8879c9283361a03b87958c1c986a86883da0921eba5bc00a`。
+Mac 包位于 `/Users/c/Desktop/deob/validation-artifacts/loop-clean-native-evidence-20261115-v1/`。
+
+机械自测、独立 emitter 构建及实际六步 IR / 日志另存
+`accepted-view-cleanup-own-evidence-20261115-v1.tar.xz`，7482008 字节，SHA256
+`63b3f054dc5eb06799e22da2d223b5f44d39076630efa3d10a2fb87194935f74`；
+完整 81 成员双端逐成员验证和单 XZ EOF 检查通过。清单准备与历史分类失败另存
+`loop-accepted-view-cleanup-input-evidence-20261115-v1/`，78 个 regular 成员，
+证书 SHA256 `6ec20de2817c3c4a939eba467a2ca4f794f9c76c9e1b9994502913ad2186c215`。
+这些是各自不同范围的证据，不重复计算 native 次数；没有删除任何证据。
+
+详细机械验证见
+[清理工具报告](../scripts/validation/loop_accepted_view_cleanup/mechanical-and-cleanup-validation.md)，
+独立执行见 [清理后 native 报告](loop-clean-native-validation-20261115.md)。
+
 ## 其余范围
 
-固定六步可读性清理仍在进行，本报告此处的次数不代表后续清理输出已经通过。
 完整测试结果见代码检查点：main 1317/1317、no-Z3 1171/1171。
 没有新增单指令、完整 69 输入语料库或通用 VM 验证；本工作输出分析 IR，
 不改写原始 x86 可执行文件。

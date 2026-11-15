@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "path": "seal_evidence_v1.py",
+      "sha256": "25d378889bd2d2c545b2c7b085f46993041164aa073c57cc01bb559d26e3ae1e",
+      "size": 6626
+    },
+    {
+      "path": "seal_evidence_v2.py",
+      "sha256": "6c89376c0b518cb535f09ed67c7d34a376df8ec948c16012f8ac29ff77d69098",
+      "size": 7341
+    }
+  ],
+  "first_failure": "KeyError inventory: guarded failure raises before assigning RESULT.inventory; original command exit preserved in inventory.execution.json",
+  "fix": "read preserved per-command receipt; keep original failed script, inputs and outputs",
+  "frozen_evidence_fileset_sha256": "787480234562ecf96a5f8a3d17b72725bd042111cb059a8694b1bfb72b439ed7",
+  "frozen_evidence_summary_sha256": "93eb54ae5e473860bf35fdf7660b300e553f05e749e0c808a87eb16b69bcc601",
+  "schema": "exact-executed-cleanup-evidence-sealing-sources-v1",
+  "scope": "metadata-only copy and closure, no target calls"
+}
