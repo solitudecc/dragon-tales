@@ -4,6 +4,9 @@
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
 #include <llvm/IR/NoFolder.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Metadata.h>
+#include <llvm/Support/raw_ostream.h>
+#include <algorithm>
 #include <stdexcept>
 using namespace dragon;
 using namespace dragon::passes;
@@ -14,6 +17,109 @@ llvm::Function *fixture(LLVMLifter &l) {
   auto *f=llvm::Function::Create(llvm::FunctionType::get(t,{t},false),llvm::GlobalValue::ExternalLinkage,"test",l.module());
   llvm::IRBuilder<llvm::NoFolder> b(llvm::BasicBlock::Create(c,"entry",f));
   b.CreateRet(b.CreateAdd(f->getArg(0),llvm::ConstantInt::get(t,0)));return f;
+}
+
+TEST_CASE("Loop image pipeline validates bounded ordered uint64 configuration",
+          "[llvm][pipeline][loop-pipeline-options]") {
+  Options good{{"view_symbol",std::string("view")},{"table_offset",std::string("0x2000")},
+               {"targets",std::string("4352,0x1200,4352")}};
+  PassPipeline pipeline;REQUIRE(pipeline.add("loop-image-context",good));
+  CHECK(std::find(PassPipeline::defaultLLVM().begin(),PassPipeline::defaultLLVM().end(),
+                  "loop-image-context")==PassPipeline::defaultLLVM().end());
+  for(auto variant:{0,1,2}) {
+    auto options=good;
+    if(variant==0)options["table_offset"]=std::int64_t(8192);
+    if(variant==1)options["table_offset"]=std::string("0x8000000000000000");
+    if(variant==2)options["targets"]=std::string("0xffffffffffffffff,18446744073709551615");
+    PassPipeline accepted;CHECK(accepted.add("loop-image-context",options));
+  }
+  std::vector<Options> invalidOptions;
+  auto bad=[&](const std::string &key,Parameter value) {auto o=good;o[key]=std::move(value);invalidOptions.push_back(std::move(o));};
+  for(const char *key:{"view_symbol","table_offset","targets"}) {
+    auto missing=good;missing.erase(key);invalidOptions.push_back(std::move(missing));
+  }
+  bad("view_symbol",std::string{});bad("view_symbol",std::string(4097,'x'));
+  bad("view_symbol",std::string("a\0b",3));bad("view_symbol",true);
+  bad("table_offset",std::int64_t(-1));bad("table_offset",true);
+  for(const auto *text:{""," ","-1","+1","0x","0b10","1.0","18446744073709551616","0x10000000000000000"})
+    bad("table_offset",std::string(text));
+  for(const auto *text:{""," ",",1","1,","1,,2","1,-2","0x","0xgg","1 2","18446744073709551616"})
+    bad("targets",std::string(text));
+  bad("targets",true);bad("targets",std::int64_t(1));
+  std::string many="1";for(unsigned n=1;n<513;++n)many+=",1";bad("targets",many);
+  bad("targets",std::string(32769,'1'));
+  bad("table_offset",std::string("0xfffffffffffffff8"));
+  for(auto key:{"max_blocks","max_instructions","max_work"}) {
+    bad(key,std::int64_t(0));bad(key,std::int64_t(-1));bad(key,true);
+  }
+  bad("max_blocks",std::int64_t(4097));bad("max_instructions",std::int64_t(65537));
+  bad("max_work",std::int64_t(1000001));bad("unknown",std::int64_t(0));
+  for(const auto &options:invalidOptions) {
+    CAPTURE(optionsJSON(options));CHECK_FALSE(pipeline.add("loop-image-context",options));
+    CHECK_FALSE(pipeline.lastError().empty());
+  }
+  LLVMLifter legacy{Architecture::X86_64};fixture(legacy);const auto before=legacy.ir();
+  const auto report=pipeline.run(legacy);REQUIRE(report.ok);REQUIRE(report.runs.size()==1);
+  const auto &result=report.runs.front().result;CHECK(result.status==Status::Unavailable);
+  CHECK_FALSE(result.changed);CHECK(legacy.ir()==before);CHECK(result.counters.size()==8);
+  for(const auto &[key,value]:result.counters)CHECK(value==0);
+}
+
+TEST_CASE("Loop image pipeline distinguishes unavailable mode and unclosed proof",
+          "[llvm][pipeline][loop-pipeline-options]") {
+  for(auto mode:{dragon::llvmlifter::ExecutionMode::Legacy,dragon::llvmlifter::ExecutionMode::StatefulV2,
+                 dragon::llvmlifter::ExecutionMode::StaticAnalysis}) {
+    LLVMLifter lifter{Architecture::X86_64};REQUIRE(lifter.setExecutionMode(mode));fixture(lifter);
+    PassPipeline pipeline;
+    REQUIRE(pipeline.add("loop-image-context",{{"view_symbol",std::string("absent")},
+      {"table_offset",std::string("0x2000")},{"targets",std::string("0x1100")}}));
+    const auto before=lifter.ir();const auto report=pipeline.run(lifter);
+    REQUIRE(report.ok);REQUIRE(report.runs.size()==1);CHECK_FALSE(report.changed);CHECK(lifter.ir()==before);
+    const auto &result=report.runs[0].result;
+    const bool available=mode==dragon::llvmlifter::ExecutionMode::StaticAnalysis;
+    CHECK(result.status==(available?Status::Incomplete:Status::Unavailable));
+    CHECK(result.counters.at("available")==available);CHECK(result.counters.at("closed")==0);
+    CHECK(result.counters.at("complete")==0);CHECK(result.counters.at("budget_exhausted")==0);
+    CHECK_FALSE(result.message.empty());
+  }
+}
+
+TEST_CASE("Function control flow pipeline isolates the named function",
+          "[llvm][pipeline][function-control-flow-pipeline]") {
+  LLVMLifter lifter{Architecture::X86_64};auto *selected=fixture(lifter);
+  auto *ordinary=llvm::Function::Create(selected->getFunctionType(),llvm::GlobalValue::ExternalLinkage,
+                                       "ordinary",lifter.module());
+  llvm::IRBuilder<llvm::NoFolder> b(llvm::BasicBlock::Create(lifter.module().getContext(),"entry",ordinary));
+  b.CreateRet(b.CreateAdd(ordinary->getArg(0),llvm::ConstantInt::get(b.getInt32Ty(),0)));
+  auto render=[](llvm::Function &f) {std::string text;llvm::raw_string_ostream out(text);f.print(out);return text;};
+  const auto untouched=render(*ordinary);auto *argument=selected->getArg(0);
+  PassPipeline pipeline;REQUIRE(pipeline.add("function-control-flow",{{"function",std::string("test")}}));
+  const auto report=pipeline.run(lifter);REQUIRE(report.ok);REQUIRE(report.runs.size()==1);
+  CHECK(report.changed);CHECK(report.runs[0].result.status==Status::Success);
+  CHECK(lifter.module().getFunction("test")==selected);CHECK(selected->getArg(0)==argument);
+  CHECK(render(*ordinary)==untouched);CHECK(ordinary->getInstructionCount()==2);
+  CHECK(report.runs[0].result.counters.at("instructions_before")==2);
+  CHECK(report.runs[0].result.counters.at("instructions_after")==1);
+  CHECK(report.runs[0].result.counters.size()==8);
+}
+
+TEST_CASE("Function control flow pipeline rejects bad names before rewriting",
+          "[llvm][pipeline][function-control-flow-pipeline]") {
+  PassPipeline pipeline;
+  CHECK_FALSE(pipeline.add("function-control-flow"));
+  for(auto value:{Parameter{true},Parameter{std::int64_t(1)},Parameter{std::string{}},
+                  Parameter{std::string(4097,'x')},Parameter{std::string("a\0b",3)}})
+    CHECK_FALSE(pipeline.add("function-control-flow",{{"function",std::move(value)}}));
+  CHECK_FALSE(pipeline.add("function-control-flow",{{"function",std::string("test")},{"unsafe",true}}));
+  for(const auto *name:{"absent","declaration"}) {
+    LLVMLifter lifter{Architecture::X86_64};auto *f=fixture(lifter);
+    llvm::Function::Create(f->getFunctionType(),llvm::GlobalValue::ExternalLinkage,"declaration",lifter.module());
+    const auto before=lifter.ir();PassPipeline failed;
+    REQUIRE(failed.add("function-control-flow",{{"function",std::string(name)}}));
+    REQUIRE(failed.add("instcombine"));const auto report=failed.run(lifter);
+    CHECK_FALSE(report.ok);REQUIRE(report.runs.size()==1);CHECK(report.runs[0].result.status==Status::Error);
+    CHECK(lifter.ir()==before);CHECK_FALSE(report.error.empty());
+  }
 }
 }
 TEST_CASE("Pass pipeline preserves the historical LLVM sweep", "[llvm][pipeline]") {

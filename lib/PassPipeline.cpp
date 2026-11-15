@@ -8,11 +8,13 @@
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
+#include <dragon/lifters/llvm/ImageTableContext.hpp>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/raw_ostream.h>
 #include <algorithm>
+#include <charconv>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -43,6 +45,64 @@ PassPipeline::Validator numeric(std::set<std::string> names) {
     return std::string{};
   };
 }
+std::string symbol(const Options &o,const char *key) {
+  auto it=o.find(key);
+  const auto *value=it==o.end()?nullptr:std::get_if<std::string>(&it->second);
+  if(!value || value->empty() || value->size()>4096 || value->find('\0')!=std::string::npos)
+    throw std::invalid_argument(std::string(key)+" must be a nonempty string of at most 4096 bytes without NUL");
+  return *value;
+}
+std::uint64_t address(std::string_view text,const char *key) {
+  const auto trimmed=llvm::StringRef(text.data(),text.size()).trim();
+  text=std::string_view(trimmed.data(),trimmed.size());
+  int base=10;
+  if(text.starts_with("0x") || text.starts_with("0X")) {base=16;text.remove_prefix(2);}
+  if(text.empty())
+    throw std::invalid_argument(std::string(key)+" must contain uint64 decimal or hexadecimal addresses");
+  std::uint64_t value=0;
+  const auto result=std::from_chars(text.data(),text.data()+text.size(),value,base);
+  if(result.ec!=std::errc{} || result.ptr!=text.data()+text.size())
+    throw std::invalid_argument(std::string(key)+" must contain uint64 decimal or hexadecimal addresses");
+  return value;
+}
+llvmlifter::detail::ImageTableContextRequest loopRequest(const Options &o) {
+  for(const auto &[key,value]:o)
+    if(key!="view_symbol" && key!="table_offset" && key!="targets" &&
+       key!="max_blocks" && key!="max_instructions" && key!="max_work")
+      throw std::invalid_argument("unknown option: "+key);
+  llvmlifter::detail::ImageTableContextRequest request;
+  request.viewSymbol=symbol(o,"view_symbol");
+  const auto offset=o.find("table_offset");
+  if(offset==o.end())throw std::invalid_argument("table_offset is required");
+  if(const auto *n=std::get_if<std::int64_t>(&offset->second)) {
+    if(*n<0)throw std::invalid_argument("table_offset must be a uint64 address");
+    request.tableOffset=static_cast<std::uint64_t>(*n);
+  } else if(const auto *s=std::get_if<std::string>(&offset->second)) {
+    if(s->size()>128)throw std::invalid_argument("table_offset address is too long");
+    request.tableOffset=address(*s,"table_offset");
+  } else throw std::invalid_argument("table_offset must be an integer or address string");
+  const auto targets=o.find("targets");
+  const auto *list=targets==o.end()?nullptr:std::get_if<std::string>(&targets->second);
+  if(!list || list->empty() || list->size()>32768)
+    throw std::invalid_argument("targets must be a comma-separated string of 1..512 uint64 addresses");
+  std::string_view remaining=*list;
+  for(;;) {
+    const auto comma=remaining.find(',');
+    request.targets.push_back(address(remaining.substr(0,comma),"targets"));
+    if(request.targets.size()>512)throw std::invalid_argument("targets permits at most 512 table slots");
+    if(comma==std::string_view::npos)break;
+    remaining.remove_prefix(comma+1);
+  }
+  if(request.targets.size()*8>UINT64_MAX-request.tableOffset)
+    throw std::invalid_argument("table byte interval overflows uint64");
+  request.maxBlocks=number(o,"max_blocks",4096);
+  request.maxInstructions=number(o,"max_instructions",65536);
+  request.maxWork=number(o,"max_work",1000000);
+  if(!request.maxBlocks || request.maxBlocks>4096 || !request.maxInstructions ||
+     request.maxInstructions>65536 || !request.maxWork || request.maxWork>1000000)
+    throw std::invalid_argument("loop-image-context limits must be positive and at most 4096/65536/1000000");
+  return request;
+}
 std::string invalid(llvmlifter::LLVMLifter &lifter) {
   std::string error;llvm::raw_string_ostream out(error);
   if(llvm::verifyModule(lifter.module(),&out)) return error;
@@ -66,10 +126,11 @@ Result predicates(LLVMContext &ctx,const Options &o) {
        {"solver_queries",s.solverQueries},{"unknown_queries",s.unknownQueries},
        {"unsupported_conditions",s.unsupportedConditions},{"budget_skipped",s.budgetSkipped}}};
 }
-Counters controlFlowCounts(llvm::Module &module,const std::string &suffix) {
+Counters controlFlowCounts(llvm::Module &module,const std::string &suffix,
+                          const llvm::Function *selected=nullptr) {
   Counters counts;
   for(auto name:{"blocks","instructions","conditional_branches","switches"})counts[name+suffix]=0;
-  for(auto &f:module)for(auto &b:f) {
+  for(auto &f:module)if(!selected || &f==selected)for(auto &b:f) {
     ++counts["blocks"+suffix];counts["instructions"+suffix]+=b.size();
     if(auto *branch=llvm::dyn_cast<llvm::BranchInst>(b.getTerminator()))
       counts["conditional_branches"+suffix]+=branch->isConditional();
@@ -457,6 +518,38 @@ PassPipeline::PassPipeline(bool builtins) {
     c.lifter.runControlFlowSimplification();
     r.counters.merge(controlFlowCounts(c.lifter.module(),"_after"));return r;
   },false,{},none);
+  registerLLVM("function-control-flow",[](LLVMContext &c,const Options &o) {
+    const auto name=symbol(o,"function");
+    const auto *function=c.lifter.module().getFunction(name);
+    if(!function || function->isDeclaration())
+      throw std::invalid_argument("function-control-flow requires a defined function: "+name);
+    Result r;r.counters=controlFlowCounts(c.lifter.module(),"_before",function);
+    c.lifter.runControlFlowSimplification(name);
+    r.counters.merge(controlFlowCounts(c.lifter.module(),"_after",function));return r;
+  },false,{},[](const Options &o) {
+    try {
+      for(const auto &[key,value]:o)if(key!="function")return "unknown option: "+key;
+      (void)symbol(o,"function");
+    } catch(const std::exception &error) {return std::string(error.what());}
+    return std::string{};
+  });
+  registerLLVM("loop-image-context",[](LLVMContext &c,const Options &o) {
+    const auto request=loopRequest(o);
+    const bool available=c.lifter.executionMode()==llvmlifter::ExecutionMode::StaticAnalysis;
+    llvmlifter::detail::ImageTableContextStats s;
+    if(available)s=llvmlifter::detail::runLoopImageTableContext(c.lifter.module(),request);
+    Result r;
+    r.status=!available?Status::Unavailable:(s.closed?Status::Success:Status::Incomplete);
+    r.changed=s.changed;
+    r.message=available?s.message:"loop-image-context requires StaticAnalysis and a raw guarded entry view";
+    r.counters={{"available",available},{"complete",s.closed},{"closed",s.closed},
+      {"budget_exhausted",s.budgetExhausted},{"guarded_bytes",s.guardedBytes},
+      {"preserved_stores",s.preservedStores},{"constant_values",s.constantValues},{"work",s.work}};
+    return r;
+  },false,{},[](const Options &o) {
+    try {(void)loopRequest(o);}catch(const std::exception &error) {return std::string(error.what());}
+    return std::string{};
+  });
   registerLLVM("dispatch-specialize",[](LLVMContext &c,const Options &o) {
     const auto stats=c.lifter.runDispatcherSpecialization({
         number(o,"max_conditions",256), number(o,"max_expression_nodes",128)},

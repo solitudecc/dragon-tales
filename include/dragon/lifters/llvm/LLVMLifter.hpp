@@ -107,6 +107,7 @@ class LLVMLifter {
 
   /// Select before lifting; a module cannot mix execution protocols.
   bool setExecutionMode(ExecutionMode mode);
+  ExecutionMode executionMode() const { return mode_; }
 
   /// Opt in before lifting in StaticAnalysis mode. FunctionStart emits separate
   /// dragon_static_entry_* symbols accepting only fn.startAddress(); other PCs
@@ -171,6 +172,12 @@ class LLVMLifter {
   /// state assumptions are introduced. This optional step is not a guarantee
   /// of complete de-flattening and does not change the default sweep.
   void runControlFlowSimplification();
+
+  /// Run the same six LLVM passes only on the named defined function, without
+  /// adding execution-mode, memory or entry-state assumptions. Empty names,
+  /// embedded NUL bytes, absent symbols and declarations throw invalid_argument
+  /// before changing the module. The no-argument overload remains module-wide.
+  void runControlFlowSimplification(std::string_view functionName);
 
   /// Prove integer branch/select conditions constant for all input values,
   /// then simplify the CFG and dead computations. Run after mem2reg and the

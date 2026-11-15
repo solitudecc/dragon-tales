@@ -52,7 +52,7 @@ with lift(g) as manual,lift(g) as managed:
 with lift(g) as l,d.PassPipeline() as p:
     names={x['name'] for x in p.passes()}
     assert names==set(d.PassPipeline.DEFAULT_LLVM)|{
-        'graph-audit','finite-values','control-flow',
+        'graph-audit','finite-values','control-flow','function-control-flow','loop-image-context',
         'dispatch-specialize','dispatch-deflatten','guest-memory','entry-prefix',
         'guarded-transitions','constant-branches','guarded-target-sets','guarded-state-corridors','guarded-store-corridors',
         'invariant-self-loops','guarded-partial-corridors','guarded-state-values','guarded-partial-masks','guarded-checked-corridors','guarded-bit-slices','guarded-store-expressions'}
@@ -337,3 +337,6 @@ with lift(g) as l,d.PassPipeline(['guarded-store-expressions']) as p:
     counters=r['runs'][0]['counters']
     assert counters['available']==0 and counters['rewritten_edges']==0
     assert counters['loop_contexts']==0 and counters['loop_backedges']==0
+
+# Also exercised as a standalone script; keep it in this already registered test.
+import test_loop_image_pipeline

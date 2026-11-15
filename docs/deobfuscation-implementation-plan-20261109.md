@@ -1,13 +1,24 @@
 # 去混淆能力补齐实施方案
 
-日期：2026-11-09，状态更新至 2026-11-12。设计依据：[问题交接](deobfuscation-design-handoff-20261109.md)。
+日期：2026-11-09，核心状态更新至 2026-11-15。设计依据：[问题交接](deobfuscation-design-handoff-20261109.md)。
 本文保留原始方案和边界；已完成的组件在实施状态中列出，未列出的能力仍不应视为已实现。
+
+最新已合并核心 `6d4c5ff` 完成了大 Flatten-O2 样本 **guarded B 分析视图** 的循环证明和清理，
+并通过完整执行验证；这不代表下面历史四个 cff/combo ELF 全部完成去平坦化。
+见[大样本验收](loop-image-large-native-20261115.md)。
+
+本轮统一接口收尾提供 `loop-image-context`、`function-control-flow`、Python 有序 uint64
+便利方法及通用 JSON 配置工作流，默认优化顺序保持不变；双配置全量验收已经通过
+1332/1332 与 1186/1186，另补齐了入口 SP 快照在观察点的受限消费。
+使用方法见[统一工作流](deobfuscation-workflow.md)，本轮实测与原有精度边界见
+[收尾验收](loop-pipeline-integration-20261115.md)及
+[Python 与真实样本验证](loop-pipeline-python-real-validation-20261115.md)。
 
 推荐路线：**先恢复内存读写之间的值关系，再将关系表达为 SSA，最后对有证明的分发路径做改写。**
 现有有限值集、调用效果、MBA、谓词、区域提升和 PassPipeline 继续复用。
 第一版不建立任意全程序堆分析，也不重写整个反汇编器。
 
-## 实施状态（2026-11-12）
+## 历史实施状态（2026-11-12）
 
 最新组件 `4c66276` 支持显式实际目标校验直连，错误候选仍以同次LOAD进入完整fallback，
 默认流水线不变。主/no-Z3 CTest1075/1075、940/940；独立每库3072 before+6144 after

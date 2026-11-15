@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <format>
+#include <stdexcept>
 #include <utility>
 #include "utils/FloatOps.hpp"
 #include "LLVMImportMetadata.hpp"
@@ -1304,7 +1305,7 @@ void dragon::llvmlifter::LLVMLifter::runDCE() {
   runFPM(*module_, std::move(fpm));
 }
 
-void dragon::llvmlifter::LLVMLifter::runControlFlowSimplification() {
+static llvm::FunctionPassManager controlFlowSimplificationPasses() {
   llvm::FunctionPassManager fpm;
   fpm.addPass(llvm::SCCPPass());
   // Ordinary jump threading avoids some loop headers. DFA threading handles
@@ -1314,7 +1315,34 @@ void dragon::llvmlifter::LLVMLifter::runControlFlowSimplification() {
   fpm.addPass(llvm::SimplifyCFGPass());
   fpm.addPass(llvm::InstCombinePass());
   fpm.addPass(llvm::DCEPass());
-  runFPM(*module_, std::move(fpm));
+  return fpm;
+}
+
+void dragon::llvmlifter::LLVMLifter::runControlFlowSimplification() {
+  runFPM(*module_, controlFlowSimplificationPasses());
+}
+
+void dragon::llvmlifter::LLVMLifter::runControlFlowSimplification(
+    std::string_view functionName) {
+  if (functionName.empty() || functionName.find('\0') != std::string_view::npos)
+    throw std::invalid_argument("control-flow function name must be nonempty and contain no NUL");
+  auto *function = module_->getFunction(
+      llvm::StringRef(functionName.data(), functionName.size()));
+  if (!function || function->isDeclaration())
+    throw std::invalid_argument("control-flow requires a defined LLVM function");
+
+  auto fpm = controlFlowSimplificationPasses();
+  llvm::LoopAnalysisManager lam;
+  llvm::FunctionAnalysisManager fam;
+  llvm::CGSCCAnalysisManager cgam;
+  llvm::ModuleAnalysisManager mam;
+  llvm::PassBuilder pb;
+  pb.registerModuleAnalyses(mam);
+  pb.registerCGSCCAnalyses(cgam);
+  pb.registerFunctionAnalyses(fam);
+  pb.registerLoopAnalyses(lam);
+  pb.crossRegisterProxies(lam, fam, cgam, mam);
+  fpm.run(*function, fam);
 }
 
 dragon::llvmlifter::PredicateFoldStats

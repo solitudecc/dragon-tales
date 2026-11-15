@@ -51,6 +51,7 @@ add_executable(dragon_tests
         lifters/TestLLVMImports.cpp
         lifters/TestLLVMStatic.cpp
         lifters/TestPassPipeline.cpp
+        lifters/TestLLVMFunctionControlFlow.cpp
         lifters/TestGuestMemoryPipeline.cpp
         lifters/TestLLVMControlFlow.cpp
         lifters/TestLLVMDispatchSpecialization.cpp
@@ -266,13 +267,16 @@ include(Catch)
 catch_discover_tests(dragon_tests)
 # Keep C-shim tests separate: the main suite links LLVM static components
 # directly, while libdragon_c already carries its own LLVM dependencies.
-add_executable(dragon_c_tests TestCAnalysisHints.cpp TestCInitialState.cpp TestCGuardedEntry.cpp)
+add_executable(dragon_c_tests TestCAnalysisHints.cpp TestCInitialState.cpp TestCGuardedEntry.cpp TestCLoopPipeline.cpp)
 target_link_libraries(dragon_c_tests PRIVATE libdragon_c Catch2::Catch2WithMain)
 catch_discover_tests(dragon_c_tests)
 # Python API tests. Optional like Unicorn: they need a Python 3 with cffi,
 # and are simply not registered without one.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME "Validation - deobfuscation workflow configuration"
+             COMMAND ${Python3_EXECUTABLE}
+                     ${PROJECT_SOURCE_DIR}/scripts/deobfuscate.py --self-test)
     execute_process(COMMAND ${Python3_EXECUTABLE} -c "import cffi"
                     RESULT_VARIABLE _dragon_cffi_missing OUTPUT_QUIET ERROR_QUIET)
     if(_dragon_cffi_missing EQUAL 0)

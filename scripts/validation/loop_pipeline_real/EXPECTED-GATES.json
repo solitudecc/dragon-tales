@@ -1,0 +1,30 @@
+{
+  "driver": {
+    "all_nonselected_Function_Global_Metadata_and_Module_identities_preserved": true,
+    "direct_Loop_vs_builtin_complete_IR_and_all8_counters_message_status_changed_equal": true,
+    "official6pass_vs_function_builtin_complete_IR_all8_counters_equal": true,
+    "only_previous_typed_fshl32_declaration_import_allowed_on_actual_closed_change": true,
+    "same_actual_parsed_state_before_any_pass": true
+  },
+  "expected": {
+    "Guest_runs": 0,
+    "available": 1,
+    "budget_exhausted": 0,
+    "cleanup_only_after_actual_closed_gate": true,
+    "closed": 1,
+    "complete": 1,
+    "loop_status": "Success",
+    "max_work": 1000000,
+    "semantic_validation": false,
+    "source_ordinary_unchanged": true
+  },
+  "not_claimed": [
+    "exact old985771 work for a new CLI Module",
+    "unconditional CFF removal",
+    "new Guest/C/UC replay",
+    "table bytes from ELF are immutable",
+    "new observer evidence"
+  ],
+  "prepared_only": true,
+  "schema": "loop-pipeline-real-acceptance-gates-v1"
+}

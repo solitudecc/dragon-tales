@@ -3341,6 +3341,45 @@ class PassPipeline:
             raise ValueError(self._error())
         return self
 
+    def add_loop_image_context(self, view_symbol, table_offset, targets, *,
+                               max_blocks=4096, max_instructions=65536, max_work=1000000):
+        """Add the opt-in loop proof for an explicitly selected guarded view.
+
+        ``table_offset`` and ordered ``targets`` are uint64 integers. They are
+        candidates checked by the native proof, not immutable-memory facts.
+        Accepts 1..512 targets and reads at most 513 values; order and duplicates
+        are retained.
+        All arguments are validated before the pipeline is changed. The native
+        step reports Incomplete on refusal and Unavailable in Legacy mode.
+        """
+        from collections.abc import Mapping, Set
+        from itertools import islice
+        self._check()
+        if not isinstance(view_symbol, str):
+            raise TypeError('view_symbol must be a string')
+        if '\0' in view_symbol or not 1 <= len(view_symbol.encode('utf-8')) <= 4096:
+            raise ValueError('view_symbol must contain 1..4096 UTF-8 bytes without NUL')
+        maximum = 0xffffffffffffffff
+        if type(table_offset) is not int or not 0 <= table_offset <= maximum:
+            raise ValueError('table_offset must be a uint64 integer')
+        for name, value, cap in (('max_blocks', max_blocks, 4096),
+                                 ('max_instructions', max_instructions, 65536),
+                                 ('max_work', max_work, 1000000)):
+            if type(value) is not int or not 1 <= value <= cap:
+                raise ValueError(name + ' must be a positive integer within its hard cap')
+        if isinstance(targets, (str, bytes, bytearray, memoryview, Mapping, Set)):
+            raise TypeError('targets must be an ordered iterable of uint64 integers')
+        values = tuple(islice(iter(targets), 513))
+        if not 1 <= len(values) <= 512:
+            raise ValueError('targets must contain 1..512 values')
+        if any(type(value) is not int or not 0 <= value <= maximum for value in values):
+            raise ValueError('targets must contain uint64 integers')
+        if table_offset > maximum - 8 * len(values):
+            raise ValueError('table byte span overflows uint64')
+        return self.add('loop-image-context', view_symbol=view_symbol,
+                        table_offset=hex(table_offset), targets=','.join(hex(value) for value in values),
+                        max_blocks=max_blocks, max_instructions=max_instructions, max_work=max_work)
+
     def clear(self):
         self._check()
         if not lib.dragon_pass_pipeline_clear(self._ptr):

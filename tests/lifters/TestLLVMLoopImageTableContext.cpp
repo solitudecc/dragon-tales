@@ -1,5 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <dragon/lifters/llvm/ImageTableContext.hpp>
+#include <dragon/lifters/llvm/LLVMLifter.hpp>
+#include <dragon/passes/PassPipeline.hpp>
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Instructions.h>
@@ -9,6 +11,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/SourceMgr.h>
+#include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
 #include <memory>
 
@@ -21,7 +24,8 @@ struct LoopFixture {
   enum Mode { Normal, DuplicateInput, PrefixVersusEnd, MissingMask, MissingDefinition,
               PartialIndex, WideMask, ClobberRestore, UnknownCall, OtherBase,
               BadSP, BadInitialState, BadIndex, GrayDefinition, CallerTag,
-              TwoCandidates, BadBackedgeRange, CallerGlobalTag, FailedFirstCandidate };
+              TwoCandidates, BadBackedgeRange, CallerGlobalTag, FailedFirstCandidate,
+              NoFrame, NoFrameUnguarded, NoFrameBadSP, NoFrameReloadedSP };
   llvm::LLVMContext context;
   std::unique_ptr<llvm::Module> module;
   explicit LoopFixture(Mode mode=Normal) {
@@ -166,7 +170,17 @@ fallback:
       replace("[ 1, %a.end ]","[ 1, %a.end ], [ 1, %a.end ]");
       replace("a.end:\n  br label %head","a.end:\n  br i1 %inrange, label %head, label %head");
     }
-    if (mode==BadSP)
+    if (mode==NoFrame || mode==NoFrameUnguarded || mode==NoFrameBadSP || mode==NoFrameReloadedSP)
+      replace("%frame = sub i64 %sp0, 64", "%frame = add i64 %sp0, 0");
+    if (mode==NoFrameUnguarded)
+      replace("br i1 %spok, label %outcheck, label %fallback",
+              "br i1 true, label %outcheck, label %fallback");
+    if (mode==NoFrameReloadedSP)
+      replace("  store i64 22, ptr %indexcell, align 1",
+              "  store i64 22, ptr %indexcell, align 1\n"
+              "  %freshsp = load i64, ptr %spaddr, align 1\n"
+              "  store i64 %freshsp, ptr %slot, align 1");
+    if (mode==BadSP || mode==NoFrameBadSP)
       replace("b.end:\n  br label %head","b.end:\n  %oldsp = load i64, ptr %slot\n  %newsp = add i64 %oldsp, 1\n  store i64 %newsp, ptr %slot\n  br label %head");
     // GrayDefinition enters B after the real A mask and repeatedly returns
     // to B. The exact-observation proof must cover initialization and prove
@@ -282,4 +296,124 @@ TEST_CASE("Loop image refuses a truly clobbered candidate without leaking consta
   CHECK(f.module->getNamedMetadata("caller.note")==note);CHECK(note->getNumOperands()==1);
   CHECK(f.ir().find("dragon.loop.image.private")==std::string::npos);
   REQUIRE_FALSE(llvm::verifyModule(*f.module,&llvm::errs()));
+}
+
+namespace {
+std::unique_ptr<dragon::llvmlifter::LLVMLifter> pipelineFixture(const LoopFixture &fixture) {
+  using namespace dragon::llvmlifter;
+  auto lifter=std::make_unique<LLVMLifter>(dragon::Architecture::X86_64,"loop-pipeline-test");
+  REQUIRE(lifter->setExecutionMode(ExecutionMode::StaticAnalysis));
+  const auto text=fixture.ir();llvm::SMDiagnostic error;
+  const bool failed=llvm::parseAssemblyInto(llvm::MemoryBufferRef(text,"loop-pipeline-fixture"),
+      &lifter->module(),nullptr,error);
+  if(failed)error.print("loop-pipeline-test",llvm::errs());
+  REQUIRE_FALSE(failed);REQUIRE_FALSE(llvm::verifyModule(lifter->module(),&llvm::errs()));
+  return lifter;
+}
+dragon::passes::Options pipelineRequest() {
+  return {{"view_symbol",std::string("view")},{"table_offset",std::string("0x2000")},
+          {"targets",std::string("0x1100, 4608")}};
+}
+}
+
+TEST_CASE("Loop image pipeline publishes exactly the direct public proof",
+          "[llvm][image-loop-pipeline]") {
+  using namespace dragon::passes;
+  for(auto mode:{LoopFixture::Normal,LoopFixture::DuplicateInput,LoopFixture::PrefixVersusEnd}) {
+    LoopFixture fixture(mode);auto direct=pipelineFixture(fixture),managed=pipelineFixture(fixture);
+    const auto expected=runLoopImageTableContext(direct->module(),fixture.request());
+    REQUIRE(expected.closed);PassPipeline pipeline;
+    REQUIRE(pipeline.add("loop-image-context",pipelineRequest()));
+    const auto report=pipeline.run(*managed);REQUIRE(report.ok);REQUIRE(report.runs.size()==1);
+    const auto &result=report.runs.front().result;
+    CHECK(result.status==Status::Success);CHECK(result.changed==expected.changed);
+    CHECK(result.message==expected.message);CHECK(managed->ir()==direct->ir());
+    const Counters counters{{"available",1},{"complete",1},{"closed",1},
+      {"budget_exhausted",expected.budgetExhausted},{"guarded_bytes",expected.guardedBytes},
+      {"preserved_stores",expected.preservedStores},{"constant_values",expected.constantValues},
+      {"work",expected.work}};
+    CHECK(result.counters==counters);
+    CHECK_FALSE(llvm::verifyModule(managed->module(),&llvm::errs()));
+  }
+}
+
+TEST_CASE("Loop image pipeline retains direct refusals and budget reports",
+          "[llvm][image-loop-pipeline]") {
+  using namespace dragon::passes;
+  for(auto mode:{LoopFixture::Normal,LoopFixture::UnknownCall,LoopFixture::MissingDefinition,
+                 LoopFixture::ClobberRestore,LoopFixture::CallerTag}) {
+    LoopFixture fixture(mode);auto direct=pipelineFixture(fixture),managed=pipelineFixture(fixture);
+    auto request=fixture.request();auto options=pipelineRequest();
+    if(mode==LoopFixture::Normal) {
+      request.maxWork=1;options.emplace("max_work",std::int64_t(1));
+    }
+    const auto before=managed->ir();const auto expected=runLoopImageTableContext(direct->module(),request);
+    CHECK_FALSE(expected.closed);PassPipeline pipeline;
+    REQUIRE(pipeline.add("loop-image-context",options));
+    const auto report=pipeline.run(*managed);REQUIRE(report.ok);REQUIRE(report.runs.size()==1);
+    const auto &result=report.runs.front().result;
+    CHECK(result.status==Status::Incomplete);CHECK_FALSE(result.changed);
+    CHECK(result.message==expected.message);CHECK(result.counters.at("available")==1);
+    CHECK(result.counters.at("closed")==0);CHECK(result.counters.at("complete")==0);
+    CHECK(result.counters.at("budget_exhausted")==expected.budgetExhausted);
+    CHECK(result.counters.at("work")==expected.work);
+    CHECK(managed->ir()==before);CHECK(managed->ir()==direct->ir());
+    CHECK_FALSE(llvm::verifyModule(managed->module(),&llvm::errs()));
+  }
+}
+
+TEST_CASE("Loop image accepts an unchanged exact guarded SP snapshot without a frame",
+          "[llvm][image-loop-context][image-loop-no-frame]") {
+  LoopFixture fixture(LoopFixture::NoFrame);
+  auto *view=fixture.module->getFunction("view");
+  auto *ordinary=fixture.module->getFunction("ordinary");
+  auto *external=fixture.module->getFunction("unknown_call");
+  auto printed=[](llvm::Function &f){std::string s;llvm::raw_string_ostream out(s);f.print(out);return s;};
+  const auto ordinaryBefore=printed(*ordinary),externalBefore=printed(*external);
+  std::vector<llvm::Argument*>arguments;for(auto &argument:view->args())arguments.push_back(&argument);
+  auto result=runLoopImageTableContext(*fixture.module,fixture.request());
+  INFO(result.message);REQUIRE(result.closed);REQUIRE(result.changed);CHECK_FALSE(result.budgetExhausted);
+  CHECK(result.work<=fixture.request().maxWork);CHECK(fixture.module->getFunction("view")==view);
+  for(unsigned n=0;n<arguments.size();++n)CHECK(view->getArg(n)==arguments[n]);
+  CHECK(fixture.module->getFunction("ordinary")==ordinary);CHECK(printed(*ordinary)==ordinaryBefore);
+  CHECK(fixture.module->getFunction("unknown_call")==external);CHECK(printed(*external)==externalBefore);
+  llvm::LoadInst *snapshot=nullptr;llvm::ICmpInst *guard=nullptr;unsigned targets=0;
+  for(auto &block:*view)for(auto &instruction:block){
+    if(instruction.getName()=="initialsp")snapshot=llvm::dyn_cast<llvm::LoadInst>(&instruction);
+    if(instruction.getName()=="spok")guard=llvm::dyn_cast<llvm::ICmpInst>(&instruction);
+    targets+=llvm::isa<llvm::LoadInst>(instruction)&&instruction.getName().starts_with("target");
+  }
+  REQUIRE(snapshot);CHECK(snapshot->isSimple());CHECK(snapshot->getType()->isIntegerTy(64));
+  REQUIRE(guard);CHECK(guard->getPredicate()==llvm::ICmpInst::ICMP_EQ);
+  const auto other=guard->getOperand(0)==snapshot?1u:0u;
+  CHECK(guard->getOperand(1u-other)==snapshot);
+  auto *expected=llvm::dyn_cast<llvm::ConstantInt>(guard->getOperand(other));
+  REQUIRE(expected);CHECK(expected->getZExtValue()==49152);
+  auto *branch=llvm::dyn_cast<llvm::BranchInst>(guard->getParent()->getTerminator());
+  REQUIRE(branch);REQUIRE(branch->isConditional());CHECK(branch->getCondition()==guard);
+  CHECK(branch->getSuccessor(0)->getName()=="outcheck");CHECK(branch->getSuccessor(1)->getName()=="fallback");
+  CHECK(targets>=3);CHECK(fixture.ir().find("call void @ordinary")!=std::string::npos);
+  CHECK(fixture.ir().find("dragon.loop.image.private")==std::string::npos);
+  REQUIRE_FALSE(llvm::verifyModule(*fixture.module,&llvm::errs()));
+}
+
+TEST_CASE("Loop image never gives the guarded SP fact to missing checks changed PHIs or reloads",
+          "[llvm][image-loop-context][image-loop-no-frame]") {
+  for(auto mode:{LoopFixture::NoFrameUnguarded,LoopFixture::NoFrameBadSP,LoopFixture::NoFrameReloadedSP})
+    DYNAMIC_SECTION("mode "<<mode){
+      LoopFixture fixture(mode);const auto before=fixture.ir();auto *view=fixture.module->getFunction("view");
+      auto *ordinary=fixture.module->getFunction("ordinary");
+      std::vector<llvm::Argument*>arguments;std::vector<llvm::BasicBlock*>blocks;std::vector<llvm::Instruction*>instructions;
+      for(auto &argument:view->args())arguments.push_back(&argument);
+      for(auto &block:*view){blocks.push_back(&block);for(auto &instruction:block)instructions.push_back(&instruction);}
+      const auto result=runLoopImageTableContext(*fixture.module,fixture.request());INFO(result.message);
+      CHECK_FALSE(result.closed);CHECK_FALSE(result.changed);CHECK_FALSE(result.budgetExhausted);
+      CHECK(fixture.ir()==before);CHECK(fixture.module->getFunction("view")==view);
+      CHECK(fixture.module->getFunction("ordinary")==ordinary);
+      for(unsigned n=0;n<arguments.size();++n)CHECK(view->getArg(n)==arguments[n]);
+      std::vector<llvm::BasicBlock*>afterBlocks;std::vector<llvm::Instruction*>afterInstructions;
+      for(auto &block:*view){afterBlocks.push_back(&block);for(auto &instruction:block)afterInstructions.push_back(&instruction);}
+      CHECK(afterBlocks==blocks);CHECK(afterInstructions==instructions);
+      REQUIRE_FALSE(llvm::verifyModule(*fixture.module,&llvm::errs()));
+    }
 }

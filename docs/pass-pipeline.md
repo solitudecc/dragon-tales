@@ -56,6 +56,8 @@ flowchart LR
 | `guarded-target-sets` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384`；独立候选提示、实际 LOAD 的至多16目标小 switch、同值完整回退；见[有限目标集合](llvm-guarded-target-sets.md) |
 | `guarded-transitions` | LLVM，显式选择 | `max_candidates=64, max_rewrites=32, max_blocks=128, max_instructions=16384, business_corridors=0`；实际目标 LOAD 等值检查、同值完整回退；显式启用业务路径复制见[业务路径](guarded-business-corridors-20261112.md) |
 | `constant-branches` | LLVM，显式选择 | `max_folds=4096, max_instructions=1000000, max_blocks=65536`；只折叠已经是字面量常量的 br/switch，再删除入口不可达块，保留动态目标保护；见[精确常量分支清理](llvm-constant-branches.md) |
+| `loop-image-context` | LLVM，显式选择 raw guarded view | 必填 `view_symbol, table_offset, targets`；`max_blocks=4096, max_instructions=65536, max_work=1000000`，均为硬上限；先原控制不变量、一次有界 batch，再联合证明全部 lookup cutpoints 的 table/cell 写入保持；完整闭合才 Success，否则 Incomplete |
+| `function-control-flow` | LLVM，显式选择一个函数 | 必填 `function` 字符串；只对该定义运行与 `control-flow` 相同的一轮六步清理，不处理其它函数；符号不存在或只有声明时 Error |
 | `control-flow` | LLVM，显式选择 | 无；SCCP、状态机/普通跳转穿线、CFG 与死代码清理。详见 [控制流清理](llvm-control-flow-cleanup.md) |
 | `dispatch-specialize` | LLVM，显式选择 | `max_conditions=256, max_expression_nodes=128, allow_plain_stores=0`；唯一常量条件才改写，未知/多值保持原样；条件或表达式预算退出报告 Incomplete |
 | `dispatch-deflatten` | LLVM，显式选择 | `max_dispatchers=64, max_incoming_edges=512, max_expression_nodes=128, max_values=16`；只改写状态 PHI 的有限值集合全部指向同一 switch 目标的可证明边 |
@@ -63,7 +65,77 @@ flowchart LR
 | `predicates` | LLVM | `timeout_ms=25, max_queries=64, max_expression_nodes=256, resource_limit=200000` |
 
 `graph-audit` 是统计步骤，不能把其成功状态当作 CFG 完整性或执行正确性的证明。
-配置是扁平的整数、布尔值、字符串对象；内置数值参数仅接受 uint32 整数，拒绝未知参数。
+配置是扁平的整数、布尔值、字符串对象；通常内置数值预算仅接受 uint32 整数，拒绝未知参数。
+`loop-image-context` 的 uint64 地址与有序 slots 使用下面的专用字符串表示，不能按 uint32 预算解析。
+
+## raw guarded view 的 loop proof 与函数内清理
+
+这两个步骤显式选择，不加入默认六步。先在 **未经优化的**
+`STATIC_ANALYSIS` / `FUNCTION_START` 模块上创建独立 guarded entry view，再调用
+`loop-image-context`；不能先跑 `optimize()`、`entry-prefix`、mem2reg 或其它清理。
+Loop 证明只消费原始 view，实际入口字节检查与普通函数回退保留。候选来自调用者，
+不是从 ELF 只读权限、元数据、初始 image reader 或一个已观察到的执行结果推导出的事实。
+详见 [Loop Image 合同](llvm-loop-image-table-context.md)。
+
+`targets` 是 **按 table slot 排列**的 1..512 个 uint64 目标值，允许重复；不是目标集合，
+不得排序或去重。C / 扁平 JSON 用逗号分隔的十进制或 `0x` 字符串；`table_offset`
+接受非负 int64 JSON 整数，或完整 uint64 的十进制 / `0x` 字符串。大于 INT64_MAX 的地址
+应使用字符串。预算只能在上述硬上限以内取正整数。
+
+下面是 `dragon_pass_pipeline_add` 的 options JSON，不是嵌套的 CLI 工作流配置：
+
+```json
+{
+  "view_symbol": "the_actual_symbol_from_guarded_entry_manifest",
+  "table_offset": "0x800",
+  "targets": "0x4010,0x4020,0x4010",
+  "max_blocks": 4096,
+  "max_instructions": 65536,
+  "max_work": 1000000
+}
+```
+
+例如 C 调用 `dragon_pass_pipeline_add(p, "loop-image-context", options_json)`，
+再用 `dragon_pass_pipeline_run_llvm` 获取完整 JSON 报告。只有该步骤正常执行、
+`status == DRAGON_PASS_SUCCESS`（JSON 值 0）且 counters `available=1, complete=1, closed=1,
+ budget_exhausted=0` 时，才继续对同一个 view 加
+`function-control-flow`，options 为 `{"function":"同一实际 view_symbol"}`。
+调度报告本身也不能有 `budget_exhausted`。`ok` / `changed` / `converged` 不代替这些门。
+
+Python helper 接收自然的有序 uint64 迭代器并逐项编码；也保留重复 slots：
+
+```python
+symbol = view.guarded_entry_manifest()['view_symbol']
+with dragon.PassPipeline() as proof:
+    proof.add_loop_image_context(symbol, 0x800, [0x4010, 0x4020, 0x4010],
+                                 max_work=1000000)
+    report = proof.run(view, max_iterations=1, max_pass_runs=1, verify=True)
+row = report['runs'][0]
+c = row['counters']
+if not (report['ok'] and not report['budget_exhausted'] and row['status'] == 0
+        and c['available'] == c['complete'] == c['closed'] == 1
+        and c['budget_exhausted'] == 0):
+    raise RuntimeError('loop proof incomplete; keep IR/report and do not clean')
+with dragon.PassPipeline() as cleanup:
+    cleanup.add('function-control-flow', function=symbol)
+    cleanup_report = cleanup.run(view, max_iterations=1, max_pass_runs=1,
+                                 verify=True)
+```
+
+Loop counters 为 `available / complete / closed / budget_exhausted /
+ guarded_bytes / preserved_stores / constant_values / work`，其中 complete 等于 closed。
+非 StaticAnalysis 是 Unavailable，计数全零；StaticAnalysis 的拒绝或预算退出为
+Incomplete，并保留实际工作量和消息。闭合 Success 是该条件 view 的完整证明消费，
+不保证后续清理已去掉全部分发器，也不等于任意输入下整个函数的无条件去混淆完成。
+
+`function-control-flow` 使用同一轮 SCCP → DFAJumpThreading → JumpThreading →
+SimplifyCFG → InstCombine → DCE 的现有默认参数。它按 `function` 精确选一个定义，
+不按样本名、地址模式选函数；它的 Success 表示这轮清理完成，不是独立 loop 证明。
+没有增加多轮、求解器预算或 fallback 猜测。本文后面的历史普通配方仍独立可用，
+但不能先应用它们再声称满足 raw-view 的 loop 前提。
+
+从二进制与用户 JSON 开始的最小可运行入口见
+[通用去混淆工作流](deobfuscation-workflow.md) 和 `scripts/deobfuscate.py`。
 
 ## Python 使用
 

@@ -243,6 +243,35 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Unified Loop workflow and exact guarded-SP observation (2026-11-15, base
+`6d4c5ff`): opt-in `loop-image-context` preserves all8 stats, ordered full-u64
+table slots and existing hard caps through the generic C++/C/Python pipeline;
+Python adds a bounded iterable helper. New `function-control-flow` and C++
+named overload run the old six passes only on the requested defined Function.
+Default optimize/control-flow and C layouts are unchanged. JSON CLI exports
+raw/guarded/closed/clean IR plus complete reports; only successful closed proof
+authorizes cleanup. Exact initialSP weak observations may use the actual guard
+constant only where accepted dominates that block; no original LOAD/guard is
+replaced, and fresh same-address reads/PHIs gain no fact. Image source7b927ed3,
+Loop regression4445ecfa. Same old-header client: d446 six API-add failures,
+new edab6/349 pass. Separate same client: edab NoFrame2/48 fail1, fixed48cb
+2/77 pass with3 hazardous refusals retained. Independent main-only SP native
+54 complete66112-byte matches,702 controls;36 fault observations include16
+specified differences and20 full nontrigger matches,9 distinct arenas with
+actual RegBytes/Guest alias. Six streams/90frames audited,0newUC/machine
+instruction tests; never mix with the older real66136-byte protocol. Full
+main1332/1332 and no-Z3 1186/1186 pass isolated4-7/j4, no skips/exclusions,
+381source stat/ctime/SHA and8product pins unchanged. Full resultc08b57b7.
+Real B direct/builtin full IR/stats and cleanup/reference are identical on
+edab/48cb (985771work); fresh CLI kernel-only modules both close at984702,
+then733/16814/1switch->448/10900/0. These are0newGuest interface checks.
+Initial tiny Python index-precision refusals and test-contract/preparation
+failures remain preserved; the final finite leaf is a different program and
+must not be called a fix for those original index shapes. Source856f43bf,
+test5ede859f, CLIe7ae4b9a. See `docs/loop-pipeline-integration-20261115.md`,
+`docs/deobfuscation-workflow.md` and the independent reports. Final source/8
+product sealing is a subsequent record; no old evidence is deleted.
+
 Selected Loop B readability cleanup (2026-11-15, after `9e04118`): unchanged
 validation-only emitter0ffa applies the existing six LLVM control-flow passes
 once to the selected Function. Every stage verifies the whole Module and exact

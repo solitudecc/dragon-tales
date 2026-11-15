@@ -858,7 +858,14 @@ bool closeControlInvariant(Function &f, const Guards &g, const Table &table,
   } while (more);
   auto observation = [&](BasicBlock *block) -> ConstantInt * {
     auto found = sp.find(block);
-    return found == sp.end() || !found->second ? nullptr : dyn_cast<ConstantInt>(static_cast<Value *>(found->second));
+    if (found == sp.end() || !found->second) return nullptr;
+    auto *observed = static_cast<Value *>(found->second);
+    // A weak observation is not an SSA use, so guarded-use substitution need
+    // not rewrite it when SP stayed equal to its original entry snapshot.
+    // Apply only that exact SSA equality in the accepted dominance region.
+    if (observed == g.initialSP && dom.dominates(g.accepted, block))
+      return ConstantInt::get(cast<IntegerType>(observed->getType()), g.sp);
+    return dyn_cast<ConstantInt>(observed);
   };
   auto *dispatchSP = observation(table.dispatch->getParent());
   if (!dispatchSP) return fail(work.stats, "dispatch SP is not closed to a constant");
