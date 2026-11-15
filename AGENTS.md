@@ -243,6 +243,29 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Large Loop B independent native closure (2026-11-15, implementation `5b748fe`):
+the common main/no-Z3 after SHA714701bc passes32 uninstrumented and32 observer
+full66136-byte comparisons against the unchanged16 saved Unicorn frames at
+O0/O2. All32 actual observer counts are accepted1/fallback0; each group detects
+96 specified comparator faults. Four separately changed-input ordinary LLVM
+references and four observer outputs match completely, actual0/1: used table
+slot48 at8576 changes1741->dead, or input RSPc808->c810 with the explicitly
+copied return sentinel. Four valid-IR runtime faults preserve nominal full
+state but produce0/0 (omitted wrapper retarget) or2/0 (counter+2), all rejected
+by the1/0 observation gate; another12 comparator faults are detected. No new
+C/UC calls or recounting of old before32/UC16; zero skips/exclusions/data
+normalizations. All source/input/runtime/tool pins remain exact. Saved nominal
+audit independently rechecks64 blobs/32 sidecars/192 controls. Keep its v1
+Python-tuple-vs-JSON-array storage failure; v2 serializes the complete recomputed
+record by the original JSON rules and verifies only that storage-type delta.
+This is selected guarded B closure, not unconditional specialization; A still
+refuses. Final SDK six products/25 component sources are dual-host archived:
+package5fc54ef2, certificate69698410,45regular/896219980B raw,335829226B gzip;
+all members/SHA/gzip CRC/EOF verified independently, no deletion. Readability
+cleanup is recorded separately when actually executed. See
+`docs/loop-image-large-native-20261115.md` and
+`docs/loop-image-final-sdk-archive-20261115.md`.
+
 Loop branch checkpoint (2026-11-15, after `60d3365`, Image `e39195a4`,
 Path `c12b6702`/header `02e9783c`): masks, legal bounded shifts, paid same-SSA
 constant/opaque footprints and frozen closed-overlay consumption retain every

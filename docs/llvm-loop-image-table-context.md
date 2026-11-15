@@ -1,4 +1,9 @@
-# Loop Image table joint proof（草稿）
+# Loop Image table joint proof
+
+最新实现检查点为 `5b748fe`。大 Flatten-O2 的 guarded B 视图已在原预算内闭合，
+main/no-Z3 完整回归通过，独立执行验证覆盖正常入口、守卫失败和运行时观察故障。
+结果及边界见 [大样本独立验证](loop-image-large-native-20261115.md)。
+以下保留各初版与中间版的真实结果，历史拒绝和失败次数不代表最新状态。
 
 新增低级 C++ opt-in 入口：
 

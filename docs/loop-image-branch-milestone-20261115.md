@@ -1,5 +1,9 @@
 # Loop proof branch milestone — 2026-11-15
 
+This is the historical implementation checkpoint. Subsequent independent
+native results are in [the large-sample validation report](loop-image-large-native-20261115.md);
+the pending counts below are retained as the status at this checkpoint.
+
 The large Flatten-O2 B view now completes the opt-in Loop proof under the
 unchanged1M work limit. Both main and no-Z3 produce the exact same complete IR.
 This is an implementation checkpoint on the feature branch: after-native
