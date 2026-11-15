@@ -243,6 +243,25 @@ Gotchas:
 
 ## 4. Validation tools (`scripts/validation/`)
 
+Loop Image implementation milestone (2026-11-15, base `e952100`, Image source
+`2a3f4b0c`): new opt-in C++ `runLoopImageTableContext` combines bounded input
+threading with OriginalIR low-bit/path/constant-PHI proofs and complete Guest
+observation-range closure. Every exact LOAD needs independent full-entry
+initialization coverage; conditional child caches roll back with a failed
+parent. No table immutability, register noalias, default-pipeline or C/Python
+ABI change. Final focused main/no-Z3 pass all ten groups; full reference-profile
+CTest1305/1305 and1159/1159. The first CPU0–3/j3 run failed7 tests (MBA precision
+and original180s timeouts); preserve it and the generated outputs. The successful
+CPU4–7/j4 run retains all original checks and100ms MBA defaults. Actual-source
+cache/orphan fault controls detect rollback/coverage defects, but are not Guest
+native execution. Real large B is still refused at a low-discarding-mask range
+obligation; new after-native0, not full CFF removal. Do not merge until the
+required accepted-view native and structural gates close. Complete source and
+six-product dual-host archive SHA`bd8d9b61…`, certificate`bcf7549d…`; no evidence
+deletions. See `docs/loop-image-implementation-validation-20261115.md` and its
+component/independent reports. Source-inclusion replay tools are under
+`scripts/validation/loop_observation_cache/` and `loop_observation_orphan/`.
+
 Atomic dispatch-corridor batches (2026-11-15, base `07325bd`): new opt-in
 C++ Batch entry freezes/preflights all original edges before copying and
 repairs each shared definition once with all versions. Total growth/repair/

@@ -70,4 +70,16 @@ ImageTableContextStats runImageTableCheckedContext(
 ImageTableContextStats runClosedImageTableContext(
     llvm::Module &, const ImageTableContextRequest &);
 
+// Separate opt-in loop proof. In an owned hypothetical checked-table CFG,
+// first prove the existing SP/index control invariant, then thread one complete
+// bounded batch of original controller inputs. Every surviving lookup LOAD is
+// a cutpoint of a new joint table/constant-cell write proof. Local Guest LOAD
+// ranges require complete nearest-STORE coverage; no global index-cell range,
+// register alias or definedness fact is assumed. Only the complete verified
+// proof body can be published. Rejection preserves the original module.
+// The batch and local proof share request.maxWork (hard1M); existing view
+// block/instruction caps and all older API layouts/defaults are unchanged.
+ImageTableContextStats runLoopImageTableContext(
+    llvm::Module &, const ImageTableContextRequest &);
+
 } // namespace dragon::llvmlifter::detail

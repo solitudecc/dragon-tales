@@ -17,6 +17,10 @@ add_library(libdragon SHARED
         GuestMemorySSA.cpp
         LLVMGuestCellSSA.cpp
         LLVMImageTableContext.cpp
+        LLVMPhiLowBits.cpp
+        LLVMPathValueRanges.cpp
+        LLVMPhiConstant.cpp
+        LLVMOpaqueIntegerAdmission.cpp
         LLVMDispatchDecoderSSA.cpp
         LLVMDispatchCorridor.cpp
         GuestMemoryEdges.cpp
