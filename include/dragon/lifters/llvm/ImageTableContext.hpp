@@ -32,6 +32,22 @@ struct ImageTableContextStats {
   std::string message;
 };
 
+// Explicit bounded proof profile. Expanded raises the original-PHI projection
+// ceiling to 4096 nodes / 128 depth / 1048576 work and local Guest range
+// reasoning to 4096 nodes / 128 depth / 1024 memory-definition points.
+// Expanded also permits an explicit request.maxWork up to 16000000; its default
+// stays 1000000. Default and the old overload retain 256/32/65536 PHI limits,
+// 128/32/128 Guest-range limits, and shared hard 1000000 work. Proof obligations,
+// effect preservation and publication checks are unchanged. Expanded may also
+// refine byte-width truncation masks in the second original-STORE query;
+// independent anchor queries and small low-ones masks remain coarse.
+enum class LoopImageProofProfile { Default, Expanded };
+// Single source for the per-profile total work ceiling (request.maxWork and
+// the guarded-memory consumer). Default stays 1000000.
+constexpr std::size_t loopImageMaxWork(LoopImageProofProfile profile) {
+  return profile == LoopImageProofProfile::Expanded ? 16000000 : 1000000;
+}
+
 // Requires the raw independent GuardedEntry view, before its register allocas
 // and external-entry switch have been optimized. Only its named view function
 // can change. Rejected proofs run entirely in owned module clones.
@@ -81,5 +97,10 @@ ImageTableContextStats runClosedImageTableContext(
 // block/instruction caps and all older API layouts/defaults are unchanged.
 ImageTableContextStats runLoopImageTableContext(
     llvm::Module &, const ImageTableContextRequest &);
+
+// Explicit profile overload. The original overload retains its exact local
+// ceilings and behavior. Unknown enum values refuse without changing IR.
+ImageTableContextStats runLoopImageTableContext(
+    llvm::Module &, const ImageTableContextRequest &, LoopImageProofProfile);
 
 } // namespace dragon::llvmlifter::detail

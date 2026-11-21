@@ -9,6 +9,7 @@
 #include <dragon/lifters/llvm/LLVMDispatchSpecialization.hpp>
 #include <dragon/lifters/llvm/LLVMDeflattening.hpp>
 #include <dragon/lifters/llvm/LLVMEntryPrefix.hpp>
+#include <dragon/lifters/llvm/ImageTableContext.hpp>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -178,6 +179,14 @@ class LLVMLifter {
   /// embedded NUL bytes, absent symbols and declarations throw invalid_argument
   /// before changing the module. The no-argument overload remains module-wide.
   void runControlFlowSimplification(std::string_view functionName);
+
+  /// Explicit guarded-loop proof. Requires StaticAnalysis; other modes refuse
+  /// without mutation. The no-profile spelling keeps the original local caps.
+  [[nodiscard]] detail::ImageTableContextStats runLoopImageTableContext(
+      const detail::ImageTableContextRequest &request);
+  [[nodiscard]] detail::ImageTableContextStats runLoopImageTableContext(
+      const detail::ImageTableContextRequest &request,
+      detail::LoopImageProofProfile profile);
 
   /// Prove integer branch/select conditions constant for all input values,
   /// then simplify the CFG and dead computations. Run after mem2reg and the

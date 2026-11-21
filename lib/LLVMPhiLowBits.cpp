@@ -245,8 +245,9 @@ public:
 };
 } // namespace
 
-PhiLowBitsStats replacePhiLowTruncs(Function &f,const std::vector<TruncInst *> &requested,
-                                  const PhiLowBitsOptions &options) {
+static PhiLowBitsStats replacePhiLowTruncsImpl(Function &f,
+    const std::vector<TruncInst *> &requested, const PhiLowBitsOptions &options,
+    const PhiLowBitsOptions &ceiling) {
   PhiLowBitsStats stats; Work work{options,stats};
   auto fail = [&](const char *reason) {
     stats.complete=false;stats.changed=false;stats.rewrittenTruncs=stats.rewrittenUses=0;
@@ -254,9 +255,9 @@ PhiLowBitsStats replacePhiLowTruncs(Function &f,const std::vector<TruncInst *> &
     if (!stats.budgetExhausted) stats.message=reason;
     return stats;
   };
-  if (!f.getParent() || f.isDeclaration() || !options.maxCandidates || options.maxCandidates>128 ||
-      !options.maxNodes || options.maxNodes>256 || !options.maxDepth || options.maxDepth>32 ||
-      !options.maxWork || options.maxWork>65536) return fail("invalid phi projection request or caps");
+  if (!f.getParent() || f.isDeclaration() || !options.maxCandidates || options.maxCandidates>ceiling.maxCandidates ||
+      !options.maxNodes || options.maxNodes>ceiling.maxNodes || !options.maxDepth || options.maxDepth>ceiling.maxDepth ||
+      !options.maxWork || options.maxWork>ceiling.maxWork) return fail("invalid phi projection request or caps");
   if (requested.empty()) return stats;
   if (requested.size()>options.maxCandidates) {stats.budgetExhausted=true;stats.message="phi projection candidate cap";return fail("");}
   std::set<TruncInst *> unique;
@@ -334,6 +335,24 @@ PhiLowBitsStats replacePhiLowTruncs(Function &f,const std::vector<TruncInst *> &
   }
   stats.changed=stats.rewrittenUses!=0;
   stats.message="defined OriginalIR same-block PHI low-bit uses projected";
+  return stats;
+}
+
+PhiLowBitsStats replacePhiLowTruncs(Function &f,
+    const std::vector<TruncInst *> &requested, const PhiLowBitsOptions &options) {
+  return replacePhiLowTruncsImpl(f,requested,options,phiLowBitsCeiling(PhiLowBitsProofProfile::Default));
+}
+
+PhiLowBitsStats replacePhiLowTruncs(Function &f,
+    const std::vector<TruncInst *> &requested, const PhiLowBitsOptions &options,
+    PhiLowBitsProofProfile profile) {
+  if (profile==PhiLowBitsProofProfile::Default)
+    return replacePhiLowTruncs(f,requested,options);
+  if (profile==PhiLowBitsProofProfile::Expanded)
+    return replacePhiLowTruncsImpl(f,requested,options,phiLowBitsCeiling(profile));
+  PhiLowBitsStats stats;
+  stats.complete=false;
+  stats.message="invalid phi projection proof profile";
   return stats;
 }
 } // namespace dragon::llvmlifter::detail

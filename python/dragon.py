@@ -3342,7 +3342,8 @@ class PassPipeline:
         return self
 
     def add_loop_image_context(self, view_symbol, table_offset, targets, *,
-                               max_blocks=4096, max_instructions=65536, max_work=1000000):
+                               max_blocks=4096, max_instructions=65536, max_work=1000000,
+                               proof_profile='default'):
         """Add the opt-in loop proof for an explicitly selected guarded view.
 
         ``table_offset`` and ordered ``targets`` are uint64 integers. They are
@@ -3351,6 +3352,10 @@ class PassPipeline:
         are retained.
         All arguments are validated before the pipeline is changed. The native
         step reports Incomplete on refusal and Unavailable in Legacy mode.
+        ``proof_profile='expanded'`` explicitly raises local PHI and Guest
+        range proof ceilings and permits explicit max_work up to 16000000.
+        Its default remains 1000000. Omission keeps the original native option
+        set and local resource limits; proof obligations are unchanged.
         """
         from collections.abc import Mapping, Set
         from itertools import islice
@@ -3362,9 +3367,11 @@ class PassPipeline:
         maximum = 0xffffffffffffffff
         if type(table_offset) is not int or not 0 <= table_offset <= maximum:
             raise ValueError('table_offset must be a uint64 integer')
+        if not isinstance(proof_profile, str) or proof_profile not in ('default', 'expanded'):
+            raise ValueError('proof_profile must be default or expanded')
         for name, value, cap in (('max_blocks', max_blocks, 4096),
                                  ('max_instructions', max_instructions, 65536),
-                                 ('max_work', max_work, 1000000)):
+                                 ('max_work', max_work, 16000000 if proof_profile == 'expanded' else 1000000)):
             if type(value) is not int or not 1 <= value <= cap:
                 raise ValueError(name + ' must be a positive integer within its hard cap')
         if isinstance(targets, (str, bytes, bytearray, memoryview, Mapping, Set)):
@@ -3376,9 +3383,12 @@ class PassPipeline:
             raise ValueError('targets must contain uint64 integers')
         if table_offset > maximum - 8 * len(values):
             raise ValueError('table byte span overflows uint64')
-        return self.add('loop-image-context', view_symbol=view_symbol,
-                        table_offset=hex(table_offset), targets=','.join(hex(value) for value in values),
-                        max_blocks=max_blocks, max_instructions=max_instructions, max_work=max_work)
+        options = dict(view_symbol=view_symbol, table_offset=hex(table_offset),
+                       targets=','.join(hex(value) for value in values),
+                       max_blocks=max_blocks, max_instructions=max_instructions, max_work=max_work)
+        if proof_profile != 'default':
+            options['proof_profile'] = proof_profile
+        return self.add('loop-image-context', **options)
 
     def clear(self):
         self._check()

@@ -104,3 +104,77 @@ TEST_CASE("Path range boolean decoding preserves select polarity and incomplete 
   CHECK_FALSE(reduced.get(f.find("stable"),f.find("index"),1));
   CHECK(reduced.budgetExhausted());CHECK(reduced.work()-spent<=1);
 }
+
+namespace {
+struct OrSubFixture {
+  llvm::LLVMContext context;
+  std::unique_ptr<llvm::Module> module;
+  explicit OrSubFixture(unsigned bits=32,std::string constant="7",bool reverse=false,
+      std::string comparison="sge",std::string threshold="0",std::string subFlags="",
+      std::string orFlags="",bool independent=false,bool swappedSub=false,
+      bool duplicate=false,bool bypass=false,bool swappedCompare=false) {
+    const auto type="i"+std::to_string(bits);
+    std::string text="define void @f("+type+" %input, i1 %bypass, ptr %out) {\nentry:\n";
+    text+=" %stable=freeze "+type+" %input\n %other=freeze "+type+" %input\n store "+type+" %stable,ptr %out\n";
+    text+=bypass?" br i1 %bypass,label %body,label %guard\n":" br label %guard\n";
+    text+="guard:\n %difference=sub "+subFlags+type+" "+(swappedSub?"%stable":constant)+", "+(swappedSub?constant:independent?"%other":"%stable")+"\n";
+    text+=" %combined=or "+orFlags+type+" "+(reverse?"%difference, %stable":"%stable, %difference")+"\n";
+    text+=" %condition=icmp "+comparison+" "+type+" "+(swappedCompare?threshold+", %combined":"%combined, "+threshold)+"\n";
+    text+=duplicate?" br i1 %condition,label %body,label %body\n":" br i1 %condition,label %body,label %exit\n";
+    text+="body:\n %index="+(bits==64?"add i64 %stable,0":"zext "+type+" %stable to i64")+"\n ret void\nexit:\n ret void\n}\n";
+    llvm::SMDiagnostic error;module=llvm::parseAssemblyString(text,error,context);
+    if(!module)error.print("or-sub-path-test",llvm::errs());
+    REQUIRE(module);REQUIRE_FALSE(llvm::verifyModule(*module,&llvm::errs()));
+  }
+  llvm::Instruction *find(llvm::StringRef name){for(auto &b:*module->getFunction("f"))for(auto &i:b)if(i.getName()==name)return &i;return nullptr;}
+  llvm::Instruction *exit(){for(auto &b:*module->getFunction("f"))if(b.getName()=="exit")return b.getTerminator();return nullptr;}
+  llvm::Instruction *before(){for(auto &i:module->getFunction("f")->getEntryBlock())if(llvm::isa<llvm::StoreInst>(i))return &i;return nullptr;}
+  std::string ir(){std::string text;llvm::raw_string_ostream out(text);module->print(out,nullptr);return text;}
+};
+}
+
+TEST_CASE("Signed OR of a stable value and constant minus that value gives unsigned path bounds",
+          "[llvm][path-value-ranges][path-or-sub-range]") {
+  for(unsigned bits:{1u,8u,32u,64u})for(bool reverse:{false,true})for(bool greater:{false,true}) {
+    INFO(bits);INFO(reverse);INFO(greater);
+    const std::string constant=bits==1?"0":"7";
+    OrSubFixture f(bits,constant,reverse,greater?"sgt":"sge",greater?"-1":"0");const auto before=f.ir();
+    PathValueRanges ranges(*f.module->getFunction("f"),{f.find("stable"),f.find("other")},65536);
+    auto accepted=ranges.get(f.find("stable"),f.find("index"));REQUIRE(accepted);
+    CHECK(accepted->bits==bits);CHECK(accepted->low==0);CHECK(accepted->high==(bits==1?0:7));
+    auto rejected=ranges.get(f.find("stable"),f.exit());REQUIRE(rejected);
+    CHECK(rejected->low==(bits==1?1:8));CHECK(rejected->high==(bits==64?UINT64_MAX:(std::uint64_t(1)<<bits)-1));
+    CHECK_FALSE(ranges.get(f.find("stable"),f.before()));CHECK_FALSE(ranges.get(f.find("other"),f.find("index")));
+    CHECK_FALSE(ranges.budgetExhausted());CHECK(ranges.work()<=65536);CHECK(f.ir()==before);
+  }
+  for(const auto &constant:{std::string("0"),std::string("2147483647")}) {
+    OrSubFixture f(32,constant);PathValueRanges ranges(*f.module->getFunction("f"),{f.find("stable")},65536);
+    const auto accepted=ranges.get(f.find("stable"),f.find("index"));REQUIRE(accepted);
+    CHECK(accepted->high==std::stoull(constant));const auto rejected=ranges.get(f.find("stable"),f.exit());REQUIRE(rejected);
+    CHECK(rejected->low==std::stoull(constant)+1);CHECK(rejected->high==UINT32_MAX);
+  }
+  OrSubFixture swapped(32,"7",false,"sle","0","","",false,false,false,false,true);
+  PathValueRanges ranges(*swapped.module->getFunction("f"),{swapped.find("stable")},65536);
+  const auto range=ranges.get(swapped.find("stable"),swapped.find("index"));REQUIRE(range);CHECK(range->high==7);
+}
+
+TEST_CASE("Signed OR subtraction range decoding retains exact SSA and poison boundaries",
+          "[llvm][path-value-ranges][path-or-sub-range]") {
+  for(unsigned mode=0;mode<11;++mode) {
+    INFO(mode);
+    OrSubFixture f(32,mode==0?"-1":mode==1?"2147483648":"7",false,
+      mode==7?"sgt":"sge",mode==7?"0":"0",mode==2?"nsw ":mode==3?"nuw ":"",
+      mode==4?"disjoint ":"",mode==5,mode==6,mode==8,mode==9);
+    const auto before=f.ir();std::vector<llvm::Value *> witnesses;
+    if(mode!=10)witnesses.push_back(f.find("stable"));witnesses.push_back(f.find("other"));
+    PathValueRanges ranges(*f.module->getFunction("f"),witnesses,65536);
+    CHECK_FALSE(ranges.get(f.find("stable"),f.find("index")));
+    CHECK_FALSE(ranges.get(f.find("other"),f.find("index")));CHECK_FALSE(ranges.budgetExhausted());CHECK(f.ir()==before);
+  }
+  OrSubFixture f;const auto before=f.ir();
+  PathValueRanges tiny(*f.module->getFunction("f"),{f.find("stable")},1);
+  CHECK(tiny.budgetExhausted());CHECK(tiny.work()<=1);CHECK_FALSE(tiny.get(f.find("stable"),f.find("index")));
+  PathValueRanges limited(*f.module->getFunction("f"),{f.find("stable")},65536);
+  const auto spent=limited.work();CHECK_FALSE(limited.get(f.find("stable"),f.find("index"),1));
+  CHECK(limited.budgetExhausted());CHECK(limited.work()-spent<=1);CHECK(f.ir()==before);
+}

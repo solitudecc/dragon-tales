@@ -15,6 +15,9 @@ U64 = (1 << 64) - 1
 SCHEMA = 'dragon-deobfuscate-v1'
 REGION_LIMITS = {'max_blocks': 4096, 'max_dispatch_cases': 65536}
 LOOP_LIMITS = {'max_blocks': 4096, 'max_instructions': 65536, 'max_work': 1000000}
+GUARDED_MEMORY_LIMITS = {'max_work': 1000000}
+# Mirrors loopImageMaxWork(Expanded); only an explicit proof_profile admits it.
+EXPANDED_MAX_WORK = 16000000
 
 
 class Incomplete(RuntimeError):
@@ -53,6 +56,24 @@ def limits(value, caps, name):
     return result
 
 
+def profile_options(value, defaults, name):
+    fields(value, (*defaults, 'proof_profile'), name)
+    profile = value.get('proof_profile', 'default')
+    if type(profile) is not str or profile not in ('default', 'expanded'):
+        raise ValueError(f'{name}.proof_profile must be default or expanded')
+    caps = dict(defaults, max_work=EXPANDED_MAX_WORK) if profile == 'expanded' else defaults
+    result = limits({k: v for k, v in value.items() if k != 'proof_profile'}, caps, name)
+    if 'max_work' not in value:
+        result['max_work'] = defaults['max_work']
+    if 'proof_profile' in value:
+        result['proof_profile'] = profile
+    return result
+
+
+def loop_options(value):
+    return profile_options(value, LOOP_LIMITS, 'loop')
+
+
 def addresses(value, name, maximum):
     if not isinstance(value, list) or len(value) > maximum:
         raise ValueError(f'{name} must be an array of at most {maximum} addresses')
@@ -88,7 +109,8 @@ def byte_rows(value, registers):
 
 def validate_config(value, base):
     fields(value, ('schema', 'image', 'image_sha256', 'function_entry', 'entries',
-                   'extra_blocks', 'strategy', 'guard', 'table', 'region', 'loop'), 'config')
+                   'extra_blocks', 'strategy', 'guard', 'table', 'region', 'loop',
+                   'guarded_memory'), 'config')
     if value.get('schema', SCHEMA) != SCHEMA:
         raise ValueError('unsupported config schema')
     image = Path(text(value.get('image'), 'image', 32768))
@@ -104,7 +126,7 @@ def validate_config(value, base):
     if strategy not in ('linear-sweep', 'recursive-traversal'):
         raise ValueError('strategy must be linear-sweep or recursive-traversal')
     region = limits(value.get('region', {}), REGION_LIMITS, 'region')
-    loop = limits(value.get('loop', {}), LOOP_LIMITS, 'loop')
+    loop = loop_options(value.get('loop', {}))
     entries = addresses(value.get('entries', []), 'entries', 65536)
     extra = addresses(value.get('extra_blocks', []), 'extra_blocks', region['max_blocks'])
     guard = fields(value.get('guard'), ('context_id', 'provenance', 'registers', 'memory'), 'guard')
@@ -124,10 +146,14 @@ def validate_config(value, base):
     targets = addresses(table.get('targets'), 'table.targets', 512)
     if not targets or len(targets) * 8 > U64 - offset:
         raise ValueError('table needs 1..512 ordered slots and a nonwrapping byte span')
-    return {'schema': SCHEMA, 'image': str(image), 'image_sha256': expected,
+    result = {'schema': SCHEMA, 'image': str(image), 'image_sha256': expected,
             'function_entry': entry, 'entries': entries, 'extra_blocks': extra,
             'strategy': strategy, 'guard': guard, 'table': {'offset': offset, 'targets': targets},
             'region': region, 'loop': loop}
+    if 'guarded_memory' in value:
+        result['guarded_memory'] = profile_options(value['guarded_memory'], GUARDED_MEMORY_LIMITS,
+                                                   'guarded_memory')
+    return result
 
 
 def load_json(data):
@@ -181,17 +207,17 @@ def single_success(report, name):
     return row
 
 
-def require_closed(report):
-    row = single_success(report, 'loop-image-context')
+def require_closed(report, pass_name='loop-image-context'):
+    row = single_success(report, pass_name)
     counters = row.get('counters')
     if not isinstance(counters, dict):
-        raise RuntimeError('loop-image-context: missing counter object')
+        raise RuntimeError(pass_name + ': missing counter object')
     for name, expected in (('available', 1), ('complete', 1), ('closed', 1),
                            ('budget_exhausted', 0)):
         if type(counters.get(name)) is not int:
-            raise RuntimeError('loop-image-context: missing typed counter ' + name)
+            raise RuntimeError(pass_name + ': missing typed counter ' + name)
         if counters[name] != expected:
-            raise Incomplete(f'loop-image-context: {name} does not certify complete closure')
+            raise Incomplete(f'{pass_name}: {name} does not certify complete closure')
     return row
 
 
@@ -279,6 +305,14 @@ def workflow(config, output, report, dragon):
         output.text('02-loop.ll', view.ir())
         require_closed(proof)  # ok/converged/changed alone never authorize cleanup.
         report['closed'] = True
+        if 'guarded_memory' in config:
+            report.update(loop_closed=True, closed=False, phase='guarded-memory')
+            with dragon.PassPipeline() as pipeline:
+                pipeline.add('guarded-memory', view_symbol=symbol, **config['guarded_memory'])
+                memory_proof = pipeline_run(dragon, pipeline, view, 'guarded-memory', output, report)
+            output.text('02-memory.ll', view.ir())
+            require_closed(memory_proof, 'guarded-memory')
+            report.update(guarded_memory_closed=True, closed=True)
         report['phase'] = 'cleanup'
         with dragon.PassPipeline() as pipeline:
             pipeline.add('function-control-flow', function=symbol)
@@ -301,6 +335,23 @@ def self_test():
     value = validate_config(base, Path('/tmp'))
     assert value['table']['targets'] == [0x1010, U64, 0x1010]
     assert int.from_bytes(bytes.fromhex(value['guard']['registers'][0]['bytes_hex']), 'little') == 0xf000
+    assert value['loop'] == LOOP_LIMITS  # Frozen default config stays identical.
+    for profile in ('default', 'expanded'):
+        configured = copy.deepcopy(base)
+        configured['loop'] = {'proof_profile': profile, 'max_work': 17}
+        assert validate_config(configured, Path('/tmp'))['loop'] == dict(LOOP_LIMITS, proof_profile=profile, max_work=17)
+    expanded = copy.deepcopy(base)
+    expanded['loop'] = {'proof_profile': 'expanded'}
+    assert validate_config(expanded, Path('/tmp'))['loop']['max_work'] == 1000000
+    expanded['loop']['max_work'] = 16000000
+    assert validate_config(expanded, Path('/tmp'))['loop']['max_work'] == 16000000
+    checked_memory = copy.deepcopy(base)
+    checked_memory['guarded_memory'] = {}
+    # The larger resource profile is explicit, as for loop-image-context.
+    assert validate_config(checked_memory, Path('/tmp'))['guarded_memory'] == {'max_work': 1000000}
+    checked_memory['guarded_memory'] = {'proof_profile': 'expanded', 'max_work': EXPANDED_MAX_WORK}
+    assert validate_config(checked_memory, Path('/tmp'))['guarded_memory'] == {
+        'proof_profile': 'expanded', 'max_work': EXPANDED_MAX_WORK}
     boundary = copy.deepcopy(base)
     boundary['guard']['context_id'] = 'A_0.-'
     boundary['guard']['memory'] = [{'offset': U64 - 1, 'bytes_hex': 'ab'}]
@@ -313,6 +364,23 @@ def self_test():
         lambda c: c['table'].update(targets=[True]),
         lambda c: c['table'].update(offset=U64 - 7, targets=[1]),
         lambda c: c.update(loop={'max_work': 1000001}),
+        lambda c: c.update(loop={'proof_profile': 'unknown'}),
+        lambda c: c.update(loop={'proof_profile': 'Expanded'}),
+        lambda c: c.update(loop={'proof_profile': ''}),
+        lambda c: c.update(loop={'proof_profile': 1}),
+        lambda c: c.update(loop={'proof_profile': True}),
+        lambda c: c.update(loop={'proof_profile': None}),
+        lambda c: c.update(loop={'proof_profile': 'default', 'max_work': 1000001}),
+        lambda c: c.update(loop={'proof_profile': 'expanded', 'max_work': 16000001}),
+        lambda c: c.update(guarded_memory=False),
+        lambda c: c.update(guarded_memory={'max_work': 0}),
+        lambda c: c.update(guarded_memory={'max_work': True}),
+        lambda c: c.update(guarded_memory={'max_work': 16000001}),
+        lambda c: c.update(guarded_memory={'max_work': 1000001}),
+        lambda c: c.update(guarded_memory={'proof_profile': 'default', 'max_work': 16000000}),
+        lambda c: c.update(guarded_memory={'proof_profile': 'expanded', 'max_work': 16000001}),
+        lambda c: c.update(guarded_memory={'proof_profile': 'Expanded'}),
+        lambda c: c.update(guarded_memory={'assume_readonly': True}),
         lambda c: c.update(region={'max_blocks': 0}),
         lambda c: c['guard']['registers'][0].update(bytes_hex='000000'),
         lambda c: c['guard']['registers'][0].update(bytes_hex='0x00'),
@@ -340,6 +408,9 @@ def self_test():
         {'name': 'loop-image-context', 'status': 0, 'changed': False,
          'counters': {'available': 1, 'complete': 1, 'closed': 1, 'budget_exhausted': 0}}]}
     require_closed(good)
+    memory_good = copy.deepcopy(good)
+    memory_good['runs'][0]['name'] = 'guarded-memory'
+    require_closed(memory_good, 'guarded-memory')
     blocked = 0
     for key, val in [('closed', 0), ('available', 0), ('complete', 0), ('budget_exhausted', 1)]:
         bad = copy.deepcopy(good)
@@ -399,7 +470,7 @@ def self_test():
             cli_controls += 1
     finally:
         builtins.__import__ = old_import
-    assert rejected == 16 and blocked == 6
+    assert rejected == 33 and blocked == 6
     print(json.dumps({'self_test': True, 'config_rejections': rejected,
                       'unsafe_cleanup_authorizations_blocked': blocked,
                       'ordered_u64_duplicate_targets_preserved': True,

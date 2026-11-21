@@ -77,6 +77,37 @@ struct PathValueRanges::Impl {
     }
   }
 
+  // For unsigned x and nonnegative C <= signedmax, both x and C-x have
+  // sign bit zero exactly when x <= C. No observation equality is invented:
+  // the SUB and OR must use the identical already-proved stable SSA value.
+  bool signedOrSub(Value *value, ConstantInt *threshold,
+                   ICmpInst::Predicate predicate, bool truth,
+                   BranchInst *branch, BasicBlock *target) {
+    if (!((predicate==ICmpInst::ICMP_SGE && threshold->isZero()) ||
+          (predicate==ICmpInst::ICMP_SGT && threshold->getValue().isAllOnes()))) return false;
+    if (!spend()) return true;
+    auto *combine=dyn_cast<BinaryOperator>(value);
+    if (!combine || combine->getOpcode()!=Instruction::Or ||
+        combine->hasPoisonGeneratingAnnotations()) return false;
+    for (unsigned slot=0;slot<2;++slot) {
+      if (!spend()) return true;
+      auto *x=combine->getOperand(slot);
+      auto *difference=dyn_cast<BinaryOperator>(combine->getOperand(1-slot));
+      if (!difference || difference->getOpcode()!=Instruction::Sub ||
+          difference->hasPoisonGeneratingAnnotations() || difference->getOperand(1)!=x) continue;
+      auto *c=dyn_cast<ConstantInt>(difference->getOperand(0));
+      if (!c || c->getValue().isNegative() || !stable.contains(x)) continue;
+      auto *definition=dyn_cast<Instruction>(x);
+      if (!definition || !dominance.dominates(definition,branch)) continue;
+      if (auto range=comparison(ICmpInst::ICMP_ULE,c,truth)) {
+        if (facts.size()==8192) { exhausted=true;valid=false;return true; }
+        facts.push_back({x,branch->getParent(),target,*range});
+      }
+      return true;
+    }
+    return false;
+  }
+
   void decode(Value *raw, bool truth, BranchInst *branch, BasicBlock *target,
               unsigned depth, unsigned &nodes) {
     if (!valid || !spend()) return;
@@ -112,6 +143,7 @@ struct PathValueRanges::Impl {
       left = right; predicate = ICmpInst::getSwappedPredicate(predicate);
     }
     if (constant->getBitWidth() > 64) return;
+    if (signedOrSub(left,constant,predicate,truth,branch,target)) return;
     if (stable.contains(left)) {
       auto *definition = dyn_cast<Instruction>(left);
       if (!definition || !dominance.dominates(definition, branch)) return;

@@ -98,6 +98,11 @@ add_executable(dragon_tests
         lifters/TestLLVMGuestCellSSA.cpp
         lifters/TestLLVMImageTableContext.cpp
         lifters/TestLLVMLoopImageTableContext.cpp
+        lifters/TestLLVMLoopRangeArithmetic.cpp
+        lifters/TestLLVMLoopRangeArithmeticExpanded.cpp
+        lifters/TestLLVMLoopProjectedObservations.cpp
+        lifters/TestLLVMLoopProjectedObservationWitnesses.cpp
+        lifters/TestLLVMGuardedMemory.cpp
         lifters/TestLLVMLoopRangeDepth.cpp
         lifters/TestLLVMLoopMemoryDefinitions.cpp
         lifters/TestLLVMLoopLiteralStoreSpans.cpp

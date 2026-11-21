@@ -50,6 +50,22 @@ bool fail(ImageTableContextStats &s, const Twine &why) {
   s.message = why.str();
   return false;
 }
+// Hard whole-module transaction cap shared by every image-table entry point.
+// Exceeding it is an explicit budget refusal, never a silent empty result.
+// Compare as block.size() > remaining so an oversized block cannot underflow.
+bool moduleInstructionCap(const Module &module, Work &work) {
+  constexpr std::size_t cap = 1000000;
+  std::size_t instructions = 0;
+  for (auto &f : module) for (auto &block : f) {
+    if (!work.spend(block.size())) return false;
+    if (block.size() > cap - instructions) {
+      work.stats.budgetExhausted = true;
+      return fail(work.stats, "module instruction transaction cap");
+    }
+    instructions += block.size();
+  }
+  return true;
+}
 std::optional<std::uint64_t> offset(Value *pointer, Value *base) {
   if (pointer == base) return 0;
   auto *gep = dyn_cast<GetElementPtrInst>(pointer);
@@ -1274,10 +1290,15 @@ bool consumeLoopConstants(Function &f, const LoopConstantPlan &plan, Work &work)
 // caches never escape one constant-cell hypothesis or one unchanged CFG.
 class LoopRanges {
  public:
-  LoopRanges(Work &w, Value *base, const ConstantFacts &overlay, PathValueRanges *paths=nullptr)
+  LoopRanges(Work &w, Value *base, const ConstantFacts &overlay, PathValueRanges *paths=nullptr,
+             LoopImageProofProfile profile=LoopImageProofProfile::Default)
       : work(w), guest(base), facts(overlay), paths(paths),
         phis(*cast<Instruction>(base)->getFunction(),overlay),
-        opaque(*cast<Instruction>(base)->getFunction(),overlay) {}
+        opaque(*cast<Instruction>(base)->getFunction(),overlay),
+        maxNodes(profile==LoopImageProofProfile::Expanded ? 4096 : 128),
+        maxDepth(profile==LoopImageProofProfile::Expanded ? 128 : 32),
+        maxPoints(profile==LoopImageProofProfile::Expanded ? 1024 : 128),
+        refineLowMasks(profile==LoopImageProofProfile::Expanded) {}
   std::optional<Range> get(Value *value, Instruction *at) {
     nodes = points = 0; active.clear(); memoryActive.clear(); paidKnownLeaves.clear();
     paidOpaqueShapes.clear();
@@ -1301,6 +1322,8 @@ class LoopRanges {
   PathValueRanges *paths;
   PhiConstantGraph phis;
   OpaqueIntegerAdmission opaque;
+  const unsigned maxNodes, maxDepth, maxPoints;
+  const bool refineLowMasks;
   unsigned nodes = 0, points = 0;
   // Same-SSA literal/immutable-H_C leaves need one scalar node per root query.
   // This is accounting only: every visit still pays Work and checks depth.
@@ -1313,6 +1336,7 @@ class LoopRanges {
   std::set<Value *> active;
   std::set<LoadInst *> memoryActive;
   std::map<LoadInst *, Range> loads;
+  std::set<LoadInst *> projectedActive;
   // Insert in LoopRanges after the existing numeric `loads` map. These are
   // numeric proof transactions only; none is added to ConstantFacts/Path/Phi.
   using ObservationLoadCache = std::map<LoadInst *, Range>;
@@ -1446,11 +1470,11 @@ class LoopRanges {
   }
   bool budget(unsigned depth, Value *value, Instruction *at) {
     if (!work.spend()) return false;
-    if (depth <= 32) {
+    if (depth <= maxDepth) {
       const bool knownLeaf = value->getType()->isIntegerTy() &&
           value->getType()->getIntegerBitWidth() <= 64 &&
           !isa<UndefValue, PoisonValue>(value) && known(value);
-      if ((knownLeaf && !paidKnownLeaves.insert(value).second) || ++nodes <= 128)
+      if ((knownLeaf && !paidKnownLeaves.insert(value).second) || ++nodes <= maxNodes)
         return true;
     }
     work.stats.budgetExhausted = true;
@@ -1465,6 +1489,155 @@ class LoopRanges {
     if (auto *c = dyn_cast<ConstantInt>(v)) return c;
     auto found = facts.find(v);
     return found == facts.end() ? nullptr : found->second;
+  }
+  // Carry only the low bytes of a previously checked observation. The guard
+  // constrains its exact SSA value, not the cell. Every actual intervening
+  // write must independently preserve these bytes before the bound can reach
+  // a fresh LOAD. No value/candidate is cached by this optional query.
+  std::optional<Range> projectedLoadRange(LoadInst *load, unsigned bits,
+                                         unsigned depth) {
+    if (!refineLowMasks || !paths ||
+        !load->getModule()->getDataLayout().isLittleEndian() || !load->isSimple() ||
+        load->hasPoisonGeneratingAnnotations() || !bits || bits % 8 ||
+        !load->getType()->isIntegerTy() ||
+        load->getType()->getIntegerBitWidth() < bits) return {};
+    auto address=fixedGuestWord(load->getPointerOperand(),guest);
+    if (!address || bits/8 > UINT64_MAX-*address ||
+        !work.spend() || !projectedActive.insert(load).second) return {};
+    struct Scope {
+      std::set<LoadInst *> &active; LoadInst *load;
+      ~Scope() { active.erase(load); }
+    } scope{projectedActive,load};
+    auto observedRange=[&](LoadInst *old) -> std::optional<Range> {
+      std::vector<Value *> observations;
+      if (old->getType()->isIntegerTy(bits)) observations.push_back(old);
+      for (auto *user:old->users()) {
+        if (!work.spend()) return {};
+        auto *trunc=dyn_cast<TruncInst>(user);
+        if (trunc && trunc->getType()->isIntegerTy(bits) &&
+            !trunc->hasPoisonGeneratingAnnotations()) observations.push_back(trunc);
+      }
+      for (auto *value:observations) {
+        const auto before=paths->work();
+        // The checked edge must dominate the actual fresh observation, not
+        // just a later cast/use. Otherwise a backward loop walk could mistake
+        // last iteration's LOAD for a newly checked current observation.
+        auto range=paths->get(value,load,work.limit-work.stats.work);
+        if (!work.spend(paths->work()-before)) return {};
+        if (paths->budgetExhausted()) {
+          work.stats.budgetExhausted=true;
+          fail(work.stats,"loop projected observation path proof exhausted");return {};
+        }
+        if (range && range->bits==bits)
+          return Range{range->low,range->high,bits};
+      }
+      return {};
+    };
+    using Point=std::pair<BasicBlock *,Instruction *>;
+    struct Node {
+      Point point;
+      std::vector<std::size_t> dependencies;
+      std::optional<Range> anchor;
+    };
+    std::vector<Node> graph;
+    std::map<Point,std::size_t> owners;
+    std::set<StoreInst *> deferred;
+    std::vector<StoreInst *> writes;
+    auto add=[&](Point point) -> std::optional<std::size_t> {
+      if (!work.spend()) return {};
+      if (auto found=owners.find(point);found!=owners.end()) return found->second;
+      if (++points>maxPoints) {
+        work.stats.budgetExhausted=true;
+        fail(work.stats,"loop projected observation graph cap");return {};
+      }
+      auto n=graph.size();graph.push_back({point,{},{}});owners.emplace(point,n);return n;
+    };
+    if (!add({load->getParent(),load})) return {};
+    for (std::size_t n=0;n<graph.size();++n) {
+      Point point=graph[n].point;
+      std::set<Point> local;
+      for (;;) {
+        if (!work.spend()) return {};
+        auto [owner,inserted]=owners.emplace(point,n);
+        if ((!inserted && owner->second!=n) || !local.insert(point).second) {
+          if (!work.spend()) return {};
+          graph[n].dependencies.push_back(owner->second);break;
+        }
+        auto *block=point.first;
+        auto it=point.second ? point.second->getIterator() : block->end();
+        while (it!=block->begin()) {
+          auto &instruction=*--it;
+          if (!work.spend()) return {};
+          if (auto *store=dyn_cast<StoreInst>(&instruction)) {
+            if (!store->isSimple() || !store->getValueOperand()->getType()->isIntegerTy()) return {};
+            const auto width=store->getValueOperand()->getType()->getIntegerBitWidth();
+            auto fixed=fixedGuestWord(store->getPointerOperand(),guest);
+            auto *gep=dyn_cast<GetElementPtrInst>(store->getPointerOperand());
+            if (!width || width%8 || !gep || gep->getPointerOperand()!=guest ||
+                gep->getNumIndices()!=1 || !gep->getSourceElementType()->isIntegerTy(8) ||
+                gep->hasPoisonGeneratingAnnotations()) return {};
+            if (fixed) {
+              if (!work.spend() || width/8>UINT64_MAX-*fixed ||
+                  !(*fixed+width/8<=*address || *fixed>=*address+bits/8)) return {};
+            } else if (deferred.insert(store).second) writes.push_back(store);
+          } else if (auto *read=dyn_cast<LoadInst>(&instruction)) {
+            if (!read->isSimple()) return {};
+            auto fixed=fixedGuestWord(read->getPointerOperand(),guest);
+            if (fixed && *fixed==*address && !read->hasPoisonGeneratingAnnotations() &&
+                read->getType()->isIntegerTy() && read->getType()->getIntegerBitWidth()>=bits)
+              graph[n].anchor=observedRange(read);
+            if (work.stats.budgetExhausted) return {};
+            if (graph[n].anchor) break;
+          } else if (auto *call=dyn_cast<CallBase>(&instruction)) {
+            if (!mathematicalCall(*call)) return {};
+          } else if (instruction.mayWriteToMemory() || isa<FenceInst>(instruction)) return {};
+        }
+        if (graph[n].anchor) break;
+        std::vector<BasicBlock *> incoming;
+        for (auto *pred:predecessors(block)) {
+          if (!work.spend()) return {};
+          incoming.push_back(pred);
+        }
+        if (incoming.empty()) return {};
+        if (incoming.size()==1) {point={incoming.front(),nullptr};continue;}
+        for (auto *pred:incoming) {
+          auto dependency=add({pred,nullptr});
+          if (!dependency || !work.spend()) return {};
+          graph[n].dependencies.push_back(*dependency);
+        }
+        break;
+      }
+    }
+    std::vector<std::vector<std::size_t>> reverse(graph.size());
+    std::vector<bool> covered(graph.size(),false);
+    std::vector<std::size_t> pending;
+    std::optional<Range> hull;
+    for (std::size_t n=0;n<graph.size();++n) {
+      if (!work.spend()) return {};
+      for (auto dependency:graph[n].dependencies) {
+        if (!work.spend()) return {};
+        reverse[dependency].push_back(n);
+      }
+      if (auto range=graph[n].anchor) {
+        covered[n]=true;pending.push_back(n);
+        if (!hull) hull=range;
+        else {hull->low=std::min(hull->low,range->low);hull->high=std::max(hull->high,range->high);}
+      }
+    }
+    for (std::size_t n=0;n<pending.size();++n) for (auto dependent:reverse[pending[n]]) {
+      if (!work.spend()) return {};
+      if (!covered[dependent]) {covered[dependent]=true;pending.push_back(dependent);}
+    }
+    for (bool complete:covered) if (!work.spend() || !complete) return {};
+    if (!hull) return {};
+    for (auto *store:writes) {
+      if (!work.spend()) return {};
+      auto *gep=cast<GetElementPtrInst>(store->getPointerOperand());
+      const auto bytes=store->getValueOperand()->getType()->getIntegerBitWidth()/8;
+      if (!rangeForWriteAtOriginalStore(gep->idx_begin()->get(),depth+1,store,bytes,
+                                       {{*address,bits/8}})) return {};
+    }
+    return hull;
   }
   // Replace LoopRanges::loadRange. Keep the former strict implementation as
   // independentLoadRange (the companion file changes its name only).
@@ -1514,7 +1687,7 @@ class LoopRanges {
     auto addNode = [&](Point point) -> std::optional<std::size_t> {
       if (!work.spend()) return {};
       if (auto found = owners.find(point); found != owners.end()) return found->second;
-      if (++points > 128) {
+      if (++points > maxPoints) {
         work.stats.budgetExhausted = true;
         fail(work.stats, "loop nearest-STORE graph cap: cell=" +
              std::to_string(*at) + " block=" + point.first->getName().str() +
@@ -1699,8 +1872,8 @@ class LoopRanges {
       if (!work.spend()) return {};
       if (auto found = owners.find(point); found != owners.end()) return found->second;
       // points is the PARENT member: nested value/address LOAD queries consume
-      // the same remaining 128 definition nodes. Never reset it here.
-      if (++points > 128) {
+      // the same remaining definition-node allowance. Never reset it here.
+      if (++points > maxPoints) {
         work.stats.budgetExhausted = true;
         fail(work.stats, "loop nearest-STORE graph cap: cell="+std::to_string(*at)+
             " block="+point.first->getName().str()+" points="+std::to_string(points));
@@ -1874,7 +2047,8 @@ class LoopRanges {
         // direct PHI-only copying region is one structural shape node; every
         // physical PHI and actual slot is nevertheless checked and charged.
         const auto paid=paidOpaqueShapes.find(phi);
-        const auto allowance=paid==paidOpaqueShapes.end() ? 128-nodes+1 : paid->second;
+      const auto allowance=paid==paidOpaqueShapes.end() ?
+          std::min<unsigned>(128,maxNodes-nodes+1) : paid->second;
         auto shape=opaque.getPhiRegions(phi,allowance,work.limit-work.stats.work);
         if (!work.spend(shape.work)) return {};
         if (shape.budgetExhausted) {
@@ -1911,6 +2085,11 @@ class LoopRanges {
     auto *i = dyn_cast<Instruction>(v);
     if (!i) return done(full);
     if (auto *cast = dyn_cast<CastInst>(i)) {
+      if (resolveMemory && cast->getOpcode()==Instruction::Trunc && !cast->hasPoisonGeneratingAnnotations())
+        if (auto *load=dyn_cast<LoadInst>(cast->getOperand(0))) {
+          if (auto projected=projectedLoadRange(load,bits,depth+1)) return done(projected);
+          if (work.stats.budgetExhausted) return done({});
+        }
       auto a = visit(cast->getOperand(0), depth + 1, resolveMemory, at);
       if (!a) return done({});
       if (cast->getOpcode() == Instruction::ZExt ||
@@ -1952,27 +2131,49 @@ class LoopRanges {
     if (!constantMask && binary->getOpcode() == Instruction::And)
       constantMask = known(binary->getOperand(1));
     const bool masked = constantMask != nullptr;
-    const bool lowDiscarding = masked && !constantMask->isZero() &&
-                               !(constantMask->getZExtValue() & 1);
-    if (resolveMemory && lowDiscarding && writeMaskQuery &&
+    // A sparse mask can need the operand's range even when it retains bit
+    // zero (for example ~4 applied to a value bounded by 7). Contiguous low
+    // ones still bound the result without consulting the old cell at all.
+    const auto maskValue = masked ? constantMask->getZExtValue() : 0;
+    const bool sparseMask = masked && (maskValue & (maskValue + 1));
+    // In Expanded, a byte-width truncation mask may hide a narrower loaded
+    // index just as a Trunc/ZExt pair can. Small low-ones bounds remain cuts:
+    // resolving their old contents would create irrelevant memory cycles.
+    const auto maskBits = std::bit_width(maskValue);
+    const bool truncationMask = masked && maskValue && !sparseMask &&
+                                maskBits < bits && maskBits % 8 == 0;
+    const bool refineCandidate = sparseMask || (refineLowMasks && truncationMask);
+    if (resolveMemory && refineCandidate && writeMaskQuery &&
         !writeMaskQuery->strong && writeMaskQuery->eligibleSeen && !independentAnchors)
       *writeMaskQuery->eligibleSeen = true;
-    const bool refineMask = resolveMemory && lowDiscarding && writeMaskQuery &&
+    const bool refineMask = resolveMemory && refineCandidate && writeMaskQuery &&
                             writeMaskQuery->strong && !independentAnchors;
     const bool childMemory = resolveMemory && (!masked || refineMask);
-    // Both operand/hazard traversals remain. All low-ones masks still use
-    // Coarse even within a strong outer expression; they continue to cut
-    // irrelevant memory-value cycles as before.
+    // Both operand/hazard traversals remain. Default low-ones masks still
+    // cut irrelevant memory cycles. Expanded may refine them only in this
+    // second original-STORE query; independent anchor queries stay coarse.
     auto a = visit(binary->getOperand(0), depth + 1, childMemory, at);
     auto b = visit(binary->getOperand(1), depth + 1, childMemory, at);
     if (!a || !b) return done({});
 
     switch (binary->getOpcode()) {
-    case Instruction::And:
+    case Instruction::And: {
+      // A bounded unsigned operand has no bits above bit_width(high). A
+      // constant mask may also clear bits inside that prefix. Keep the old
+      // interval cap as well; both operand/hazard traversals already ran.
+      auto cover = [](std::uint64_t x) { return mask(std::bit_width(x)); };
       if (a->low == a->high)
-        return done(Range{0, std::min(a->high, b->high), bits});
+        return done(Range{0, std::min(a->high & cover(b->high), b->high), bits});
       if (b->low == b->high)
-        return done(Range{0, std::min(a->high, b->high), bits});
+        return done(Range{0, std::min(b->high & cover(a->high), a->high), bits});
+      return done(full);
+    }
+    case Instruction::Mul:
+      // Unsigned multiplication is monotone only while the complete interval
+      // product cannot wrap. The zero case avoids division by zero; neither
+      // operand was skipped, even when multiplying an unknown value by zero.
+      if (!b->high || a->high <= mask(bits) / b->high)
+        return done(Range{a->low*b->low, a->high*b->high, bits});
       return done(full);
     case Instruction::Or: case Instruction::Xor: {
       auto cover = [](std::uint64_t x) { return x == UINT64_MAX ? x : mask(std::bit_width(x)); };
@@ -2057,7 +2258,8 @@ Instruction *checkedLoopEffect(Function &f, const LoopEffectIdentity &identity, 
   return i;
 }
 bool checkLoopEffect(Instruction &i, const Guards &g, const ImageTableContextRequest &r,
-                     Work &work, LoopRanges &ranges, const SeededCell *cell) {
+                     Work &work, LoopRanges &ranges, const SeededCell *cell,
+                     const std::vector<LoopRanges::WriteSpan> *overrideSpans=nullptr) {
     if (auto *call=dyn_cast<CallBase>(&i)) {
       if (!mathematicalCall(*call)) return fail(work.stats,"loop call has no preservation proof");
       return true;
@@ -2078,8 +2280,8 @@ bool checkLoopEffect(Instruction &i, const Guards &g, const ImageTableContextReq
     const auto bits=store->getValueOperand()->getType()->getIntegerBitWidth();
     if (!bits || bits % 8)
       return fail(work.stats,"loop STORE has a non-byte width");
-    std::vector<LoopRanges::WriteSpan> protectedSpans{
-        {r.tableOffset, r.targets.size()*8}};
+    std::vector<LoopRanges::WriteSpan> protectedSpans=overrideSpans ? *overrideSpans :
+        std::vector<LoopRanges::WriteSpan>{{r.tableOffset,r.targets.size()*8}};
     if (cell && store != cell->seed)
       protectedSpans.push_back({cell->address, cell->bits/8});
     auto at = ranges.getForWrite(gep->idx_begin()->get(), store, bits/8, protectedSpans);
@@ -2102,7 +2304,7 @@ bool loopWrites(Function &f, const Guards &g, const ImageTableContextRequest &r,
 }
 bool projectLoopAddresses(Function &f, const Guards &g, const InvariantRegion &region,
                           const LoopInventory &inventory, Work &work,
-                          std::vector<WeakTrackingVH> &witnesses) {
+                          std::vector<WeakTrackingVH> &witnesses, LoopImageProofProfile profile) {
   std::vector<Value *> pending;
   std::vector<TruncInst *> candidates;
   std::set<Value *> seen;
@@ -2169,13 +2371,15 @@ bool projectLoopAddresses(Function &f, const Guards &g, const InvariantRegion &r
                   !i->mayReadOrWriteMemory() && !i->mayHaveSideEffects();
     }
     if (!hasSmall || !pureUses) continue;
-    PhiLowBitsOptions limits;
+    const auto phiProfile=profile==LoopImageProofProfile::Expanded ?
+        PhiLowBitsProofProfile::Expanded : PhiLowBitsProofProfile::Default;
+    PhiLowBitsOptions limits=phiLowBitsCeiling(phiProfile);
     limits.maxWork=std::min(limits.maxWork,work.limit-work.stats.work);
     if (!limits.maxWork) {
       work.stats.budgetExhausted=true;
       return fail(work.stats,"loop address projection has no remaining work");
     }
-    auto proof=replacePhiLowTruncs(f,{trunc},limits);
+    auto proof=replacePhiLowTruncs(f,{trunc},limits,phiProfile);
     if (!work.spend(proof.work)) return false;
     if (proof.budgetExhausted) {
       work.stats.budgetExhausted=true;
@@ -2188,10 +2392,31 @@ bool projectLoopAddresses(Function &f, const Guards &g, const InvariantRegion &r
   return true;
 }
 std::unique_ptr<PathValueRanges> loopPathRanges(Function &f,
-    const std::vector<WeakTrackingVH> &witnesses, Work &work) {
+    const std::vector<WeakTrackingVH> &witnesses, Work &work, Value *guest=nullptr) {
   std::vector<Value *> stable;
+  std::set<Value *> seen;
   for (const auto &handle:witnesses)
-    if (auto *phi=dyn_cast_or_null<PHINode>(static_cast<Value *>(handle))) stable.push_back(phi);
+    if (auto *phi=dyn_cast_or_null<PHINode>(static_cast<Value *>(handle))) {
+      stable.push_back(phi);seen.insert(phi);
+    }
+  if (guest) for (auto &block:f) for (auto &instruction:block) {
+    if (!work.spend()) return {};
+    auto *load=dyn_cast<LoadInst>(&instruction);
+    if (!load || !load->isSimple() || load->hasPoisonGeneratingAnnotations() ||
+        !load->getType()->isIntegerTy() || load->getType()->getIntegerBitWidth()>64 ||
+        !fixedGuestWord(load->getPointerOperand(),guest)) continue;
+    // The projected consumer asks only for a strict low-byte prefix of an
+    // at-most-i64 LOAD. Full i64 guard/table observations cannot supply that
+    // bound; do not fill the witness budget with them.
+    if (load->getType()->getIntegerBitWidth()<64 && seen.insert(load).second)
+      stable.push_back(load);
+    for (auto *user:load->users()) {
+      if (!work.spend()) return {};
+      auto *trunc=dyn_cast<TruncInst>(user);
+      if (trunc && !trunc->hasPoisonGeneratingAnnotations() && seen.insert(trunc).second)
+        stable.push_back(trunc);
+    }
+  }
   if (stable.empty()) return {};
   auto paths=std::make_unique<PathValueRanges>(f,stable,work.limit-work.stats.work,
                                              PathRangeTraversal::BranchConditions);
@@ -2423,11 +2648,7 @@ static ImageTableContextStats runImageTableContext(Module &module,
     }
     namedOperands += named.getNumOperands();
   }
-  std::size_t instructions = 0;
-  for (auto &f : module) for (auto &block : f) {
-    if (!work.spend(block.size()) || instructions > 1000000 - block.size()) return stats;
-    instructions += block.size();
-  }
+  if (!moduleInstructionCap(module, work)) return stats;
   if (source->size() > request.maxBlocks) { fail(stats, "view block cap exceeded"); return stats; }
   std::size_t selectedInstructions = 0;
   for (auto &block : *source) selectedInstructions += block.size();
@@ -2617,17 +2838,18 @@ static ImageTableContextStats runImageTableContext(Module &module,
   stats.message = "joint table preservation closed; actual index switch retains full fallback";
   return stats;
 }
-ImageTableContextStats runLoopImageTableContext(Module &module,
-                                                const ImageTableContextRequest &request) {
+static ImageTableContextStats runLoopImageTableContextImpl(Module &module,
+    const ImageTableContextRequest &request, LoopImageProofProfile profile) {
+  const std::size_t maxWork=loopImageMaxWork(profile);
   ImageTableContextStats stats;
-  Work work{stats, std::min<std::size_t>(request.maxWork, 1000000)};
+  Work work{stats, std::min(request.maxWork, maxWork)};
   const auto &layout = module.getDataLayout();
   if (!layout.isLittleEndian() || layout.getPointerSizeInBits(0) != 64 ||
       layout.getIndexSizeInBits(0) != 64 ||
       request.targets.empty() || request.targets.size() > 512 ||
       request.targets.size() * 8 > UINT64_MAX - request.tableOffset ||
       request.maxBlocks > 4096 || request.maxInstructions > 65536 ||
-      request.maxWork > 1000000 || !request.maxBlocks || !request.maxInstructions || !request.maxWork) {
+      request.maxWork > maxWork || !request.maxBlocks || !request.maxInstructions || !request.maxWork) {
     fail(stats, "unsupported table layout or prototype budget"); return stats;
   }
   auto *source = module.getFunction(request.viewSymbol);
@@ -2679,11 +2901,7 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
     }
     namedOperands += named.getNumOperands();
   }
-  std::size_t instructions = 0;
-  for (auto &f : module) for (auto &block : f) {
-    if (!work.spend(block.size()) || instructions > 1000000 - block.size()) return stats;
-    instructions += block.size();
-  }
+  if (!moduleInstructionCap(module, work)) return stats;
   if (source->size() > request.maxBlocks) { fail(stats, "view block cap exceeded"); return stats; }
   std::size_t selectedInstructions = 0;
   for (auto &block : *source) selectedInstructions += block.size();
@@ -2769,8 +2987,9 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
   // Original-IR relations only. A general LLVM scalar optimization can refine
   // independent undef/freeze choices and is not a memory-preservation proof.
   std::vector<WeakTrackingVH> witnesses;
-  if (!projectLoopAddresses(*function,current,region,inventory,work,witnesses)) return stats;
-  auto paths=loopPathRanges(*function,witnesses,work);
+  if (!projectLoopAddresses(*function,current,region,inventory,work,witnesses,profile)) return stats;
+  auto paths=loopPathRanges(*function,witnesses,work,
+      profile==LoopImageProofProfile::Expanded ? current.guest : nullptr);
   if (stats.budgetExhausted) return stats;
   ConstantFacts none;
   std::size_t constantValues=0;
@@ -2789,7 +3008,7 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
     }
     LoopConstantPlan plan;
     if (!loopShadowConstants(*function,overlay,work,plan)) return stats;
-    LoopRanges ranges(work,current.guest,overlay,paths.get());
+    LoopRanges ranges(work,current.guest,overlay,paths.get(),profile);
     stats.preservedStores=0;
     if (!loopWrites(*function,current,request,region,inventory,work,ranges,&cell)) {
       if (stats.budgetExhausted) return stats;
@@ -2803,16 +3022,17 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
       constantValues+=!load->use_empty();
     }
     if (!consumeLoopConstants(*function,plan,work)) return stats;
-    auto checkedPaths=loopPathRanges(*function,witnesses,work);
+    auto checkedPaths=loopPathRanges(*function,witnesses,work,
+        profile==LoopImageProofProfile::Expanded ? current.guest : nullptr);
     if (stats.budgetExhausted) return stats;
-    LoopRanges checked(work,current.guest,none,checkedPaths.get()); // fresh SSA/point caches.
+    LoopRanges checked(work,current.guest,none,checkedPaths.get(),profile); // fresh SSA/point caches.
     stats.preservedStores=0;
     if (!verify(*function,verification) ||
         !loopWrites(*function,current,request,region,inventory,work,checked,&cell)) return stats;
     closed=true;break;
   }
   if (!closed) {
-    LoopRanges ordinary(work,current.guest,none,paths.get());
+    LoopRanges ordinary(work,current.guest,none,paths.get(),profile);
     stats.preservedStores=0;
     if (!loopWrites(*function,current,request,region,inventory,work,ordinary)) return stats;
   }
@@ -2840,6 +3060,261 @@ ImageTableContextStats runLoopImageTableContext(Module &module,
   stats.changed=stats.closed=true;stats.constantValues=constantValues;
   stats.message="complete loop table/cell proof consumed; all "+std::to_string(cuts.size())+
                 " lookup cutpoints and original target reads retained";
+  return stats;
+}
+
+
+ImageTableContextStats runLoopImageTableContext(Module &module,
+    const ImageTableContextRequest &request) {
+  return runLoopImageTableContextImpl(module,request,LoopImageProofProfile::Default);
+}
+ImageTableContextStats runLoopImageTableContext(Module &module,
+    const ImageTableContextRequest &request, LoopImageProofProfile profile) {
+  if (profile==LoopImageProofProfile::Default)
+    return runLoopImageTableContext(module,request);
+  if (profile==LoopImageProofProfile::Expanded)
+    return runLoopImageTableContextImpl(module,request,profile);
+  ImageTableContextStats stats;
+  fail(stats,"invalid loop image proof profile");
+  return stats;
+}
+
+namespace {
+using CheckedBytes=std::map<std::uint64_t,std::uint8_t>;
+bool checkedMemoryEntry(Function &f,Guards &g,CheckedBytes &bytes,Work &work) {
+  if (f.arg_size()!=4 || f.isVarArg() || !f.getReturnType()->isVoidTy())
+    return fail(work.stats,"checked memory requires a descriptor view");
+  for (auto &arg:f.args()) if (!arg.getType()->isPointerTy() || arg.getType()->getPointerAddressSpace())
+    return fail(work.stats,"checked memory descriptor pointer type");
+  auto &entry=f.getEntryBlock();
+  auto *root=dyn_cast<SwitchInst>(entry.getTerminator());
+  if (!root || root->getNumCases()!=1) return fail(work.stats,"checked memory entry switch absent");
+  for (auto &i:entry) {
+    if (!work.spend()) return false;
+    if (auto *store=dyn_cast<StoreInst>(&i)) {
+      auto *slot=dyn_cast<AllocaInst>(store->getPointerOperand());
+      if (!store->isSimple() || !slot || slot->getParent()!=&entry)
+        return fail(work.stats,"checked memory entry write");
+    } else if (i.mayHaveSideEffects() && !i.isTerminator())
+      return fail(work.stats,"checked memory entry effect");
+    if (auto *load=dyn_cast<LoadInst>(&i);load && load->isSimple() &&
+        !load->hasPoisonGeneratingAnnotations() && load->getType()->isPointerTy())
+      if (auto at=offset(load->getPointerOperand(),f.getArg(1));at && !*at) {
+        if (g.guest) return fail(work.stats,"ambiguous checked memory base");
+        g.guest=load;
+      }
+  }
+  if (!g.guest) return fail(work.stats,"checked memory base absent");
+  g.chain.insert(&entry);
+  BasicBlock *previous=&entry,*block=root->case_begin()->getCaseSuccessor();
+  while (g.chain.size()<4096 && g.chain.insert(block).second) {
+    if (!work.spend() || block->getSinglePredecessor()!=previous)
+      return fail(work.stats,"checked memory entry has another predecessor");
+    auto *branch=dyn_cast<BranchInst>(block->getTerminator());
+    if (!branch) return fail(work.stats,"checked memory entry controller");
+    for (auto &i:*block) {
+      if (!work.spend()) return false;
+      if (i.mayHaveSideEffects() && !i.isTerminator())
+        return fail(work.stats,"checked memory guard effect");
+    }
+    if (branch->isUnconditional()) {
+      if (block->size()!=1 || !g.fallback || bytes.empty())
+        return fail(work.stats,"checked memory entry checks incomplete");
+      g.accepted=block;return true;
+    }
+    if (!g.fallback) for (unsigned n=0;n<2;++n)
+      if (fallbackBlock(branch->getSuccessor(n),f)) {
+        if (g.fallback) return fail(work.stats,"ambiguous checked memory fallback");
+        g.fallback=branch->getSuccessor(n);
+      }
+    if (!g.fallback) return fail(work.stats,"checked memory ordinary fallback absent");
+    unsigned success;
+    if (branch->getSuccessor(1)==g.fallback) success=0;
+    else if (branch->getSuccessor(0)==g.fallback) success=1;
+    else return fail(work.stats,"checked memory failure does not use fallback");
+    if (auto *cmp=dyn_cast<ICmpInst>(branch->getCondition());cmp &&
+        ((cmp->getPredicate()==ICmpInst::ICMP_EQ && success==0) ||
+         (cmp->getPredicate()==ICmpInst::ICMP_NE && success==1))) {
+      auto *constant=dyn_cast<ConstantInt>(cmp->getOperand(1));
+      auto *actual=cmp->getOperand(0);
+      if (!constant) {constant=dyn_cast<ConstantInt>(cmp->getOperand(0));actual=cmp->getOperand(1);}
+      auto *load=dyn_cast<LoadInst>(actual);
+      if (constant && load && load->isSimple() && !load->hasPoisonGeneratingAnnotations() &&
+          constant->getBitWidth()<=64 && constant->getBitWidth()%8==0) {
+        auto at=offset(load->getPointerOperand(),g.guest);
+        auto count=constant->getBitWidth()/8;
+        auto *gep=dyn_cast<GetElementPtrInst>(load->getPointerOperand());
+        if (at && (!gep || !gep->hasPoisonGeneratingAnnotations()) && count<=UINT64_MAX-*at)
+          for (unsigned n=0;n<count;++n) {
+            if (!work.spend()) return false;
+            const auto byte=static_cast<std::uint8_t>(constant->getZExtValue()>>(n*8));
+            auto [it,inserted]=bytes.emplace(*at+n,byte);
+            if ((!inserted && it->second!=byte) || bytes.size()>4096)
+              return fail(work.stats,"checked memory byte conflict or cap");
+          }
+      }
+    }
+    previous=block;block=branch->getSuccessor(success);
+  }
+  return fail(work.stats,"checked memory entry cycle or cap");
+}
+}
+ImageTableContextStats propagateGuardedMemory(Module &module,std::string_view name,
+                                              std::size_t maxWork,LoopImageProofProfile profile) {
+  ImageTableContextStats stats;
+  if (profile!=LoopImageProofProfile::Default && profile!=LoopImageProofProfile::Expanded) {
+    fail(stats,"invalid guarded memory proof profile");return stats;
+  }
+  const auto ceiling=loopImageMaxWork(profile);
+  Work work{stats,std::min(maxWork,ceiling)};
+  if (!maxWork || maxWork>ceiling || !module.getDataLayout().isLittleEndian() ||
+      module.getDataLayout().getPointerSizeInBits(0)!=64 ||
+      module.getDataLayout().getIndexSizeInBits(0)!=64) {
+    fail(stats,"unsupported checked memory layout or budget");return stats;
+  }
+  ImageTableContextRequest request;request.viewSymbol=std::string(name);
+  auto *source = module.getFunction(request.viewSymbol);
+  if (!source) { fail(stats, "view symbol is absent"); return stats; }
+  // A transplant discards every old block, including unreachable and terminal
+  // blocks. Their address/debug/EH identities cannot be repaired by rebinding
+  // globals by name, so reject them before making even a private proof clone.
+  if (source->hasPersonalityFn() || source->getSubprogram()) {
+    fail(stats, "EH or debug function identity unsupported"); return stats;
+  }
+  std::set<Value *> constants;
+  std::set<Metadata *> metadata;
+  SmallVector<std::pair<unsigned, MDNode *>, 8> attachments;
+  source->getAllMetadata(attachments);
+  for (auto [kind, node] : attachments)
+    if (unsupportedMetadata(node, work, metadata, constants)) {
+      fail(stats, "function metadata identity unsupported"); return stats;
+    }
+  for (auto &argument : source->args()) if (argument.isUsedByMetadata()) {
+    fail(stats, "local argument metadata identity unsupported"); return stats;
+  }
+  for (auto &block : *source) {
+    if (!work.spend()) return stats;
+    if (block.hasAddressTaken() || block.isEHPad() || block.isUsedByMetadata()) {
+      fail(stats, "address-taken or EH function block unsupported"); return stats;
+    }
+    for (auto &instruction : block) {
+      if (!work.spend()) return stats;
+      if (instruction.getDebugLoc() || instruction.hasDbgRecords() || instruction.isUsedByMetadata()) {
+        fail(stats, "debug instruction identity unsupported"); return stats;
+      }
+      attachments.clear(); instruction.getAllMetadata(attachments);
+      for (auto [kind, node] : attachments)
+        if (unsupportedMetadata(node, work, metadata, constants)) {
+          fail(stats, "instruction metadata identity unsupported"); return stats;
+        }
+      for (auto &operand : instruction.operands())
+        if (unsupportedBlockAddress(operand, work, constants)) {
+          fail(stats, "blockaddress or constant identity unsupported"); return stats;
+        }
+    }
+  }
+  std::size_t namedOperands = 0;
+  for (auto &named : module.named_metadata()) {
+    if (named.getNumOperands() > 65536 - namedOperands ||
+        !work.spend(1 + named.getNumOperands())) {
+      stats.budgetExhausted = true;
+      fail(stats, "named metadata transaction cap"); return stats;
+    }
+    namedOperands += named.getNumOperands();
+  }
+  if (!moduleInstructionCap(module, work)) return stats;
+  if (source->size() > request.maxBlocks) { fail(stats, "view block cap exceeded"); return stats; }
+  std::size_t selectedInstructions = 0;
+  for (auto &block : *source) selectedInstructions += block.size();
+  if (selectedInstructions > request.maxInstructions) { fail(stats, "view instruction cap exceeded"); return stats; }
+  std::string verification;
+  raw_string_ostream verifyOutput(verification);
+  if (verifyModule(module, &verifyOutput)) { fail(stats, "invalid source module: " + verification); return stats; }
+  auto trial = CloneModule(module);
+  auto *function = trial->getFunction(request.viewSymbol);
+
+  Guards current;CheckedBytes bytes;
+  if (!checkedMemoryEntry(*function,current,bytes,work)) return stats;
+  stats.guardedBytes=bytes.size();
+  const auto first=bytes.begin()->first,last=bytes.rbegin()->first;
+  if (last==UINT64_MAX) {fail(stats,"checked byte span wraps");return stats;}
+  const std::vector<LoopRanges::WriteSpan> spans{{first,last-first+1}};
+  LoopInventory inventory;std::vector<LoadInst *> reads;
+  for (auto &block:*function) for (auto &i:block) {
+    if (!work.spend()) return stats;
+    ++inventory.instructions;
+    if (isLoopEffect(i)) inventory.effects.push_back({&i,&block,i.getOpcode(),i.getType(),loopEffectType(i)});
+    auto *load=dyn_cast<LoadInst>(&i);
+    auto *gep=load ? dyn_cast<GetElementPtrInst>(load->getPointerOperand()) : nullptr;
+    if (load && gep && gep->getPointerOperand()==current.guest && load->getType()->isIntegerTy() &&
+        load->getType()->getIntegerBitWidth()<=64 && load->getType()->getIntegerBitWidth()%8==0) {
+      auto at=fixedGuestWord(load->getPointerOperand(),current.guest);
+      bool candidate=!at;
+      if (at) {
+        const auto count=load->getType()->getIntegerBitWidth()/8;
+        candidate=count<=UINT64_MAX-*at;
+        for (unsigned n=0;candidate && n<count;++n) {
+          if (!work.spend()) return stats;
+          candidate=bytes.contains(*at+n);
+        }
+      }
+      if (candidate) reads.push_back(load);
+    }
+  }
+  InvariantRegion region;
+  if (!loopRegion(*function,current,reads,work,region)) return stats;
+  auto preserve=[&]() {
+    // Same as the loop request: projected observation witnesses are consumed
+    // only by the Expanded range profile.
+    auto paths=loopPathRanges(*function,{},work,
+        profile==LoopImageProofProfile::Expanded ? current.guest : nullptr);
+    if (stats.budgetExhausted) return false;
+    ConstantFacts none;LoopRanges ranges(work,current.guest,none,paths.get(),profile);
+    stats.preservedStores=0;
+    for (const auto &identity:inventory.effects) {
+      auto *i=checkedLoopEffect(*function,identity,work);if (!i) return false;
+      if (region.preserving.contains(i->getParent()) &&
+          !checkLoopEffect(*i,current,request,work,ranges,nullptr,&spans)) return false;
+    }
+    return true;
+  };
+  if (!preserve()) return stats;
+  // Reads remain executable. Only their completely guarded byte values are
+  // consumed, after the entire original continuing write set has closed.
+  for (unsigned round=0;round<32;++round) {
+    std::size_t consumed=0;
+    for (auto &block:*function) if (region.preserving.contains(&block)) for (auto &i:block) {
+      if (!work.spend()) return stats;
+      auto *load=dyn_cast<LoadInst>(&i);
+      if (!load || load->use_empty() || !load->isSimple() || load->hasPoisonGeneratingAnnotations() ||
+          !load->getType()->isIntegerTy() || load->getType()->getIntegerBitWidth()>64 ||
+          load->getType()->getIntegerBitWidth()%8) continue;
+      auto at=fixedGuestWord(load->getPointerOperand(),current.guest);
+      const auto width=load->getType()->getIntegerBitWidth()/8;
+      if (!at || width>UINT64_MAX-*at) continue;
+      std::uint64_t value=0;bool all=true;
+      for (unsigned n=0;n<width;++n) {
+        if (!work.spend()) return stats;
+        auto found=bytes.find(*at+n);
+        if (found==bytes.end()) {all=false;break;}
+        value|=std::uint64_t(found->second)<<(n*8);
+      }
+      if (!all) continue;
+      for (auto &use:load->uses()) if (!work.spend(2)) return stats;
+      load->replaceAllUsesWith(ConstantInt::get(load->getType(),value));++consumed;
+    }
+    stats.constantValues+=consumed;
+    if (!consumed) break;
+    if (!foldConstants(*function,work)) return stats;
+    if (round==31) {stats.budgetExhausted=true;fail(stats,"checked memory propagation round cap");return stats;}
+  }
+  if (!preserve()) return stats;
+  if (!verifyWhole(*trial,verification)) {
+    fail(stats,"invalid guarded memory proof: "+verification);return stats;
+  }
+  if (stats.constantValues && !commit(*source,*function,stats,0)) return stats;
+  stats.changed=stats.constantValues!=0;stats.closed=true;
+  stats.message="complete checked entry-byte preservation; actual reads retained";
   return stats;
 }
 

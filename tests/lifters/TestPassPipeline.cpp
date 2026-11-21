@@ -84,6 +84,40 @@ TEST_CASE("Loop image pipeline distinguishes unavailable mode and unclosed proof
   }
 }
 
+TEST_CASE("Loop image expanded proof profile is explicit and retains total hard caps",
+          "[llvm][pipeline][loop-proof-profile]") {
+  const Options good{{"view_symbol",std::string("view")},{"table_offset",std::string("0x2000")},
+                     {"targets",std::string("0x1100,0x1200")}};
+  for(const auto &profile:{std::string("default"),std::string("expanded")}) {
+    auto options=good;options["proof_profile"]=profile;
+    PassPipeline pipeline;REQUIRE(pipeline.add("loop-image-context",options));
+    if(profile=="expanded") {
+      options["max_work"]=std::int64_t(16000000);
+      CHECK(pipeline.add("loop-image-context",options));
+    }
+  }
+  for(const auto &value:{Parameter(std::string("unknown")),Parameter(std::string("Expanded")),
+      Parameter(std::string{}),Parameter(std::string("expanded\0",9)),Parameter(true),Parameter(std::int64_t(1))}) {
+    auto options=good;options["proof_profile"]=value;PassPipeline pipeline;
+    CHECK_FALSE(pipeline.add("loop-image-context",options));CHECK_FALSE(pipeline.lastError().empty());
+  }
+  for(const auto &profile:{std::string("default"),std::string("expanded")}) {
+    auto options=good;options["proof_profile"]=profile;
+    options["max_work"]=std::int64_t(profile=="expanded"?16000001:1000001);
+    PassPipeline pipeline;CHECK_FALSE(pipeline.add("loop-image-context",options));
+  }
+  for(auto mode:{dragon::llvmlifter::ExecutionMode::Legacy,dragon::llvmlifter::ExecutionMode::StatefulV2,
+                 dragon::llvmlifter::ExecutionMode::StaticAnalysis}) {
+    LLVMLifter lifter{Architecture::X86_64};REQUIRE(lifter.setExecutionMode(mode));fixture(lifter);
+    auto options=good;options["proof_profile"]=std::string("expanded");
+    PassPipeline pipeline;REQUIRE(pipeline.add("loop-image-context",options));const auto before=lifter.ir();
+    const auto report=pipeline.run(lifter);REQUIRE(report.ok);REQUIRE(report.runs.size()==1);
+    const auto &result=report.runs.front().result;
+    CHECK(result.status==(mode==dragon::llvmlifter::ExecutionMode::StaticAnalysis?Status::Incomplete:Status::Unavailable));
+    CHECK_FALSE(result.changed);CHECK(lifter.ir()==before);CHECK(result.counters.size()==8);
+  }
+}
+
 TEST_CASE("Function control flow pipeline isolates the named function",
           "[llvm][pipeline][function-control-flow-pipeline]") {
   LLVMLifter lifter{Architecture::X86_64};auto *selected=fixture(lifter);

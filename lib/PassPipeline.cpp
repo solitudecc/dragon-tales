@@ -5,6 +5,7 @@
 #include "GuardedTargetSets.hpp"
 #include "ConstantBranches.hpp"
 #include "InvariantSelfLoops.hpp"
+#include "LLVMImageTableContext.hpp"
 #include <dragon/disassembler/Graph.hpp>
 #include <dragon/analysis/FiniteValues.hpp>
 #include <dragon/lifters/llvm/LLVMLifter.hpp>
@@ -65,10 +66,17 @@ std::uint64_t address(std::string_view text,const char *key) {
     throw std::invalid_argument(std::string(key)+" must contain uint64 decimal or hexadecimal addresses");
   return value;
 }
+llvmlifter::detail::LoopImageProofProfile loopProofProfile(const Options &o) {
+  if(!o.contains("proof_profile"))return llvmlifter::detail::LoopImageProofProfile::Default;
+  const auto profile=symbol(o,"proof_profile");
+  if(profile=="default")return llvmlifter::detail::LoopImageProofProfile::Default;
+  if(profile=="expanded")return llvmlifter::detail::LoopImageProofProfile::Expanded;
+  throw std::invalid_argument("proof_profile must be default or expanded");
+}
 llvmlifter::detail::ImageTableContextRequest loopRequest(const Options &o) {
   for(const auto &[key,value]:o)
     if(key!="view_symbol" && key!="table_offset" && key!="targets" &&
-       key!="max_blocks" && key!="max_instructions" && key!="max_work")
+       key!="max_blocks" && key!="max_instructions" && key!="max_work" && key!="proof_profile")
       throw std::invalid_argument("unknown option: "+key);
   llvmlifter::detail::ImageTableContextRequest request;
   request.viewSymbol=symbol(o,"view_symbol");
@@ -98,9 +106,13 @@ llvmlifter::detail::ImageTableContextRequest loopRequest(const Options &o) {
   request.maxBlocks=number(o,"max_blocks",4096);
   request.maxInstructions=number(o,"max_instructions",65536);
   request.maxWork=number(o,"max_work",1000000);
+  const auto maxWork=llvmlifter::detail::loopImageMaxWork(loopProofProfile(o));
   if(!request.maxBlocks || request.maxBlocks>4096 || !request.maxInstructions ||
-     request.maxInstructions>65536 || !request.maxWork || request.maxWork>1000000)
-    throw std::invalid_argument("loop-image-context limits must be positive and at most 4096/65536/1000000");
+     request.maxInstructions>65536 || !request.maxWork || request.maxWork>maxWork)
+    throw std::invalid_argument(maxWork==llvmlifter::detail::loopImageMaxWork(
+        llvmlifter::detail::LoopImageProofProfile::Default) ?
+        "loop-image-context limits must be positive and at most 4096/65536/1000000" :
+        "expanded loop-image-context limits must be positive and at most 4096/65536/16000000");
   return request;
 }
 std::string invalid(llvmlifter::LLVMLifter &lifter) {
@@ -535,9 +547,14 @@ PassPipeline::PassPipeline(bool builtins) {
   });
   registerLLVM("loop-image-context",[](LLVMContext &c,const Options &o) {
     const auto request=loopRequest(o);
+    const auto profile=loopProofProfile(o);
     const bool available=c.lifter.executionMode()==llvmlifter::ExecutionMode::StaticAnalysis;
     llvmlifter::detail::ImageTableContextStats s;
-    if(available)s=llvmlifter::detail::runLoopImageTableContext(c.lifter.module(),request);
+    if(available) {
+      if(profile==llvmlifter::detail::LoopImageProofProfile::Default)
+        s=c.lifter.runLoopImageTableContext(request);
+      else s=c.lifter.runLoopImageTableContext(request,profile);
+    }
     Result r;
     r.status=!available?Status::Unavailable:(s.closed?Status::Success:Status::Incomplete);
     r.changed=s.changed;
@@ -547,7 +564,34 @@ PassPipeline::PassPipeline(bool builtins) {
       {"preserved_stores",s.preservedStores},{"constant_values",s.constantValues},{"work",s.work}};
     return r;
   },false,{},[](const Options &o) {
-    try {(void)loopRequest(o);}catch(const std::exception &error) {return std::string(error.what());}
+    try {(void)loopRequest(o);(void)loopProofProfile(o);}catch(const std::exception &error) {return std::string(error.what());}
+    return std::string{};
+  });
+  registerLLVM("guarded-memory",[](LLVMContext &c,const Options &o) {
+    const auto view=symbol(o,"view_symbol");
+    const auto profile=loopProofProfile(o);
+    const auto maxWork=number(o,"max_work",static_cast<std::uint32_t>(llvmlifter::detail::loopImageMaxWork(
+        llvmlifter::detail::LoopImageProofProfile::Default)));
+    const bool available=c.lifter.executionMode()==llvmlifter::ExecutionMode::StaticAnalysis;
+    llvmlifter::detail::ImageTableContextStats s;
+    if(available)s=llvmlifter::detail::propagateGuardedMemory(c.lifter.module(),view,maxWork,profile);
+    Result r;r.status=!available?Status::Unavailable:(s.closed?Status::Success:Status::Incomplete);
+    r.changed=s.changed;r.message=available?s.message:"guarded-memory requires StaticAnalysis";
+    r.counters={{"available",available?1u:0u},{"complete",s.closed?1u:0u},{"closed",s.closed?1u:0u},
+      {"budget_exhausted",s.budgetExhausted?1u:0u},{"guarded_bytes",s.guardedBytes},
+      {"preserved_stores",s.preservedStores},{"constant_values",s.constantValues},{"work",s.work}};
+    return r;
+  },false,{},[](const Options &o) {
+    try {
+      for(const auto &[key,value]:o)
+        if(key!="view_symbol" && key!="max_work" && key!="proof_profile")return "unknown option: "+key;
+      (void)symbol(o,"view_symbol");const auto profile=loopProofProfile(o);
+      const auto ceiling=llvmlifter::detail::loopImageMaxWork(profile);
+      const auto maxWork=number(o,"max_work",static_cast<std::uint32_t>(llvmlifter::detail::loopImageMaxWork(
+          llvmlifter::detail::LoopImageProofProfile::Default)));
+      if(!maxWork || maxWork>ceiling)
+        return "guarded-memory max_work must be 1.."+std::to_string(ceiling)+" for this proof_profile";
+    }catch(const std::exception &error){return std::string(error.what());}
     return std::string{};
   });
   registerLLVM("dispatch-specialize",[](LLVMContext &c,const Options &o) {

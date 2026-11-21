@@ -417,3 +417,75 @@ TEST_CASE("Loop image never gives the guarded SP fact to missing checks changed 
       REQUIRE_FALSE(llvm::verifyModule(*fixture.module,&llvm::errs()));
     }
 }
+
+TEST_CASE("Loop image proof profiles keep default output and expose expanded through the lifter",
+          "[llvm][image-loop-proof-profile]") {
+  using namespace dragon::passes;
+  using dragon::llvmlifter::detail::LoopImageProofProfile;
+  LoopFixture fixture;
+  auto direct=pipelineFixture(fixture),bridge=pipelineFixture(fixture),explicitDefault=pipelineFixture(fixture);
+  const auto expected=runLoopImageTableContext(direct->module(),fixture.request());REQUIRE(expected.closed);
+  const auto bridged=bridge->runLoopImageTableContext(fixture.request());REQUIRE(bridged.closed);
+  const auto selected=explicitDefault->runLoopImageTableContext(fixture.request(),LoopImageProofProfile::Default);
+  REQUIRE(selected.closed);CHECK(bridged.work==expected.work);CHECK(selected.work==expected.work);
+  CHECK(bridge->ir()==direct->ir());CHECK(explicitDefault->ir()==direct->ir());
+  for(const auto &profile:{std::string("default"),std::string("expanded")}) {
+    auto managed=pipelineFixture(fixture),peer=pipelineFixture(fixture);
+    auto request=fixture.request();auto options=pipelineRequest();options["proof_profile"]=profile;
+    const auto selectedProfile=profile=="expanded"?LoopImageProofProfile::Expanded:LoopImageProofProfile::Default;
+    if(profile=="expanded"){request.maxWork=16000000;options["max_work"]=std::int64_t(16000000);}
+    const auto sameProfile=runLoopImageTableContext(peer->module(),request,selectedProfile);REQUIRE(sameProfile.closed);
+    PassPipeline pipeline;REQUIRE(pipeline.add("loop-image-context",options));
+    const auto report=pipeline.run(*managed);REQUIRE(report.ok);REQUIRE(report.runs.size()==1);
+    const auto &result=report.runs.front().result;REQUIRE(result.status==Status::Success);
+    CHECK(result.changed==sameProfile.changed);CHECK(result.message==sameProfile.message);
+    const Counters sameCounters{{"available",1},{"complete",sameProfile.closed},{"closed",sameProfile.closed},
+      {"budget_exhausted",sameProfile.budgetExhausted},{"guarded_bytes",sameProfile.guardedBytes},
+      {"preserved_stores",sameProfile.preservedStores},{"constant_values",sameProfile.constantValues},{"work",sameProfile.work}};
+    CHECK(result.counters==sameCounters);CHECK(managed->ir()==peer->ir());
+    if(profile=="default")CHECK(managed->ir()==direct->ir());
+    CHECK_FALSE(llvm::verifyModule(managed->module(),&llvm::errs()));
+  }
+}
+
+TEST_CASE("Loop image expanded profile retains atomic refusal and hard resource boundaries",
+          "[llvm][image-loop-proof-profile]") {
+  using namespace dragon::passes;
+  using dragon::llvmlifter::detail::LoopImageProofProfile;
+  for(unsigned mode=0;mode<5;++mode) {
+    INFO(mode);LoopFixture fixture;auto managed=pipelineFixture(fixture);const auto before=managed->ir();
+    auto request=fixture.request();request.maxWork=16000000;
+    auto *function=managed->module().getFunction("view");auto *argument=function->getArg(0);
+    dragon::llvmlifter::detail::ImageTableContextStats result;
+    if(mode==0)result=runLoopImageTableContext(managed->module(),request); // old hard1M
+    if(mode==1)result=managed->runLoopImageTableContext(request,LoopImageProofProfile::Default);
+    if(mode==2)result=managed->runLoopImageTableContext(request,static_cast<LoopImageProofProfile>(99));
+    if(mode==3){request.maxWork=16000001;result=managed->runLoopImageTableContext(request,LoopImageProofProfile::Expanded);}
+    if(mode==4){request.maxWork=1;result=managed->runLoopImageTableContext(request,LoopImageProofProfile::Expanded);}
+    CHECK_FALSE(result.closed);CHECK_FALSE(result.changed);CHECK(result.budgetExhausted==(mode==4));
+    CHECK(result.work<=request.maxWork);CHECK(managed->ir()==before);
+    CHECK(managed->module().getFunction("view")==function);CHECK(function->getArg(0)==argument);
+    CHECK_FALSE(llvm::verifyModule(managed->module(),&llvm::errs()));
+  }
+  SECTION("an insufficient expanded pipeline still reports incomplete") {
+    LoopFixture fixture;auto managed=pipelineFixture(fixture);const auto before=managed->ir();
+    auto options=pipelineRequest();options["proof_profile"]=std::string("expanded");options["max_work"]=std::int64_t(1);
+    PassPipeline pipeline;REQUIRE(pipeline.add("loop-image-context",options));const auto report=pipeline.run(*managed);
+    REQUIRE(report.ok);REQUIRE(report.runs.size()==1);const auto &result=report.runs.front().result;
+    CHECK(result.status==Status::Incomplete);CHECK_FALSE(result.changed);
+    CHECK(result.counters.at("complete")==0);CHECK(result.counters.at("budget_exhausted")==1);
+    CHECK(managed->ir()==before);
+  }
+  SECTION("the direct new enum overload rejects unknown values without entering a proof") {
+    LoopFixture fixture;const auto before=fixture.ir();
+    const auto result=runLoopImageTableContext(*fixture.module,fixture.request(),static_cast<LoopImageProofProfile>(99));
+    CHECK_FALSE(result.closed);CHECK_FALSE(result.changed);CHECK_FALSE(result.budgetExhausted);
+    CHECK(result.work==0);CHECK_FALSE(result.message.empty());CHECK(fixture.ir()==before);
+  }
+  SECTION("the lifter bridge refuses nonstatic mode") {
+    dragon::llvmlifter::LLVMLifter legacy(dragon::Architecture::X86_64);
+    const auto before=legacy.ir();LoopFixture fixture;
+    const auto result=legacy.runLoopImageTableContext(fixture.request(),LoopImageProofProfile::Expanded);
+    CHECK_FALSE(result.closed);CHECK_FALSE(result.changed);CHECK(result.work==0);CHECK(legacy.ir()==before);
+  }
+}

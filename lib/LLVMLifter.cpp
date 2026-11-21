@@ -1345,6 +1345,36 @@ void dragon::llvmlifter::LLVMLifter::runControlFlowSimplification(
   fpm.run(*function, fam);
 }
 
+dragon::llvmlifter::detail::ImageTableContextStats
+dragon::llvmlifter::LLVMLifter::runLoopImageTableContext(
+    const detail::ImageTableContextRequest &request) {
+  if (mode_!=ExecutionMode::StaticAnalysis) {
+    detail::ImageTableContextStats stats;
+    stats.message="loop-image-context requires StaticAnalysis and a raw guarded entry view";
+    return stats;
+  }
+  return detail::runLoopImageTableContext(*module_,request);
+}
+
+dragon::llvmlifter::detail::ImageTableContextStats
+dragon::llvmlifter::LLVMLifter::runLoopImageTableContext(
+    const detail::ImageTableContextRequest &request,
+    detail::LoopImageProofProfile profile) {
+  if (profile==detail::LoopImageProofProfile::Default)
+    return runLoopImageTableContext(request);
+  if (profile!=detail::LoopImageProofProfile::Expanded) {
+    detail::ImageTableContextStats stats;
+    stats.message="invalid loop image proof profile";
+    return stats;
+  }
+  if (mode_!=ExecutionMode::StaticAnalysis) {
+    detail::ImageTableContextStats stats;
+    stats.message="loop-image-context requires StaticAnalysis and a raw guarded entry view";
+    return stats;
+  }
+  return detail::runLoopImageTableContext(*module_,request,profile);
+}
+
 dragon::llvmlifter::PredicateFoldStats
 dragon::llvmlifter::LLVMLifter::runPredicateFolding(const PredicateFoldOptions &options) {
   auto stats = detail::foldPredicates(*module_, options);

@@ -261,3 +261,63 @@ TEST_CASE("Original PHI relation proof walks checked representation identities i
   effects.check(x.f());x.verify();
  }
 }
+
+TEST_CASE("PHI projection expanded resources are an explicit separate profile",
+          "[phi-low-profile]") {
+  PhiLowBitsOptions expanded;
+  expanded.maxNodes=4096;expanded.maxDepth=128;expanded.maxWork=1048576;
+  SECTION("the old overload still rejects raised admission caps") {
+    Fixture old(forwardedLoop(400));old.reject({old.trunc()},expanded);
+  }
+  SECTION("larger complete original graphs remain bounded and keep effects") {
+    Fixture x(forwardedLoop(400));auto *old=x.trunc();auto *small=x.phi("small");
+    EffectSnapshot effects(x.f());
+    const auto result=replacePhiLowTruncs(x.f(),{old},expanded,PhiLowBitsProofProfile::Expanded);
+    INFO(result.message);REQUIRE(result.complete);REQUIRE(result.changed);
+    CHECK_FALSE(result.budgetExhausted);CHECK(result.nodes>256);CHECK(result.nodes<=4096);
+    CHECK(result.work<=1048576);CHECK(x.i("observed")->getOperand(0)==small);
+    CHECK(x.trunc()==old);effects.check(x.f());x.verify();
+  }
+  SECTION("real recursive expressions can explicitly use depth above 32") {
+    std::string entry,value="%initial";
+    for(unsigned n=0;n<40;++n){const auto next="%expression"+std::to_string(n);entry+=" "+next+"=add i32 "+value+",1\n";value=next;}
+    Fixture x(forwardedLoop(40,false,entry,value));auto *old=x.trunc();EffectSnapshot effects(x.f());
+    const auto result=replacePhiLowTruncs(x.f(),{old},expanded,PhiLowBitsProofProfile::Expanded);
+    INFO(result.message);REQUIRE(result.complete);REQUIRE(result.changed);
+    CHECK_FALSE(result.budgetExhausted);effects.check(x.f());x.verify();
+  }
+}
+
+TEST_CASE("PHI projection default profile preserves results and exhausted resources refuse",
+          "[phi-low-profile]") {
+  for(unsigned count:{4u,40u,400u}) {
+    INFO(count);Fixture old(forwardedLoop(count)),explicitDefault(forwardedLoop(count));
+    const auto a=replacePhiLowTruncs(old.f(),{old.trunc()});
+    const auto b=replacePhiLowTruncs(explicitDefault.f(),{explicitDefault.trunc()},{},PhiLowBitsProofProfile::Default);
+    CHECK(a.changed==b.changed);CHECK(a.complete==b.complete);CHECK(a.budgetExhausted==b.budgetExhausted);
+    CHECK(a.candidatesVisited==b.candidatesVisited);CHECK(a.pairsVisited==b.pairsVisited);
+    CHECK(a.rewrittenTruncs==b.rewrittenTruncs);CHECK(a.rewrittenUses==b.rewrittenUses);
+    CHECK(a.nodes==b.nodes);CHECK(a.work==b.work);CHECK(a.message==b.message);
+    CHECK(a.provedLowPhis.size()==b.provedLowPhis.size());CHECK(old.text()==explicitDefault.text());
+  }
+  for(unsigned mode=0;mode<6;++mode) {
+    INFO(mode);Fixture x(forwardedLoop(40));const auto before=x.text();auto *old=x.trunc();
+    PhiLowBitsOptions options;options.maxNodes=4096;options.maxDepth=128;options.maxWork=1048576;
+    auto profile=PhiLowBitsProofProfile::Expanded;
+    if(mode==0)options.maxWork=1;
+    if(mode==1)options.maxNodes=1;
+    if(mode==2)options.maxNodes=4097;
+    if(mode==3)options.maxDepth=129;
+    if(mode==4)options.maxWork=1048577;
+    if(mode==5)profile=static_cast<PhiLowBitsProofProfile>(99);
+    const auto result=replacePhiLowTruncs(x.f(),{old},options,profile);INFO(result.message);
+    CHECK_FALSE(result.complete);CHECK_FALSE(result.changed);CHECK(result.budgetExhausted==(mode<2));
+    CHECK(result.provedLowPhis.empty());CHECK(result.rewrittenTruncs==0);CHECK(result.rewrittenUses==0);
+    CHECK(x.text()==before);CHECK(x.trunc()==old);x.verify();
+  }
+  Fixture unsafe(loop("%initialWide","%initial"," %initial=load i32,ptr %memory,align 1\n %initialWide=zext i32 %initial to i64\n"));
+  const auto before=unsafe.text();PhiLowBitsOptions expanded;expanded.maxNodes=4096;expanded.maxDepth=128;expanded.maxWork=1048576;
+  const auto refused=replacePhiLowTruncs(unsafe.f(),{unsafe.trunc()},expanded,PhiLowBitsProofProfile::Expanded);
+  CHECK_FALSE(refused.complete);CHECK_FALSE(refused.changed);CHECK_FALSE(refused.budgetExhausted);
+  CHECK(unsafe.text()==before);unsafe.verify();
+}

@@ -30,6 +30,13 @@ assert capture.add_loop_image_context('view',1<<63,(x for x in [U64,0,1<<63,U64]
 assert capture.calls==[('loop-image-context',dict(view_symbol='view',table_offset='0x8000000000000000',
     targets='0xffffffffffffffff,0x0,0x8000000000000000,0xffffffffffffffff',
     max_blocks=4096,max_instructions=65536,max_work=1000000))]
+default_call=capture.calls[0]
+capture.add_loop_image_context('view',1<<63,[U64,0,1<<63,U64],proof_profile='default')
+assert capture.calls[-1]==default_call
+capture.add_loop_image_context('view',0x2000,[0x1100,0x1200],proof_profile='expanded')
+assert capture.calls[-1][1]['proof_profile']=='expanded' and capture.calls[-1][1]['max_work']==1000000
+capture.add_loop_image_context('view',0x2000,[0x1100],proof_profile='expanded',max_work=16000000)
+assert capture.calls[-1][1]['max_work']==16000000
 for symbol in ['x','x'*4096,'é'*2048,'😀'*1024]:
     capture.add_loop_image_context(symbol,U64-4096,[U64]*512,max_blocks=1,max_instructions=1,max_work=1)
     assert capture.calls[-1][1]['view_symbol']==symbol
@@ -48,6 +55,8 @@ bad_inputs=[
     *[(ValueError,dict(targets=[x])) for x in [-1,U64+1,True,False,1.5,'1',None]],
     (ValueError,dict(table_offset=U64-7)),
     (ValueError,dict(table_offset=U64-4095,targets=[0]*512)),
+    *[(ValueError,dict(proof_profile=x)) for x in ['', 'Expanded', 'unknown', 'expanded\0', 1, True, None]],
+    (ValueError,dict(proof_profile='expanded',max_work=16000001)),
 ]
 for option,cap in [('max_blocks',4096),('max_instructions',65536),('max_work',1000000)]:
     bad_inputs.extend((ValueError,{option:x}) for x in [0,-1,cap+1,True,'1',None])
@@ -83,6 +92,10 @@ with d.PassPipeline(['mem2reg']) as pipeline,d.LLVMLifter() as legacy:
                     dict(targets=','.join('0' for _ in range(513))),dict(unknown=1)]:
         options=dict(raw);options.update(changes)
         rejects(ValueError,lambda:pipeline.add('loop-image-context',**options))
+    for profile in ['unknown','Expanded','',True,1]:
+        options=dict(raw,proof_profile=profile)
+        rejects(ValueError,lambda:pipeline.add('loop-image-context',**options))
+    rejects(ValueError,lambda:pipeline.add('loop-image-context',**dict(raw,proof_profile='expanded',max_work=16000001)))
     for name,cap in [('max_blocks',4096),('max_instructions',65536),('max_work',1000000)]:
         for bad in [0,-1,cap+1,True,'1']:
             options=dict(raw);options[name]=bad
@@ -94,6 +107,12 @@ with d.PassPipeline(['mem2reg']) as pipeline,d.LLVMLifter() as legacy:
         rejects(ValueError,lambda:pipeline.add('function-control-flow',**options))
     report=pipeline.run(legacy)
     assert report['ok'] and len(report['runs'])==1 and report['runs'][0]['name']=='mem2reg'
+
+with d.PassPipeline() as pipeline,d.LLVMLifter(execution_mode=d.LLVMExecutionMode.STATIC_ANALYSIS) as analysis:
+    pipeline.add_loop_image_context('missing',0x2000,[0x1100],proof_profile='expanded',max_work=16000000)
+    before=analysis.ir();report=pipeline.run(analysis);run=report['runs'][0]
+    assert report['ok'] and run['status']==d.PassStatus.INCOMPLETE and not run['changed']
+    assert run['counters']['available']==1 and run['counters']['closed']==0 and analysis.ir()==before
 
 closed=d.PassPipeline();closed.close();stream=Infinite()
 rejects(ReferenceError,lambda:closed.add_loop_image_context('view',0,stream));assert stream.reads==0
